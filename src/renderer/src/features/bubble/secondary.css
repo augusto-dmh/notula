@@ -1,0 +1,13 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* The bubble and notification windows: transparent pages; each root draws its own card. */
+
+html.nt-secondary,
+html.nt-secondary body {
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+}
+
+html.nt-secondary #root {
+  height: 100%;
+}

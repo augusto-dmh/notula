@@ -1,0 +1,20 @@
+Notula
+Copyright 2026 Augusto Henriques
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product includes third-party software, distributed under its own licence terms:
+
+- Electron, with Chromium, Node.js and the components they include (MIT and others).
+  Their licences ship with each installed copy as LICENSE and LICENSES.chromium.html.
+- sherpa-onnx (Apache License 2.0), the k2-fsa project.
+- ONNX Runtime (MIT), Copyright (c) Microsoft Corporation.
+- SQLite (public domain) and SQLite3 Multiple Ciphers (MIT), Copyright (c) Ulrich Telle,
+  through better-sqlite3-multiple-ciphers (MIT).
+- The npm packages listed, with their licence texts, in THIRD_PARTY_NOTICES.md.
+
+No bundled Apache-2.0 dependency ships a NOTICE file of its own at the time of this release;
+if one is added, its contents are reproduced here.
+
+Speech models are not bundled. Notula downloads them at run time on request, under their own
+licences and attribution terms, listed in MODELS.md.

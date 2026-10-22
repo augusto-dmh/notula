@@ -1,0 +1,107 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Settings ▸ Sources: chips, the add-a-site field, the download confirmation and status lines,
+   inside the shared settings card. Global tokens come from styles.css. */
+
+.src-set__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0 16px 12px;
+  list-style: none;
+}
+
+.src-set__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  height: 26px;
+  padding: 0 4px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: var(--text-sm);
+}
+
+.src-set__chip-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.src-set__chip-remove {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--fg-3);
+  cursor: pointer;
+}
+
+.src-set__chip-remove:hover {
+  background: var(--surface-3);
+  color: var(--fg);
+}
+
+.src-set__add {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px 12px;
+}
+
+.src-set__add .n-input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+}
+
+.src-set__add-label {
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+
+.src-set__note {
+  margin: 0;
+  padding: 0 16px 12px;
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+}
+
+.src-set__note--error {
+  color: var(--danger);
+}
+
+.src-set__status {
+  padding: 0 16px 12px;
+}
+
+.src-set__confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 16px 12px;
+  padding: 12px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-size: var(--text-sm);
+}
+
+.src-set__confirm p {
+  margin: 0;
+  color: var(--fg-2);
+  line-height: 1.45;
+}
+
+.src-set__confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

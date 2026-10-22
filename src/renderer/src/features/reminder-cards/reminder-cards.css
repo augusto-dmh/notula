@@ -1,0 +1,79 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Meeting reminder cards: built on the live context card. */
+
+.rc-root {
+  display: flex;
+  align-items: flex-end;
+  height: 100%;
+  padding: 12px;
+  box-sizing: border-box;
+}
+
+.rc-card {
+  max-height: 100%;
+}
+
+.rc-badge--missing_invite {
+  background: var(--accent);
+}
+
+.rc-badge--no_meeting_link {
+  background: var(--warning);
+}
+
+.rc-badge--attendees_absent,
+.rc-badge--late_for_meeting {
+  background: var(--live);
+}
+
+.rc-badge--followup_drafts {
+  background: var(--success);
+}
+
+.rc-title {
+  margin: 0 0 3px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.rc-clash {
+  margin: 6px 0 0;
+  color: var(--warning);
+  font-size: var(--text-xs);
+}
+
+.rc-error {
+  margin: 6px 0 0;
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+}
+
+.rc-draft {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  user-select: text;
+}
+
+.rc-draft__to {
+  margin: 0 0 2px;
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+}
+
+.rc-draft__subject {
+  margin: 0 0 4px;
+  font-weight: 600;
+  font-size: var(--text-xs);
+}
+
+.rc-draft__body {
+  margin: 0;
+  white-space: pre-wrap;
+  line-height: 1.45;
+}
+
+.rc-actions {
+  flex-wrap: wrap;
+}

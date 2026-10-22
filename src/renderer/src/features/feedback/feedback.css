@@ -1,0 +1,147 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Settings ▸ Feedback. */
+
+.fb-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+}
+
+.fb-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fb-field__label {
+  color: var(--fg);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.fb-message {
+  min-height: 120px;
+}
+
+.fb-error {
+  margin: -6px 0 0;
+  color: var(--danger);
+  font-size: var(--text-sm);
+}
+
+.fb-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.fb-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 260px;
+  padding: 3px 4px 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: var(--text-xs);
+}
+
+.fb-chip__name {
+  overflow: hidden;
+  color: var(--fg);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fb-chip__size {
+  flex: none;
+  color: var(--fg-3);
+}
+
+.fb-chip__remove {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--fg-3);
+  cursor: pointer;
+}
+
+.fb-chip__remove:hover {
+  background: var(--surface-3);
+  color: var(--fg);
+}
+
+.fb-checks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fb-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--fg);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.fb-check input {
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+
+.fb-check__hint {
+  display: block;
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+}
+
+.fb-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.fb-note,
+.fb-footnote {
+  margin: 0;
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+}
+
+.fb-footnote {
+  margin: 4px 2px 0;
+}
+
+.fb-thanks {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--success-soft);
+  color: var(--fg);
+  font-size: var(--text-sm);
+}
+
+.fb-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+.fb-link:hover {
+  text-decoration: underline;
+}

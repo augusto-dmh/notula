@@ -1,0 +1,125 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* The `source-detected` card's body, under the card's title (notify.css draws the card). The
+   card wraps so this block takes the full width below the title. */
+
+.nt-note:has(> .src-card) {
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.src-card {
+  display: flex;
+  flex: 1 0 100%;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.src-card__source {
+  min-width: 0;
+}
+
+.src-card__title {
+  overflow: hidden;
+  color: var(--fg);
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.src-card__meta,
+.src-card__guess {
+  overflow: hidden;
+  margin-top: 1px;
+  color: var(--fg-2);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.src-card__guess {
+  color: var(--warning);
+}
+
+.src-card__first {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.src-card__first--done {
+  margin: 0;
+  color: var(--fg-2);
+  font-size: 12px;
+}
+
+.src-card__first-text {
+  margin: 0;
+  color: var(--fg-2);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.src-card__first-text strong {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.src-card__first-actions,
+.src-card__actions {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.src-card__btn {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.src-card__btn:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.src-card__btn--primary {
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.src-card__btn--primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.src-card__btn--small {
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.src-card__btn--quiet {
+  border-color: transparent;
+  color: var(--fg-2);
+}
+
+.src-card__btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.src-card__more-wrap {
+  position: relative;
+  display: flex;
+  margin-left: auto;
+}

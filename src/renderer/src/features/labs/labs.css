@@ -1,0 +1,68 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Settings ▸ Labs. Global tokens come from styles.css; rows reuse the settings
+   primitives. Dividers are drawn between items, so an owner's empty custom row adds none. */
+
+.labs-card > .labs-item + .labs-item {
+  border-top: 1px dashed var(--border);
+}
+
+.labs-card .labs-item .settings-row + .settings-row {
+  border-top: 0;
+}
+
+.labs-row--child {
+  padding-left: 40px;
+  position: relative;
+}
+
+.labs-row--child::before {
+  content: '';
+  position: absolute;
+  left: 24px;
+  top: 14px;
+  width: 8px;
+  height: 14px;
+  border-left: 1.5px solid var(--border-strong);
+  border-bottom: 1.5px solid var(--border-strong);
+  border-bottom-left-radius: 6px;
+}
+
+/* The generic switch stands in for an owner's custom row until that row renders something. */
+.labs-fallback {
+  display: none;
+}
+
+.labs-custom:empty {
+  display: none;
+}
+
+.labs-custom:empty + .labs-fallback {
+  display: block;
+}
+
+.labs-link {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+.labs-link:hover {
+  text-decoration: underline;
+}
+
+.labs-link:focus-visible {
+  outline: none;
+  border-radius: 3px;
+  box-shadow: var(--focus-ring);
+}
+
+.labs-footnote {
+  margin: -16px 4px 24px;
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}

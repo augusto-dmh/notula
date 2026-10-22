@@ -1,0 +1,377 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Shared pieces of the workflow settings: modal, chips, inline confirm, lists and badges. */
+
+.wb-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  background: rgb(0 0 0 / 0.32);
+  animation: wb-fade var(--dur) var(--ease);
+}
+
+@keyframes wb-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+.wb-modal__panel {
+  width: min(440px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  padding: 22px 24px 20px;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.wb-modal__panel--wide {
+  width: min(560px, calc(100vw - 32px));
+}
+
+.wb-modal__title {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.wb-modal__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-size: var(--text-sm);
+  color: var(--fg-2);
+}
+
+.wb-modal__body p {
+  margin: 0;
+}
+
+.wb-modal__actions,
+.wb-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.wb-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wb-field > label,
+.wb-label {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--fg-2);
+}
+
+.wb-help {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--fg-3);
+}
+
+.wb-error {
+  margin: 4px 0 0;
+  font-size: var(--text-xs);
+  color: var(--danger);
+}
+
+.wb-row-split {
+  display: flex;
+  gap: 8px;
+}
+
+.wb-row-split > * {
+  flex: 1;
+  min-width: 0;
+}
+
+.wb-chips__box {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 8px;
+  min-height: 36px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.wb-chips__box:focus-within {
+  border-color: var(--border-strong);
+}
+
+.wb-chips__input {
+  flex: 1;
+  min-width: 120px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--fg);
+}
+
+.wb-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: var(--text-xs);
+  color: var(--fg);
+}
+
+.wb-chip__x {
+  border: 0;
+  background: transparent;
+  color: var(--fg-3);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 4px;
+}
+
+.wb-chip__x:hover {
+  color: var(--fg);
+}
+
+.wb-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-size: var(--text-sm);
+}
+
+.wb-confirm__body {
+  color: var(--fg-2);
+}
+
+.wb-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.wb-badge--ok {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.wb-badge--warn {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.wb-badge--bad {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.wb-badge--accent {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.wb-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.wb-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
+
+.wb-item:first-child {
+  border-top: 0;
+}
+
+.wb-item--off {
+  opacity: 0.55;
+}
+
+.wb-item__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.wb-item__title {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+
+.wb-item__meta {
+  font-size: var(--text-xs);
+  color: var(--fg-3);
+  overflow-wrap: anywhere;
+}
+
+.wb-item__quote {
+  margin: 2px 0 0;
+  padding-left: 8px;
+  border-left: 2px solid var(--border);
+  font-size: var(--text-xs);
+  color: var(--fg-2);
+}
+
+.wb-item__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.wb-item__side {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.wb-empty {
+  padding: 16px;
+  font-size: var(--text-sm);
+  color: var(--fg-3);
+}
+
+.wb-note {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--fg-3);
+}
+
+.wb-link {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.wb-textarea {
+  min-height: 64px;
+  resize: vertical;
+}
+
+.wb-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-sm);
+  color: var(--fg);
+}
+
+.wb-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wb-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  color: var(--fg);
+}
+
+.wb-option[aria-checked='true'] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.wb-option:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.wb-option__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--text-sm);
+}
+
+.wb-option__hint {
+  font-size: var(--text-xs);
+  color: var(--fg-3);
+}
+
+.wb-secret {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: var(--text-xs);
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+
+.wb-secret code {
+  flex: 1;
+  min-width: 0;
+}
+
+.wb-warning {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: var(--text-xs);
+}
+
+.wb-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  font-size: var(--text-sm);
+  color: var(--fg);
+}
+
+.wb-banner__text {
+  flex: 1;
+  min-width: 0;
+}

@@ -1,0 +1,511 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* People and companies: the list pages, the
+   person and company pages, the folder tabs and the sidebar buttons. Shared by
+   features/companies. */
+
+.directory-page {
+  min-height: 100%;
+}
+
+.directory-page__column {
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 28px 32px 64px;
+}
+
+.directory-page--detail .directory-page__column {
+  padding-top: 36px;
+}
+
+/* ---------- header, tabs, search ---------- */
+
+.directory-head {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.directory-head__title {
+  margin: 0;
+  color: var(--fg);
+  font-size: var(--text-xl);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.directory-head__bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 32px;
+}
+
+.directory-tabs {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.directory-tabs--notes {
+  margin-bottom: 10px;
+}
+
+.directory-tabs__tab {
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.directory-tabs__tab:hover {
+  color: var(--fg);
+}
+
+.directory-tabs__tab[aria-selected='true'] {
+  background: var(--surface);
+  color: var(--fg);
+  box-shadow: var(--shadow-sm);
+}
+
+.directory-tabs__tab:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.directory-search {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+}
+
+.directory-search.is-open {
+  gap: 6px;
+  width: min(260px, 50%);
+  height: 30px;
+  padding: 0 4px 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--fg-3);
+}
+
+.directory-search.is-open:focus-within {
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.directory-search__field {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--text-sm);
+}
+
+/* ---------- table ---------- */
+
+.directory-table {
+  display: grid;
+  column-gap: 20px;
+}
+
+/* Each row spans the grid and shares its columns, so it has a box to focus, hover and drag. */
+.directory-table__row {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: center;
+  min-height: 52px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.directory-table__row--head {
+  min-height: 32px;
+  border-radius: 0;
+}
+
+.directory-table__cell {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.directory-table__cell--num,
+.directory-table__cell--date {
+  justify-content: flex-end;
+  white-space: nowrap;
+}
+
+.directory-table__row--link {
+  cursor: pointer;
+}
+
+.directory-table__row--link:hover {
+  background: var(--surface-2);
+}
+
+.directory-table__row--link:focus-visible {
+  outline: none;
+  background: var(--accent-soft);
+  box-shadow: var(--focus-ring);
+}
+
+.directory-table__sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.directory-table__sort:hover,
+.directory-table__sort.is-active {
+  color: var(--fg-2);
+}
+
+.directory-table__sort:focus-visible {
+  outline: none;
+  border-radius: 4px;
+  box-shadow: var(--focus-ring);
+}
+
+.directory-table__arrow {
+  font-size: 10px;
+}
+
+.directory-table__muted {
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+}
+
+.directory-table__num {
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.directory-person {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.directory-person__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.directory-person__name,
+.directory-person__email {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.directory-person__name {
+  color: var(--fg);
+  font-size: var(--text-md);
+  font-weight: 500;
+}
+
+.directory-person__me {
+  color: var(--fg-3);
+  font-weight: 400;
+}
+
+.directory-person__email {
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+}
+
+.directory-stack {
+  display: flex;
+  align-items: center;
+}
+
+.directory-stack > * + * {
+  margin-left: -6px;
+}
+
+.directory-stack .nt-avatar {
+  box-shadow: 0 0 0 2px var(--bg);
+}
+
+.directory-stack__more {
+  margin-left: 4px;
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+}
+
+/* ---------- states ---------- */
+
+.directory-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 48px 16px;
+  color: var(--fg-3);
+  text-align: center;
+}
+
+.directory-empty__icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--fg-3);
+}
+
+.directory-empty__text {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.directory-loading {
+  display: flex;
+  justify-content: center;
+  padding: 40px 0;
+  color: var(--fg-3);
+  font-size: var(--text-sm);
+}
+
+.directory-none,
+.directory-error {
+  margin: 24px 0;
+  color: var(--fg-3);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+
+.directory-error {
+  color: var(--danger);
+}
+
+/* ---------- person and company pages ---------- */
+
+.directory-compact {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  margin-bottom: -40px;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  backdrop-filter: blur(8px);
+  color: var(--fg);
+  font-size: var(--text-sm);
+  font-weight: 550;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+
+.directory-compact.is-shown {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.directory-who {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.directory-who__text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.directory-who__name {
+  margin: 4px 0 0;
+  color: var(--fg);
+  font-size: var(--text-xl);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  user-select: text;
+  overflow-wrap: anywhere;
+}
+
+.directory-who__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+}
+
+.directory-who__email {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.directory-who__email:hover {
+  color: var(--fg);
+}
+
+.directory-who__email svg {
+  color: var(--fg-3);
+}
+
+.directory-domain {
+  color: var(--fg-3);
+  font-size: var(--text-sm);
+}
+
+.directory-domain--link {
+  color: var(--fg-2);
+  text-decoration: none;
+}
+
+.directory-domain--link:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.directory-who__actions {
+  display: flex;
+  flex: none;
+  gap: 4px;
+}
+
+.directory-star.is-on {
+  color: #d99a1b;
+}
+
+.directory-who__people {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.directory-who__person {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px 2px 2px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.directory-who__person:hover {
+  color: var(--fg);
+}
+
+.directory-people-pop {
+  position: relative;
+}
+
+.directory-people-pop__list {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  min-width: 220px;
+  max-height: 280px;
+  padding: 4px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.directory-people-pop__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--fg);
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.directory-people-pop__item:hover,
+.directory-people-pop__item:focus-visible {
+  outline: none;
+  background: var(--surface-2);
+}
+
+.directory-page__chat {
+  margin-top: 22px;
+}
+
+.directory-rule {
+  margin: 24px 0 14px;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+/* ---------- folder tabs, sidebar ---------- */
+
+.folder-directory {
+  padding-top: 4px;
+}
+
+.sidebar-people {
+  display: flex;
+  gap: 2px;
+  padding: 2px 4px;
+}
+
+.sidebar-people__btn {
+  color: var(--fg-3);
+}
+
+.sidebar-people__btn[aria-current='page'] {
+  background: var(--surface-2);
+  color: var(--accent);
+}
+
+@media (max-width: 640px) {
+  .directory-page__column {
+    padding: 20px 16px 48px;
+  }
+}

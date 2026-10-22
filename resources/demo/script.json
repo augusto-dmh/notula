@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "speaker": "Notula Demo",
+  "lines": [
+    {
+      "atMs": 1500,
+      "durationMs": 6000,
+      "text": "Hi, thanks for joining! I'm the Notula demo. Let's pretend we're planning the launch of a new mobile app."
+    },
+    {
+      "atMs": 8500,
+      "durationMs": 6500,
+      "text": "While we talk, Notula transcribes the call on your computer. Try typing a few notes as we go."
+    },
+    {
+      "atMs": 16000,
+      "durationMs": 6000,
+      "text": "First topic: the launch date. We're aiming for Tuesday, March 3, with a beta for 200 users a week before."
+    },
+    {
+      "atMs": 23000,
+      "durationMs": 5500,
+      "text": "The beta goes out through TestFlight, and the sign-up form is already live on the website."
+    },
+    {
+      "atMs": 29500,
+      "durationMs": 6500,
+      "text": "Second topic: the budget. Marketing has 12,000 dollars for launch week, mostly for social ads."
+    },
+    {
+      "atMs": 37000,
+      "durationMs": 6000,
+      "text": "We agreed to skip the paid influencer campaign for now and revisit it after the first month."
+    },
+    {
+      "atMs": 44000,
+      "durationMs": 6500,
+      "text": "Third topic: risks. The payment screen still fails on older Android phones, so that needs a fix first."
+    },
+    {
+      "atMs": 51500,
+      "durationMs": 6000,
+      "text": "Ana owns that bug, and she'll share an update by Friday."
+    },
+    {
+      "atMs": 58500,
+      "durationMs": 6500,
+      "text": "One open question: do we launch in Portugal and Brazil on the same day? Let's decide next week."
+    },
+    {
+      "atMs": 66000,
+      "durationMs": 6000,
+      "text": "On my side, I will write the launch announcement and send it to you for review by Thursday."
+    },
+    {
+      "atMs": 73000,
+      "durationMs": 6500,
+      "text": "And could you book a thirty-minute check-in with the design team for Monday?"
+    },
+    {
+      "atMs": 80500,
+      "durationMs": 5500,
+      "text": "Great. That covers the plan: date, budget, risks and who does what."
+    },
+    {
+      "atMs": 87000,
+      "durationMs": 7000,
+      "text": "When the meeting ends, Notula combines your notes with the transcript into clear, organised notes."
+    },
+    {
+      "atMs": 95000,
+      "durationMs": 6500,
+      "text": "Anything you typed stays yours, and the AI fills in the details around it."
+    },
+    {
+      "atMs": 102500,
+      "durationMs": 6500,
+      "text": "You can also chat with your notes afterwards, or pick a template to shape them."
+    },
+    {
+      "atMs": 110000,
+      "durationMs": 5000,
+      "text": "That's it for the demo. Click stop whenever you're ready and watch your notes come together. Bye!"
+    }
+  ]
+}

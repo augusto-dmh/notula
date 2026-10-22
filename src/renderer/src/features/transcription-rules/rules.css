@@ -1,0 +1,102 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Transcription rules: the sub-page, the decision dialog, the bubble banner. */
+
+.tr-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.tr-back {
+  align-self: flex-start;
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--fg-3);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.tr-back:hover {
+  color: var(--fg);
+}
+
+.tr-title {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+
+.tr-intro {
+  margin: -8px 0 0;
+  font-size: var(--text-sm);
+  color: var(--fg-2);
+}
+
+.tr-add {
+  justify-content: flex-start;
+}
+
+.tr-chevron {
+  color: var(--fg-3);
+  font-size: 18px;
+}
+
+.tr-header {
+  font-weight: 500;
+  color: var(--fg);
+}
+
+.tr-text {
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--fg);
+}
+
+.tr-texts {
+  margin: 0;
+  padding: 8px 10px 8px 28px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--fg);
+}
+
+.tr-bubble-banner {
+  margin-left: 8px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tr-automation-banner {
+  position: fixed;
+  left: 50%;
+  bottom: 88px;
+  z-index: 900;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(640px, calc(100vw - 48px));
+  padding: 10px 12px 10px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  font-size: var(--text-sm);
+  color: var(--fg);
+}
+
+.tr-automation-banner > span {
+  flex: 1;
+  min-width: 0;
+}

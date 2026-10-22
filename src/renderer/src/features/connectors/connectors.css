@@ -1,0 +1,493 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Settings ▸ Connectors: the local MCP server card and the MCP Servers list. */
+
+.mcp-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--fg-2);
+  font-size: 11px;
+  font-weight: 500;
+  vertical-align: 1px;
+}
+
+.mcp-local__hero {
+  padding: 16px 16px 6px;
+}
+
+.mcp-local__title {
+  font-size: var(--text-base);
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+.mcp-status.is-error,
+.mcp-row__state.is-error {
+  color: var(--danger);
+}
+
+.mcp-notice {
+  margin: 0 16px 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--warning-soft);
+  color: var(--fg);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+.mcp-sub .settings-row__label {
+  font-weight: 450;
+}
+
+.mcp-input {
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--fg);
+  font: var(--text-md) var(--font-sans);
+  box-sizing: border-box;
+}
+
+.mcp-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.mcp-input--mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+.mcp-input--port {
+  width: 84px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.mcp-textarea {
+  height: auto;
+  padding: 7px 10px;
+  resize: vertical;
+}
+
+.mcp-secret {
+  -webkit-text-security: disc;
+}
+
+.mcp-steps,
+.mcp-tokens {
+  padding: 12px 16px;
+  border-top: 1px dashed var(--border);
+}
+
+.mcp-steps__head {
+  margin-bottom: 8px;
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.mcp-steps ol {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding-left: 18px;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+.mcp-steps__note {
+  margin: 0 0 0 8px;
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+}
+
+p.mcp-steps__note {
+  margin: 0;
+}
+
+.mcp-steps__text {
+  margin: 0 0 10px;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.mcp-steps__text code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.mcp-chip {
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface-2);
+  color: var(--fg);
+  font: 12px var(--font-mono);
+  cursor: pointer;
+}
+
+.mcp-chip:hover {
+  border-color: var(--border-strong);
+}
+
+.mcp-fresh {
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+}
+
+.mcp-fresh__label {
+  margin-bottom: 6px;
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.mcp-fresh__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mcp-fresh__token {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font: 12px var(--font-mono);
+  user-select: all;
+}
+
+.mcp-tokens ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mcp-tokens__row,
+.mcp-activity__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  font-size: var(--text-sm);
+}
+
+.mcp-tokens__name {
+  font-weight: 500;
+}
+
+.mcp-tokens__meta {
+  flex: 1;
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+}
+
+.mcp-activity__time,
+.mcp-activity__ms {
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.mcp-activity__time {
+  width: 76px;
+}
+
+.mcp-activity__client {
+  width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-activity__tool {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.mcp-ok {
+  color: var(--success);
+  font-size: var(--text-xs);
+}
+
+.mcp-bad {
+  color: var(--danger);
+  font-size: var(--text-xs);
+}
+
+/* ---------- MCP Servers ---------- */
+
+.mcp-row .settings-row__text {
+  min-width: 0;
+}
+
+.mcp-row__where {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.mcp-row__state {
+  margin-top: 2px;
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+}
+
+.mcp-row__control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mcp-pill {
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.mcp-pill--ok {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.mcp-pill--error {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.mcp-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: mcp-spin 0.8s linear infinite;
+}
+
+@keyframes mcp-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.mcp-menu {
+  position: relative;
+}
+
+.mcp-menu__list {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  min-width: 150px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.mcp-menu__list button {
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--fg);
+  font: var(--text-sm) var(--font-sans);
+  text-align: left;
+  cursor: pointer;
+}
+
+.mcp-menu__list button:hover {
+  background: var(--surface-2);
+}
+
+.mcp-menu__list button.is-danger {
+  color: var(--danger);
+}
+
+.mcp-footer .settings-row__label {
+  font-weight: 500;
+}
+
+/* ---------- dialogs ---------- */
+
+.mcp-dialog--wide {
+  width: min(600px, calc(100vw - 48px));
+}
+
+.mcp-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.mcp-field__label {
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+  font-weight: 550;
+}
+
+.mcp-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.mcp-check input {
+  margin-top: 2px;
+}
+
+.mcp-check__hint {
+  display: block;
+  margin-top: 2px;
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+}
+
+.mcp-advanced {
+  align-self: flex-start;
+  margin-top: 14px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg-2);
+  font: 500 var(--text-sm) var(--font-sans);
+  cursor: pointer;
+}
+
+.mcp-advanced__chev {
+  display: inline-block;
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.mcp-advanced__chev.is-open {
+  transform: rotate(90deg);
+}
+
+.mcp-warning {
+  margin: 14px 0 0;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: var(--text-sm);
+}
+
+.mcp-error {
+  margin: 12px 0 0;
+  color: var(--danger);
+  font-size: var(--text-sm);
+}
+
+.mcp-error__detail {
+  display: block;
+  margin-top: 2px;
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+}
+
+.mcp-tools {
+  max-height: 46vh;
+  margin: 12px 0 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+  border-top: 1px solid var(--border);
+}
+
+.mcp-tools__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px dashed var(--border);
+}
+
+.mcp-tools__text {
+  flex: 1;
+  min-width: 0;
+}
+
+.mcp-tools__name {
+  font-size: var(--text-sm);
+  font-weight: 550;
+}
+
+.mcp-tools__id {
+  color: var(--fg-3);
+  font: 11px var(--font-mono);
+}
+
+.mcp-tools__desc {
+  margin-top: 4px;
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.mcp-tools__always {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+}
+
+.mcp-tools__empty {
+  padding: 12px 0;
+  color: var(--fg-3);
+  font-size: var(--text-sm);
+}
+
+.mcp-instructions {
+  margin-top: 12px;
+  font-size: var(--text-sm);
+}
+
+.mcp-instructions summary {
+  color: var(--fg-2);
+  cursor: pointer;
+}
+
+.mcp-instructions p {
+  white-space: pre-wrap;
+  color: var(--fg-2);
+}
+
+.mcp-log {
+  max-height: 46vh;
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font: 12px / 1.5 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

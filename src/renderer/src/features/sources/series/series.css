@@ -1,0 +1,278 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* A series folder's series view (content sources): lessons in catalog order, flags, duplicates and
+   the series dialogs. Global tokens come from styles.css; the dialogs use the folders' h-modal. */
+
+.series-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 4px 0 20px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  font-size: var(--text-sm);
+}
+
+.series-panel__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+
+.series-panel__heading {
+  min-width: 0;
+}
+
+.series-panel__title {
+  margin: 0;
+  color: var(--fg);
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+
+.series-panel__subtitle {
+  margin: 0;
+  color: var(--fg);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.series-panel__summary {
+  margin: 2px 0 0;
+  color: var(--fg-3);
+}
+
+.series-panel__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.series-panel__empty,
+.series-panel__error {
+  margin: 0;
+  color: var(--fg-2);
+}
+
+.series-panel__error {
+  color: var(--danger);
+}
+
+.series-panel__more {
+  align-self: flex-start;
+}
+
+.series-lessons {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.series-section {
+  margin: 10px 0 2px;
+  padding: 0 8px;
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.series-section:first-child {
+  margin-top: 0;
+}
+
+.series-lesson__button {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.series-lesson__button:hover:not(.is-static) {
+  background: var(--surface-2);
+}
+
+.series-lesson__button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.series-lesson__button.is-static {
+  cursor: default;
+}
+
+.series-lesson.is-unwatched .series-lesson__title {
+  color: var(--fg-3);
+}
+
+.series-lesson__number {
+  flex: none;
+  min-width: 2.2em;
+  color: var(--fg-3);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.series-lesson__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.series-lesson__meta {
+  flex: none;
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.series-flag {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.series-flag--pending {
+  background: var(--surface-3);
+  color: var(--fg-2);
+}
+
+.series-flag--guessed {
+  background: var(--warning-soft);
+  color: var(--fg);
+}
+
+.series-dupes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.series-dupes__hint {
+  margin: 0;
+  color: var(--fg-3);
+}
+
+.series-dupes__group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.series-dupes__lesson {
+  margin: 0;
+  color: var(--fg-2);
+  font-weight: 550;
+}
+
+.series-dupes__notes {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.series-dupes__note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding-left: 8px;
+}
+
+.series-dupes__open {
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.series-dupes__open:hover {
+  text-decoration: underline;
+}
+
+.series-dupes__date {
+  flex: none;
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+}
+
+/* ---------- dialogs ---------- */
+
+.series-dialog {
+  width: min(560px, calc(100vw - 48px));
+}
+
+.series-dialog--confirm {
+  width: min(440px, calc(100vw - 48px));
+}
+
+.series-dialog__label {
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+  font-weight: 550;
+}
+
+.series-dialog__text {
+  width: 100%;
+  min-height: 200px;
+  resize: vertical;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.series-dialog__hint {
+  margin: 0;
+  color: var(--fg-3);
+  font-size: var(--text-sm);
+}
+
+.series-dialog__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.series-dialog__preview {
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+}
+
+.series-dialog__error {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--text-sm);
+}

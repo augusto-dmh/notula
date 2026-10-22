@@ -1,0 +1,199 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* The dictation pill: a 320 × 180 transparent window
+   whose content is one small dark bar at the bottom centre. The window has no native shadow;
+   the bar draws its own inside the window margin. */
+
+html.dict-pill-doc,
+html.dict-pill-doc body {
+  background: transparent !important;
+  overflow: hidden;
+  user-select: none;
+}
+
+.dict-pill-root {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  width: 100vw;
+  height: 100vh;
+  padding-bottom: 14px;
+  box-sizing: border-box;
+}
+
+.dict-pill {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 132px;
+  max-width: 300px;
+  height: 40px;
+  padding: 0 8px;
+  border-radius: 20px;
+  background: rgba(24, 24, 22, 0.94);
+  color: #f4f4f2;
+  font: 500 13px/1.2 var(--font-sans);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 6px 20px rgba(0, 0, 0, 0.28);
+  box-sizing: border-box;
+  cursor: default;
+  animation: dict-pill-in 160ms var(--ease) both;
+}
+
+.dict-pill--recording,
+.dict-pill--processing {
+  justify-content: center;
+}
+
+.dict-pill--copied,
+.dict-pill--empty,
+.dict-pill--saved,
+.dict-pill--error {
+  padding: 0 16px;
+}
+
+@keyframes dict-pill-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+}
+
+.dict-pill__dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.35);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.dict-pill__dot.is-ready {
+  background: var(--live);
+  box-shadow: 0 0 0 3px rgba(229, 72, 77, 0.22);
+}
+
+.dict-wave {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 22px;
+}
+
+.dict-wave span {
+  width: 3px;
+  height: 22px;
+  border-radius: 2px;
+  background: #f4f4f2;
+  transform-origin: center;
+  transition: transform 80ms linear;
+}
+
+.dict-pill__btn {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  color: #f4f4f2;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.dict-pill__btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.dict-pill__btn--primary {
+  background: #f4f4f2;
+  color: #181816;
+}
+
+.dict-pill__btn--primary:hover {
+  background: #ffffff;
+}
+
+.dict-proc {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 18px;
+}
+
+.dict-proc span {
+  width: 4px;
+  height: 16px;
+  border-radius: 2px;
+  background: #f4f4f2;
+  animation: dict-proc 900ms ease-in-out infinite;
+}
+
+.dict-proc span:nth-child(2) {
+  animation-delay: 120ms;
+}
+.dict-proc span:nth-child(3) {
+  animation-delay: 240ms;
+}
+.dict-proc span:nth-child(4) {
+  animation-delay: 360ms;
+}
+
+@keyframes dict-proc {
+  0%,
+  100% {
+    transform: scaleY(0.35);
+    opacity: 0.55;
+  }
+  50% {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+}
+
+.dict-pill__text {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dict-pill__text strong {
+  font-weight: 600;
+}
+
+.dict-pill__sub {
+  color: rgba(244, 244, 242, 0.65);
+  font-weight: 400;
+}
+
+.dict-pill__text--error {
+  color: #ffb4b1;
+}
+
+.dict-pill__link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #b9c0ff;
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.dict-pill__link:hover {
+  text-decoration: underline;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dict-pill,
+  .dict-proc span {
+    animation: none;
+  }
+}

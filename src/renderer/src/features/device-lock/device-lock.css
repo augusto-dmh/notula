@@ -1,0 +1,91 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* The lock view and the Labs row notes. */
+
+.dl-blank {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+}
+
+.dl-lock {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--bg);
+  -webkit-app-region: drag;
+}
+
+.dl-lock__card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: min(340px, 100%);
+  text-align: center;
+  -webkit-app-region: no-drag;
+  animation: dl-in var(--dur) var(--ease);
+}
+
+@keyframes dl-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+.dl-lock__title {
+  margin: 18px 0 6px;
+  color: var(--fg);
+  font-size: var(--text-xl);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.dl-lock__hint {
+  min-height: 2.9em;
+  margin: 0 0 18px;
+  color: var(--fg-2);
+  font-size: var(--text-md);
+  line-height: 1.45;
+}
+
+.dl-lock__btn {
+  min-width: 132px;
+}
+
+.dl-lock__foot {
+  margin: 28px 0 0;
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+}
+
+.dl-warning {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: calc(100vw - 32px);
+  padding: 8px 8px 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  color: var(--warning);
+  font-size: var(--text-sm);
+  transform: translateX(-50%);
+}
+
+.dl-row-note {
+  margin: -4px 16px 10px;
+  color: var(--fg-3);
+  font-size: var(--text-sm);
+}
+
+.dl-row-note--warn {
+  color: var(--warning);
+}

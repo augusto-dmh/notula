@@ -1,0 +1,316 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* The live transcript panel. Global tokens come from styles.css. */
+
+.nt-tr {
+  --nt-tr-line: color-mix(in srgb, var(--fg) 12%, transparent);
+  --nt-tr-soft: color-mix(in srgb, var(--fg) 5%, transparent);
+  --nt-tr-me: var(--accent-soft);
+  --nt-tr-accent: var(--accent);
+  --nt-tr-mark: var(--highlight);
+  --nt-tr-mark-active: var(--highlight-current);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  font-size: 14px;
+  outline: none;
+  border-left: 1px solid var(--nt-tr-line);
+  background: var(--bg);
+}
+
+.nt-tr-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--nt-tr-line);
+}
+
+.nt-tr-title {
+  font-weight: 600;
+}
+
+.nt-tr-actions {
+  display: flex;
+  gap: 2px;
+}
+
+.nt-tr-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+
+.nt-tr-icon:hover:not(:disabled) {
+  background: var(--nt-tr-soft);
+}
+
+.nt-tr-icon:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.nt-tr-find {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--nt-tr-line);
+}
+
+.nt-tr-find-input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--nt-tr-line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+}
+
+.nt-tr-find-input:focus {
+  outline: 2px solid color-mix(in srgb, var(--nt-tr-accent) 60%, transparent);
+  outline-offset: -1px;
+}
+
+.nt-tr-find-count {
+  min-width: 64px;
+  text-align: right;
+  font-size: 12px;
+  color: var(--fg-2);
+}
+
+.nt-tr-scroll {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.nt-tr-list {
+  position: relative;
+  width: 100%;
+}
+
+.nt-tr-row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  padding: 2px 12px;
+  box-sizing: border-box;
+}
+
+.nt-tr-consent {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--nt-tr-soft);
+  font-size: 12px;
+  color: var(--fg-2);
+}
+
+.nt-tr-consent-more {
+  margin: 6px 0 0;
+}
+
+.nt-tr-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--nt-tr-accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+.nt-tr-link:hover {
+  text-decoration: underline;
+}
+
+.nt-tr-elapsed {
+  margin: 10px 0 2px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--fg-3);
+}
+
+.nt-tr-turn {
+  display: flex;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  transition: background-color 200ms;
+}
+
+.nt-tr-me {
+  background: var(--nt-tr-me);
+}
+
+.nt-tr-highlight {
+  box-shadow: inset 0 0 0 2px var(--nt-tr-mark-active);
+}
+
+.nt-tr-selected {
+  box-shadow: inset 0 0 0 2px var(--nt-tr-accent);
+}
+
+.nt-tr-select {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  padding: 0;
+  border: 1px solid var(--nt-tr-line);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--nt-tr-accent);
+  font-size: 11px;
+  line-height: 14px;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.nt-tr-turn:hover .nt-tr-select,
+.nt-tr-select:focus-visible,
+.nt-tr-select[aria-pressed='true'] {
+  opacity: 1;
+}
+
+.nt-tr-turn-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.nt-tr-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.nt-tr-label {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.nt-tr-time {
+  font-size: 11px;
+  color: var(--fg-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.nt-tr-text {
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.nt-tr-mark {
+  border-radius: 2px;
+  background: var(--nt-tr-mark);
+  color: inherit;
+}
+
+.nt-tr-mark-active {
+  background: var(--nt-tr-mark-active);
+}
+
+.nt-tr-empty {
+  position: absolute;
+  inset: 60px 16px auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.nt-tr-empty-line {
+  color: var(--fg-2);
+}
+
+.nt-tr-empty-prompt {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.nt-tr-jump {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  width: 34px;
+  height: 34px;
+  transform: translateX(-50%);
+  border: 1px solid var(--nt-tr-line);
+  border-radius: 50%;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 16px;
+  box-shadow: var(--shadow);
+  cursor: pointer;
+}
+
+.nt-tr-pill {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  transform: translateX(-50%);
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--fg);
+  color: var(--bg);
+  font-size: 12px;
+  white-space: nowrap;
+  box-shadow: var(--shadow);
+}
+
+.nt-tr-pill .nt-tr-link {
+  color: inherit;
+  text-decoration: underline;
+}
+
+/* The footer with the language menu. */
+.nt-tr-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--nt-tr-line);
+}
+
+.nt-tr:not(.nt-tr--bubble) .nt-tr-jump,
+.nt-tr:not(.nt-tr--bubble) .nt-tr-pill {
+  bottom: 56px;
+}
+
+/* The bubble's hover panel (variant="bubble"): dark, no header or footer. */
+.nt-tr--bubble {
+  border-left: 0;
+  font-size: 13px;
+}
+
+.nt-tr-bubble-find {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  z-index: 2;
+  background: var(--bg);
+}

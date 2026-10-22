@@ -1,0 +1,6 @@
+Meeting Title: Event sourcing
+Date: Oct 2
+
+Transcript:
+[00:12] Me: Bem-vindos ao curso.
+[01:05] Ada Lovelace: Events are facts.

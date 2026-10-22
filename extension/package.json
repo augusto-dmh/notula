@@ -1,0 +1,15 @@
+{
+  "name": "notula-extension",
+  "version": "1.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "author": "Augusto Henriques",
+  "description": "Notula's browser extension for Chrome and Edge. Built with the repo's own toolchain: no dependencies of its own.",
+  "type": "module",
+  "scripts": {
+    "typecheck": "node scripts/typecheck.mjs",
+    "build": "node scripts/build.mjs",
+    "build:store": "node scripts/build.mjs --store",
+    "icons": "node scripts/icons.mjs"
+  }
+}

@@ -1,0 +1,116 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Settings ▸ Keyboard shortcuts. Chips are small rounded caps in the system font, at least
+   1 rem wide, on a highlight background. */
+
+.ks-card .settings-row {
+  min-height: 52px;
+  padding-top: 11px;
+  padding-bottom: 11px;
+}
+
+.ks-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ks-chips {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ks-chip {
+  display: inline-grid;
+  place-items: center;
+  min-width: 1rem;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--surface-2);
+  color: var(--fg-2);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  font-weight: 550;
+  line-height: 1;
+}
+
+.ks-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ks-recording {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  animation: ks-pulse 1.2s var(--ease) infinite;
+}
+
+@keyframes ks-pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ks-recording {
+    animation: none;
+  }
+}
+
+.ks-error {
+  color: var(--danger);
+}
+
+.ks-off {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg-3);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.ks-off:hover {
+  color: var(--accent);
+}
+
+.ks-off:focus-visible {
+  outline: none;
+  border-radius: 3px;
+  box-shadow: var(--focus-ring);
+}
+
+/* The dictation bar's hook rows: "Off", and greyed out without the helper. */
+.ks-none {
+  color: var(--fg-3);
+  font-size: var(--text-sm);
+}
+
+.ks-control.is-disabled .ks-chips {
+  opacity: 0.45;
+}
+
+.ks-standalone {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.ks-standalone__note {
+  margin: 0;
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+}

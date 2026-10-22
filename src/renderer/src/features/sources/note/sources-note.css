@@ -1,0 +1,403 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Content sources on the note page: the header chip, its menu, the Link source dialog and the
+   editor's `[mm:ss]` stamp chips. Global tokens come from styles.css. */
+
+.src-chip {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: var(--text-sm);
+}
+
+.src-chip__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-width: 0;
+  color: var(--fg-2);
+}
+
+.src-chip__icon {
+  flex: none;
+  color: var(--fg-3);
+}
+
+.src-chip__title {
+  min-width: 0;
+  max-width: 420px;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  font-weight: 550;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.src-chip__title:hover {
+  text-decoration: underline;
+}
+
+.src-chip__title--static {
+  cursor: default;
+}
+
+.src-chip__title--static:hover {
+  text-decoration: none;
+}
+
+.src-chip__meta {
+  white-space: nowrap;
+}
+
+.src-chip__meta::before {
+  content: '·';
+  margin-right: 8px;
+  color: var(--fg-3);
+}
+
+.src-chip__series {
+  display: inline-block;
+  max-width: 240px;
+  overflow: hidden;
+  vertical-align: bottom;
+  text-overflow: ellipsis;
+}
+
+.src-chip__badge {
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: var(--text-xs);
+  font-weight: 550;
+  white-space: nowrap;
+}
+
+.src-chip__badge--high {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.src-chip__badge--guess {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.src-chip__action,
+.src-inline-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.src-chip__action:hover,
+.src-inline-link:hover {
+  text-decoration: underline;
+}
+
+.src-chip__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  height: 26px;
+  padding: 0 9px 0 7px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--fg-2);
+  font: inherit;
+  cursor: pointer;
+}
+
+.src-chip__link:hover {
+  border-style: solid;
+  background: var(--surface-2);
+  color: var(--fg);
+}
+
+.src-chip__more-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.src-chip__more {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-3);
+  cursor: pointer;
+}
+
+.src-chip__more:hover,
+.src-chip__more.is-open {
+  background: var(--surface-2);
+  color: var(--fg);
+}
+
+.src-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 900;
+  width: 220px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.src-menu__item {
+  display: block;
+  width: 100%;
+  height: 32px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg);
+  font-size: var(--text-md);
+  text-align: left;
+  cursor: pointer;
+}
+
+.src-menu__item:hover,
+.src-menu__item:focus-visible {
+  outline: none;
+  background: var(--surface-2);
+}
+
+.src-menu__divider {
+  height: 1px;
+  margin: 6px 4px;
+  background: var(--border);
+}
+
+.src-same {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: var(--warning-soft);
+}
+
+.src-same__text {
+  flex: 1;
+  min-width: 160px;
+  color: var(--fg);
+}
+
+/* ---------- the Link source dialog ---------- */
+
+.src-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.32);
+}
+
+.src-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(520px, 100%);
+  max-height: calc(100vh - 32px);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg), 0 0 0 1px var(--border);
+  color: var(--fg);
+}
+
+.src-dialog form {
+  display: contents;
+}
+
+.src-dialog__title {
+  margin: 0;
+  padding: 20px 20px 8px;
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+
+.src-dialog__body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 20px 4px;
+  overflow-y: auto;
+}
+
+.src-dialog__text {
+  margin: 0;
+  color: var(--fg-2);
+  line-height: 1.45;
+}
+
+.src-dialog__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 16px 20px 20px;
+}
+
+.src-dialog__error {
+  margin: 4px 0 0;
+  color: var(--danger);
+  font-size: var(--text-sm);
+}
+
+.src-section {
+  display: flex !important;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 12px;
+  border-bottom: 1px dashed var(--border);
+}
+
+.src-section:last-of-type {
+  border-bottom: 0;
+}
+
+.src-section__title {
+  margin: 0;
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+  font-weight: 550;
+}
+
+.src-section__empty {
+  margin: 0;
+  color: var(--fg-3);
+  font-size: var(--text-sm);
+}
+
+.src-field-row {
+  display: flex;
+  gap: 8px;
+}
+
+.src-field-row .n-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.src-field-label {
+  margin-top: 6px;
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+  font-weight: 550;
+}
+
+.src-field-hint {
+  margin: 0;
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+}
+
+.src-field-hint--error {
+  color: var(--danger);
+}
+
+.src-field-number {
+  width: 120px;
+}
+
+.src-picks {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 200px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.src-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.src-pick:hover:not(:disabled),
+.src-pick:focus-visible {
+  outline: none;
+  background: var(--surface-2);
+}
+
+.src-pick__title {
+  overflow: hidden;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.src-pick__meta {
+  overflow: hidden;
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- stamp chips in the notes editor ---------- */
+
+.ne-stamp {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--fg-2);
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 0.82em;
+  line-height: 1.5;
+  vertical-align: 1px;
+  user-select: none;
+  cursor: pointer;
+}
+
+.ne-stamp:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.ne-stamp--static {
+  cursor: default;
+}
+
+.ne-stamp--static:hover {
+  background: var(--surface-2);
+  color: var(--fg-2);
+}

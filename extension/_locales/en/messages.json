@@ -1,0 +1,316 @@
+{
+  "extName": {
+    "message": "Notula",
+    "description": "The extension's name in the store and the browser."
+  },
+  "extDescription": {
+    "message": "Links your Notula notes to the video or lesson you’re watching. Works with the Notula app on this computer.",
+    "description": "Store short description, at most 132 characters."
+  },
+  "actionTitle": {
+    "message": "Notula",
+    "description": "Toolbar button tooltip."
+  },
+  "commandMark": {
+    "message": "Mark this moment in your Notula note",
+    "description": "The keyboard command's description on the browser's shortcuts page."
+  },
+  "disclosureTitle": {
+    "message": "What this extension sends",
+    "description": "First-run explanation title."
+  },
+  "disclosureBody": {
+    "message": "On YouTube and on sites you turn on, it reads the playing video’s address, title and current time, and sends them only to the Notula app on this computer. Nothing goes to any server.",
+    "description": "First-run explanation."
+  },
+  "disclosureDetail": {
+    "message": "With a note open, Notula can also get the video captions the player has loaded and the course, section and lesson shown on the page. Private windows are left out unless you allow them.",
+    "description": "First-run explanation, second paragraph."
+  },
+  "disclosureAccept": {
+    "message": "Got it",
+    "description": "Accepts the first-run explanation."
+  },
+  "disclosureAccepted": {
+    "message": "The extension is on. You can change what it reads below.",
+    "description": "Shown after the explanation was accepted."
+  },
+  "privacyLink": {
+    "message": "Privacy policy",
+    "description": "Link to the privacy policy."
+  },
+  "settingsLink": {
+    "message": "Settings",
+    "description": "Link to the options page."
+  },
+  "connSetup": {
+    "message": "Read what this extension sends first.",
+    "description": "Popup status before the first-run explanation is accepted."
+  },
+  "connIdle": {
+    "message": "Ready. Connects to Notula when a video plays.",
+    "description": "Popup status when nothing plays."
+  },
+  "connConnecting": {
+    "message": "Connecting to Notula…",
+    "description": "Popup status."
+  },
+  "connConnected": {
+    "message": "Connected to Notula",
+    "description": "Popup status."
+  },
+  "connConnectedVersion": {
+    "message": "Connected to Notula $VERSION$",
+    "description": "Popup status with the app version.",
+    "placeholders": {
+      "version": {
+        "content": "$1",
+        "example": "0.0.13"
+      }
+    }
+  },
+  "connOffInNotula": {
+    "message": "Notula isn’t reading playback. Turn on Sources in Notula ▸ Settings ▸ Labs.",
+    "description": "Popup status when Notula answers mode none."
+  },
+  "connNotRunning": {
+    "message": "Notula isn’t running.",
+    "description": "Popup status."
+  },
+  "connHostMissing": {
+    "message": "Turn on the browser extension in Notula ▸ Settings ▸ Sources.",
+    "description": "Popup status: the native host isn't registered."
+  },
+  "connHostForbidden": {
+    "message": "Notula doesn’t recognize this copy of the extension. Use Repair in Notula ▸ Settings ▸ Sources.",
+    "description": "Popup status: the extension id isn't allowed."
+  },
+  "connHostFailed": {
+    "message": "Can’t start Notula’s helper. Use Repair in Notula ▸ Settings ▸ Sources.",
+    "description": "Popup status: the native host failed."
+  },
+  "connAppOutdated": {
+    "message": "Update Notula to use this extension.",
+    "description": "Popup status."
+  },
+  "connExtensionOutdated": {
+    "message": "This extension is out of date. Your browser updates it on its own.",
+    "description": "Popup status."
+  },
+  "openNotula": {
+    "message": "Open Notula",
+    "description": "Button."
+  },
+  "tryAgain": {
+    "message": "Try again",
+    "description": "Button."
+  },
+  "siteYoutube": {
+    "message": "Reading videos on YouTube.",
+    "description": "Popup, current tab."
+  },
+  "siteOn": {
+    "message": "Reading videos on $HOST$.",
+    "description": "Popup, current tab on a site the user turned on.",
+    "placeholders": {
+      "host": {
+        "content": "$1",
+        "example": "courses.example.com"
+      }
+    }
+  },
+  "siteLinked": {
+    "message": "Reading this tab until it leaves this site.",
+    "description": "Popup, a tab linked once."
+  },
+  "siteOff": {
+    "message": "Notula doesn’t read this site.",
+    "description": "Popup, current tab."
+  },
+  "siteUnsupported": {
+    "message": "Notula can’t read this page.",
+    "description": "Popup, a browser page or a non-https page."
+  },
+  "enableSite": {
+    "message": "Enable on this site",
+    "description": "Button; asks the browser for access to the site."
+  },
+  "disableSite": {
+    "message": "Turn off on this site",
+    "description": "Button."
+  },
+  "linkTab": {
+    "message": "Link this tab",
+    "description": "Button; reads this tab once, without site access."
+  },
+  "incognitoPaused": {
+    "message": "Paused in private windows. Turn them on in Settings to read here.",
+    "description": "Popup."
+  },
+  "captionsHint": {
+    "message": "Turn on captions in the player once to load them.",
+    "description": "Popup hint when captions need the player's token."
+  },
+  "readTranscript": {
+    "message": "Read this lesson’s transcript",
+    "description": "Button, Circle lesson pages."
+  },
+  "transcriptReading": {
+    "message": "Reading…",
+    "description": "Progress."
+  },
+  "transcriptSent": {
+    "message": "Sent $COUNT$ transcript lines to Notula.",
+    "description": "Result.",
+    "placeholders": {
+      "count": {
+        "content": "$1",
+        "example": "300"
+      }
+    }
+  },
+  "transcriptHeld": {
+    "message": "Read $COUNT$ transcript lines. Notula gets them when this lesson’s note is open.",
+    "description": "Result.",
+    "placeholders": {
+      "count": {
+        "content": "$1",
+        "example": "300"
+      }
+    }
+  },
+  "transcriptNone": {
+    "message": "This lesson has no transcript.",
+    "description": "Result."
+  },
+  "transcriptFailed": {
+    "message": "Couldn’t read the transcript. Try again.",
+    "description": "Result."
+  },
+  "markMoment": {
+    "message": "Mark this moment",
+    "description": "Button and shortcut name."
+  },
+  "marking": {
+    "message": "Marking…",
+    "description": "Progress."
+  },
+  "markOk": {
+    "message": "Marked $POSITION$",
+    "description": "Result.",
+    "placeholders": {
+      "position": {
+        "content": "$1",
+        "example": "12:34"
+      }
+    }
+  },
+  "markHeld": {
+    "message": "Marked $POSITION$. Take notes in Notula to keep it.",
+    "description": "Result: no note yet, Notula holds the mark.",
+    "placeholders": {
+      "position": {
+        "content": "$1",
+        "example": "12:34"
+      }
+    }
+  },
+  "markNoMedia": {
+    "message": "Nothing is playing in a tab Notula can read.",
+    "description": "Result."
+  },
+  "markNoPosition": {
+    "message": "Couldn’t read the video’s time.",
+    "description": "Result."
+  },
+  "markNoAnswer": {
+    "message": "Notula didn’t answer. Try again.",
+    "description": "Result."
+  },
+  "shortcutNone": {
+    "message": "No shortcut set",
+    "description": "Shown when the command has no key."
+  },
+  "optionsTitle": {
+    "message": "Notula browser extension",
+    "description": "Options page title."
+  },
+  "sitesTitle": {
+    "message": "Sites",
+    "description": "Section title."
+  },
+  "sitesYoutube": {
+    "message": "YouTube is always on.",
+    "description": "Sites section."
+  },
+  "sitesEmpty": {
+    "message": "No other sites yet.",
+    "description": "Sites section, empty."
+  },
+  "sitesHint": {
+    "message": "To read another site, open it and choose Enable on this site in the extension’s menu.",
+    "description": "Sites section."
+  },
+  "turnOff": {
+    "message": "Turn off",
+    "description": "Button next to a site."
+  },
+  "turnOffSite": {
+    "message": "Turn off $HOST$",
+    "description": "Accessible label of the button next to a site.",
+    "placeholders": {
+      "host": {
+        "content": "$1",
+        "example": "courses.example.com"
+      }
+    }
+  },
+  "captionsLabel": {
+    "message": "Send video captions",
+    "description": "Switch."
+  },
+  "captionsDesc": {
+    "message": "Sends the captions a player has loaded, and transcripts you ask for, so Notula can use them as the transcript.",
+    "description": "Switch description."
+  },
+  "incognitoLabel": {
+    "message": "Allow in private windows",
+    "description": "Switch."
+  },
+  "incognitoDesc": {
+    "message": "Also allow the extension in private windows in your browser’s extension details, and turn on private windows in Notula ▸ Settings ▸ Sources.",
+    "description": "Switch description."
+  },
+  "incognitoBrowserOff": {
+    "message": "Your browser doesn’t let the extension run in private windows yet.",
+    "description": "Warning under the switch."
+  },
+  "shortcutTitle": {
+    "message": "Keyboard shortcut",
+    "description": "Section title."
+  },
+  "changeShortcut": {
+    "message": "Change shortcut",
+    "description": "Button; opens the browser's shortcuts page."
+  },
+  "shortcutHint": {
+    "message": "Works while the browser is in front. Notula has its own shortcut for other apps.",
+    "description": "Shortcut section."
+  },
+  "notulaTitle": {
+    "message": "Notula app",
+    "description": "Section title."
+  },
+  "notulaBody": {
+    "message": "The extension needs the Notula app on this computer, with the browser extension turned on in Settings ▸ Sources.",
+    "description": "Section text."
+  },
+  "privacyTitle": {
+    "message": "Privacy",
+    "description": "Section title."
+  },
+  "privacyBody": {
+    "message": "The extension sends what it reads only to Notula on this computer. It has no server and makes no requests of its own, except one caption request to YouTube when Notula asks for captions.",
+    "description": "Section text."
+  }
+}

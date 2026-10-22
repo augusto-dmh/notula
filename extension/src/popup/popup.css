@@ -1,0 +1,70 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+body {
+  width: 320px;
+  padding: 12px 14px;
+  display: grid;
+  gap: 12px;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+section {
+  display: grid;
+  gap: 12px;
+}
+
+.card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--soft);
+  display: grid;
+  gap: 8px;
+}
+
+.block {
+  display: grid;
+  gap: 6px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.status {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.dot.on {
+  background: var(--ok);
+}
+
+.dot.bad {
+  background: var(--warn);
+}
+
+footer {
+  display: flex;
+  gap: 14px;
+  font-size: 12px;
+}

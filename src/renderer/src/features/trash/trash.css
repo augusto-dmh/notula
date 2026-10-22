@@ -1,0 +1,212 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Trash: the sidebar button, its popover and the
+   permanent-delete dialog. Shared tokens and primitives come from styles.css. */
+
+.trash-button {
+  justify-content: flex-start;
+  width: 100%;
+}
+
+.trash-button[aria-expanded='true'] {
+  background: var(--surface-2);
+  color: var(--fg);
+}
+
+/* ---------- popover (355 × 390, to the right of the button) ---------- */
+
+.trash-popover {
+  position: fixed;
+  z-index: 950;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  animation: trash-pop var(--dur-fast) var(--ease);
+}
+
+@keyframes trash-pop {
+  from {
+    opacity: 0;
+    transform: translateX(-4px);
+  }
+}
+
+.trash-popover__header {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 14px 16px 10px;
+}
+
+.trash-popover__title {
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+
+.trash-popover__subtitle {
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+.trash-popover__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 6px;
+}
+
+.trash-popover__empty {
+  margin: 0;
+  padding: 24px 10px;
+  color: var(--fg-3);
+  font-size: var(--text-md);
+  text-align: center;
+}
+
+.trash-popover__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+
+.trash-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  border-radius: var(--radius-sm);
+}
+
+.trash-row:hover,
+.trash-row:focus-within {
+  background: var(--surface-2);
+}
+
+.trash-row__open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 36px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg);
+  font-size: var(--text-md);
+  text-align: left;
+}
+
+.trash-row__open:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+
+.trash-row__icon {
+  flex: none;
+  display: inline-flex;
+  color: var(--fg-3);
+}
+
+.trash-row__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trash-row__title.is-untitled {
+  color: var(--fg-2);
+}
+
+/* Restore and Delete permanently appear on hover or keyboard focus. */
+.trash-row__actions {
+  flex: none;
+  display: flex;
+  gap: 2px;
+  padding-right: 4px;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+
+.trash-row:hover .trash-row__actions,
+.trash-row:focus-within .trash-row__actions {
+  opacity: 1;
+}
+
+.trash-row__actions .n-icon-btn:hover:not(:disabled) {
+  background: var(--surface-3);
+}
+
+.trash-row__delete:hover:not(:disabled) {
+  color: var(--danger);
+}
+
+/* ---------- the confirmation dialog ---------- */
+
+.trash-dialog {
+  width: min(400px, calc(100vw - 48px));
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--fg);
+  box-shadow: var(--shadow-lg);
+}
+
+.trash-dialog::backdrop {
+  background: rgba(10, 10, 9, 0.32);
+}
+
+.trash-dialog[open] {
+  animation: trash-dialog-in var(--dur) var(--ease);
+}
+
+@keyframes trash-dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+}
+
+.trash-dialog__title {
+  margin: 0 0 8px;
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+
+.trash-dialog__body {
+  margin: 0 0 20px;
+  color: var(--fg-2);
+  font-size: var(--text-md);
+  line-height: 1.5;
+}
+
+.trash-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.trash-dialog__danger {
+  border-color: var(--danger);
+  background: var(--danger);
+  color: #fff;
+}
+
+.trash-dialog__danger:hover:not(:disabled) {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 88%, #000);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trash-popover,
+  .trash-dialog[open] {
+    animation: none;
+  }
+}

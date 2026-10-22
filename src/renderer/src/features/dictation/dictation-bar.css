@@ -1,0 +1,154 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* The dictation bar: the pill window's bar mode. The window is the
+   pill's 320 × 180 transparent window; the bar sits 12 DIP above its bottom edge, which main
+   puts on the work area's bottom edge. Resting is 60 % opacity; hover or a menu makes it 100 %. */
+
+.dict-pill-root--bar {
+  position: relative;
+  padding-bottom: 12px;
+}
+
+.dbar-pill {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 40px;
+  padding: 0 4px;
+  border-radius: 20px;
+  background: rgba(24, 24, 22, 0.94);
+  color: #f4f4f2;
+  font: 500 13px/1.2 var(--font-sans);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 6px 20px rgba(0, 0, 0, 0.28);
+  box-sizing: border-box;
+  cursor: default;
+  transition: opacity var(--dur-fast) var(--ease);
+  animation: dict-pill-in 160ms var(--ease) both;
+}
+
+.dbar-pill--resting {
+  opacity: 0.6;
+}
+
+.dbar-pill--wide {
+  gap: 6px;
+  padding: 0 4px 0 4px;
+}
+
+.dbar-btn {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #f4f4f2;
+  cursor: pointer;
+}
+
+.dbar-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+.dbar-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.dbar-btn:focus-visible {
+  outline: 2px solid #b9c0ff;
+  outline-offset: 1px;
+}
+
+.dbar-btn--chevron {
+  width: 22px;
+}
+
+.dbar-btn--chevron svg {
+  width: 14px;
+  height: 14px;
+}
+
+.dbar-btn--stop {
+  background: var(--live);
+  color: #fff;
+}
+
+.dbar-btn--stop:hover {
+  background: #ef5f63;
+}
+
+.dbar-dot {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px rgba(24, 24, 22, 0.94);
+}
+
+.dbar-dot--ready {
+  background: #3fb871;
+}
+
+.dbar-dot--permission {
+  background: #e9a23b;
+}
+
+.dbar-time {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 52px;
+  font-variant-numeric: tabular-nums;
+}
+
+.dbar-live {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--live);
+  animation: dbar-live 1.6s ease-in-out infinite;
+}
+
+@keyframes dbar-live {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.dbar-tip {
+  position: absolute;
+  bottom: 60px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(24, 24, 22, 0.96);
+  color: #f4f4f2;
+  font: 500 12px/1.2 var(--font-sans);
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
+  animation: dict-pill-in 120ms var(--ease) both;
+}
+
+.dbar-tip__key {
+  font-weight: 700;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dbar-pill,
+  .dbar-tip,
+  .dbar-live {
+    animation: none;
+  }
+}

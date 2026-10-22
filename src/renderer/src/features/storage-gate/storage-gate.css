@@ -1,0 +1,173 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+.storage-gate {
+  box-sizing: border-box;
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.storage-gate--loading {
+  cursor: progress;
+}
+
+/* The mounted app while storage is down: no box of its own, inert meanwhile. */
+.storage-gate__app {
+  display: contents;
+}
+
+/* A mid-session failure: the recovery screen covers the still-mounted app. */
+.storage-gate--overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  overflow: auto;
+  background: color-mix(in srgb, var(--bg) 94%, transparent);
+}
+
+.storage-gate__capture {
+  margin: 0 0 20px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--fg) 15%, transparent);
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
+}
+
+.storage-gate__panel .storage-gate__capture p {
+  margin: 0 0 10px;
+}
+
+.storage-gate__panel {
+  max-width: 560px;
+  width: 100%;
+}
+
+.storage-gate__panel h1 {
+  font-size: 22px;
+  font-weight: 600;
+  margin: 0 0 12px;
+}
+
+.storage-gate__panel p {
+  line-height: 1.5;
+  margin: 0 0 16px;
+}
+
+.storage-gate__facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 16px;
+  margin: 0 0 24px;
+  font-size: 13px;
+}
+
+.storage-gate__facts dt {
+  color: var(--fg-2);
+}
+
+.storage-gate__facts dd {
+  margin: 0;
+}
+
+/* Breaks at the separators (PathText), mid-name only as a last resort. */
+.storage-gate__path {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--fg-2);
+  overflow-wrap: anywhere;
+}
+
+.storage-gate__segment {
+  display: inline-block;
+  max-width: 100%;
+}
+
+.storage-gate__tech {
+  margin-top: 4px;
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+}
+
+.storage-gate__tech summary {
+  width: max-content;
+  cursor: pointer;
+}
+
+.storage-gate__tech code {
+  display: block;
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.storage-gate__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.storage-gate__button {
+  font: inherit;
+  font-size: 14px;
+  padding: 7px 14px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--fg) 25%, transparent);
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.storage-gate__button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+
+.storage-gate__button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.storage-gate__button[aria-busy='true'] {
+  cursor: progress;
+}
+
+.storage-gate__button--danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 50%, transparent);
+}
+
+.storage-gate__panel .storage-gate__note {
+  margin: 16px 0 0;
+  font-size: 13px;
+  color: var(--fg-2);
+}
+
+.storage-gate__error {
+  margin-top: 16px;
+  color: var(--danger);
+}
+
+.storage-gate__confirm {
+  max-width: 440px;
+  border: 1px solid color-mix(in srgb, var(--fg) 20%, transparent);
+  border-radius: 10px;
+  padding: 20px 22px;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.storage-gate__confirm::backdrop {
+  background: rgb(0 0 0 / 40%);
+}
+
+.storage-gate__confirm h2 {
+  font-size: 17px;
+  margin: 0 0 10px;
+}
+
+.storage-gate__confirm p {
+  line-height: 1.5;
+  margin: 0 0 18px;
+}

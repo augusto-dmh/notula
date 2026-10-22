@@ -1,0 +1,333 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+.note-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.note-main {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  container: note-main / inline-size;
+}
+
+.note-scroll {
+  scroll-padding-top: 16px;
+}
+
+.note-column {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 36px 40px 160px;
+}
+
+.note-body.has-transcript .note-column {
+  padding-left: 32px;
+  padding-right: 32px;
+}
+
+/* ---------- header ---------- */
+
+.note-header {
+  margin-bottom: 20px;
+}
+
+.note-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 0;
+  color: var(--fg-3);
+  font-size: var(--text-md);
+}
+
+.note-meta__dot {
+  color: var(--border-strong);
+}
+
+.note-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin-top: 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Narrow windows: tab labels stay on one line and the notes menu gives way first. */
+.note-tabs__list {
+  flex: none;
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: calc(var(--radius) + 3px);
+  background: var(--surface-2);
+}
+
+.note-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--fg-2);
+  font-size: var(--text-md);
+  font-weight: 500;
+  white-space: nowrap;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.note-tab:hover {
+  color: var(--fg);
+}
+
+.note-tab[aria-selected='true'] {
+  background: var(--surface);
+  color: var(--fg);
+  box-shadow: var(--shadow-sm);
+}
+
+.note-tabs__menu {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin-left: auto;
+}
+
+/* ---------- body ---------- */
+
+.note-section[hidden] {
+  display: none;
+}
+
+.note-section--pending {
+  min-height: 240px;
+}
+
+/* The floating dock. Its controls carry their own backing (the meeting bar and the
+   Generate button are pills with a surface and a shadow), and the notes fade out
+   above it, so text never runs underneath the controls. */
+/* Spans the note area and centres its contents: a `left: 50%` box would shrink-wrap
+   to half the width and wrap the meeting bar onto two rows. */
+/* Three columns: the controls stay centred while there is room, and the chat launcher
+   keeps its own column at the end, so the two never overlap. When space runs
+   short the empty start column gives way first, then the controls shrink (the input
+   picker's label ellipsizes) and wrap. */
+.note-dock {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 20px;
+  z-index: 30;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, auto) minmax(max-content, 1fr);
+  align-items: end;
+  column-gap: 10px;
+  pointer-events: none;
+}
+
+.note-dock__center {
+  grid-column: 2;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 10px;
+}
+
+.note-dock__end {
+  grid-column: 3;
+  justify-self: end;
+  display: flex;
+}
+
+.note-dock__center > *,
+.note-dock__end > * {
+  pointer-events: auto;
+}
+
+/* Clear of the scrollbar (10px, styles.css), so it stays visible and usable. */
+.note-main::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 10px;
+  bottom: 0;
+  z-index: 20;
+  height: 104px;
+  background: linear-gradient(to bottom, transparent, var(--bg) 55%);
+  pointer-events: none;
+}
+
+.note-transcript {
+  flex: none;
+  width: min(400px, 42%);
+  min-width: 300px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+  animation: note-transcript-in var(--dur) var(--ease);
+}
+
+.note-transcript > * {
+  flex: 1;
+  min-height: 0;
+}
+
+@keyframes note-transcript-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ---------- loading, not found, error ---------- */
+
+.note-skeleton__title {
+  width: 46%;
+  height: 26px;
+  border-radius: var(--radius);
+}
+
+.note-skeleton__meta {
+  width: 30%;
+  height: 12px;
+  margin-top: 14px;
+}
+
+.note-skeleton__lines {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 44px;
+}
+
+.note-skeleton__line {
+  height: 12px;
+}
+
+.not-found {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  max-width: 520px;
+  margin: 0 auto;
+  padding: 96px 24px;
+  text-align: center;
+}
+
+.not-found__art {
+  margin-bottom: 12px;
+}
+
+.not-found__title {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+
+.not-found__id {
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  word-break: break-all;
+}
+
+.note-error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  max-width: 560px;
+  margin: 64px auto 0;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.note-error__title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.note-error__detail {
+  margin: 0 0 8px;
+  color: var(--fg-2);
+  font-size: var(--text-md);
+}
+
+/* ---------- a note in Trash ---------- */
+
+.note-trashed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 20px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--danger) 28%, var(--border));
+  border-radius: var(--radius);
+  background: var(--danger-soft);
+  font-size: var(--text-md);
+}
+
+.note-trashed__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.note-trashed__text {
+  flex: 1;
+  min-width: 180px;
+  color: var(--fg-2);
+}
+
+.note-trashed__actions {
+  display: flex;
+  gap: 6px;
+}
+
+.note-trashed__delete {
+  color: var(--danger);
+}
+
+.note-trashed-title {
+  margin: 0;
+  color: var(--fg);
+  font-size: var(--text-2xl);
+  font-weight: 650;
+  line-height: 1.25;
+  letter-spacing: -0.015em;
+  overflow-wrap: anywhere;
+}
+
+.note-trashed-title.is-untitled {
+  color: var(--fg-3);
+}

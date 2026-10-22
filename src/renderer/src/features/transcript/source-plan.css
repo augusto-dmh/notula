@@ -1,0 +1,50 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* A source note's transcript plan (SourcePlan.tsx). */
+
+.nt-srcplan {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 10px;
+  margin: 8px 12px 0;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: var(--nt-tr-soft);
+  font-size: 12px;
+  color: var(--fg-2);
+}
+
+.nt-srcplan-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.nt-srcplan-actions .nt-tr-link:disabled {
+  opacity: 0.5;
+  cursor: default;
+  text-decoration: none;
+}
+
+.nt-srcplan-switch {
+  display: inline-flex;
+  border: 1px solid var(--nt-tr-line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.nt-srcplan-tab {
+  padding: 2px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--fg-2);
+  font: inherit;
+  cursor: pointer;
+}
+
+.nt-srcplan-tab[aria-pressed='true'] {
+  background: var(--nt-tr-accent);
+  color: var(--bg);
+}

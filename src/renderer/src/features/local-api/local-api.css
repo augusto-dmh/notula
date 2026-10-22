@@ -1,0 +1,164 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Settings ▸ Connectors ▸ Local API. Builds on connectors.css (mcp-*). */
+
+.lapi-note {
+  margin: 4px 0 0;
+}
+
+.lapi-keys__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.lapi-keys__head .mcp-steps__head {
+  flex: 1;
+  margin: 0;
+}
+
+.lapi-search {
+  width: 180px;
+}
+
+.lapi-table {
+  display: grid;
+  font-size: var(--text-sm);
+  overflow-x: auto;
+}
+
+.lapi-table__row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1.6fr) minmax(110px, 1.2fr) 76px 84px 84px 84px auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  border-top: 1px solid var(--border);
+}
+
+.lapi-table__row--head {
+  min-height: 26px;
+  border-top: 0;
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+  font-weight: 550;
+}
+
+.lapi-table__row > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lapi-table__row.is-inactive {
+  color: var(--fg-3);
+}
+
+.lapi-table__row .mcp-pill {
+  background: var(--surface-2);
+  color: var(--fg-2);
+}
+
+.lapi-table__row .mcp-pill--ok {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.lapi-table__name {
+  font-weight: 500;
+}
+
+.lapi-table__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 2px;
+}
+
+.lapi-scopes {
+  display: flex;
+  flex-direction: column;
+  margin-top: 14px;
+}
+
+.lapi-expiry {
+  margin-top: 14px;
+}
+
+.lapi-confirm {
+  margin: 0;
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+/* Labs ▸ Companion CLI */
+
+.ccli-row .settings-row__hint {
+  max-width: 520px;
+}
+
+.ccli-body {
+  padding: 0 0 10px 0;
+}
+
+.ccli-checks {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin-bottom: 8px;
+}
+
+.ccli-checks .mcp-check {
+  margin-top: 8px;
+}
+
+.ccli-agents {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ccli-agent {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  border-top: 1px solid var(--border);
+  font-size: var(--text-sm);
+}
+
+.ccli-agent__name {
+  flex: 0 0 110px;
+  font-weight: 500;
+}
+
+.ccli-agent__detail {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ccli-agent .mcp-pill {
+  background: var(--warning-soft, var(--surface-2));
+  color: var(--warning, var(--fg-2));
+}
+
+.ccli-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+}
+
+.ccli-footer p {
+  flex: 1 1 260px;
+  margin: 0;
+}

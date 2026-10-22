@@ -1,0 +1,7 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Settings ▸ Preferences ▸ Meeting audio. */
+
+.nt-rec-confirm {
+  display: inline-flex;
+  gap: 6px;
+}

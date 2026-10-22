@@ -1,0 +1,413 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Note images, the image viewer, the drop overlay and invite links. */
+
+.att-image {
+  display: block;
+  object-fit: cover;
+  background: var(--surface-2);
+}
+
+.att-image--loading {
+  background: linear-gradient(90deg, var(--surface-2) 0%, var(--surface-3) 50%, var(--surface-2) 100%);
+  background-size: 200% 100%;
+  animation: att-shimmer 1.4s var(--ease) infinite;
+}
+
+@keyframes att-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .att-image--loading {
+    animation: none;
+  }
+}
+
+.att-image--failed {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+  text-align: center;
+  background: var(--surface-2);
+}
+
+/* ---------- strip ---------- */
+
+.att-strip {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  /* Into the editor's 96 px bottom click area, leaving a calm 32 px gap. */
+  margin: -64px 0 18px;
+}
+
+.att-thumb {
+  position: relative;
+  width: 112px;
+  height: 84px;
+  border-radius: var(--radius);
+  box-shadow: 0 0 0 1px var(--border);
+  overflow: hidden;
+  background: var(--surface-2);
+  transition: box-shadow var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+}
+
+.att-thumb:hover {
+  box-shadow: 0 0 0 1px var(--border-strong), var(--shadow-sm);
+}
+
+.att-thumb__open {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: zoom-in;
+}
+
+.att-thumb__open:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.att-thumb__img {
+  width: 100%;
+  height: 100%;
+}
+
+.att-thumb__badge {
+  position: absolute;
+  left: 6px;
+  bottom: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+}
+
+.att-thumb__remove {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+
+.att-thumb:hover .att-thumb__remove,
+.att-thumb__remove:focus-visible {
+  opacity: 1;
+}
+
+.att-thumb--pending .att-thumb__img {
+  opacity: 0.55;
+}
+
+.att-thumb__spinner {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  translate: -50% -50%;
+}
+
+/* ---------- viewer ---------- */
+
+.att-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  background: rgba(15, 15, 14, 0.55);
+  animation: att-fade var(--dur) var(--ease);
+}
+
+@keyframes att-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+.att-viewer__dialog {
+  display: flex;
+  flex-direction: column;
+  max-width: min(1100px, 100%);
+  max-height: 100%;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  outline: none;
+}
+
+.att-viewer__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 8px 8px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.att-viewer__title {
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.att-viewer__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.att-viewer__danger {
+  color: var(--danger);
+}
+
+.att-viewer__stage {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-width: 320px;
+  min-height: 200px;
+  padding: 16px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.att-viewer__img {
+  max-width: 100%;
+  max-height: calc(100vh - 220px);
+  object-fit: contain;
+  border-radius: var(--radius-sm);
+  background: transparent;
+}
+
+.att-viewer__img.att-image--loading,
+.att-viewer__img.att-image--failed {
+  width: 480px;
+  max-width: 100%;
+  height: 300px;
+}
+
+.att-viewer__nav {
+  position: absolute;
+  top: 50%;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  margin-top: -18px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--fg);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+}
+
+.att-viewer__nav:hover {
+  background: var(--surface-2);
+}
+
+.att-viewer__nav--prev {
+  left: 12px;
+}
+
+.att-viewer__nav--next {
+  right: 12px;
+}
+
+.att-viewer__nav--next svg {
+  transform: rotate(180deg);
+}
+
+.att-viewer__caption {
+  margin: 0;
+  padding: 10px 16px 12px;
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+/* ---------- drop overlay ---------- */
+
+.att-drop {
+  position: absolute;
+  inset: 8px;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  border: 1.5px dashed var(--accent);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  backdrop-filter: blur(2px);
+  pointer-events: none;
+  animation: att-fade var(--dur-fast) var(--ease);
+}
+
+.att-drop--disabled {
+  border-color: var(--border-strong);
+}
+
+.att-drop__card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 16px 22px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+
+.att-drop__title {
+  color: var(--fg);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.att-drop__hint {
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+}
+
+/* ---------- invite links ---------- */
+
+.att-links {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 14px;
+}
+
+.att-links__banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.att-links__banner-icon {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent);
+  flex: none;
+}
+
+.att-links__banner-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.att-links__banner-hint {
+  flex: 1;
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.att-links__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.att-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.att-chip:hover {
+  border-color: var(--border-strong);
+}
+
+.att-chip__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 3px 4px 3px 10px;
+  color: var(--fg);
+  font-size: var(--text-sm);
+  text-decoration: none;
+}
+
+.att-chip__link svg {
+  flex: none;
+  color: var(--fg-3);
+}
+
+.att-chip__label {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.att-chip__more {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin-right: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: var(--fg-3);
+  cursor: pointer;
+}
+
+.att-chip__more:hover,
+.att-chip__more[aria-expanded='true'] {
+  background: var(--surface-2);
+  color: var(--fg);
+}

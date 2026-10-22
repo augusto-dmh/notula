@@ -1,0 +1,386 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Preferences ▸ Your data ▸ Import notes: the card, the preview dialog, undo. Global tokens come
+   from styles.css; the dialog follows the data export dialog's shape. */
+
+.nix-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.nix-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.32);
+  animation: nix-fade var(--dur) var(--ease);
+}
+
+@keyframes nix-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+.nix-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(520px, 100%);
+  max-height: calc(100vh - 32px);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg), 0 0 0 1px var(--border);
+  color: var(--fg);
+}
+
+.nix-dialog--wide {
+  width: min(1040px, 100%);
+}
+
+.nix-dialog__title {
+  margin: 0;
+  padding: 20px 20px 8px;
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+
+.nix-dialog__body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  padding: 8px 20px 4px;
+  overflow-y: auto;
+}
+
+.nix-dialog__footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 16px 20px 20px;
+}
+
+.nix-dialog__footer--spread {
+  align-items: center;
+}
+
+.nix-spacer {
+  flex: 1;
+}
+
+.nix-summary {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.nix-note {
+  margin: 0;
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.nix-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--text-sm);
+}
+
+.nix-error--row {
+  padding: 0 16px 12px;
+}
+
+.nix-warning {
+  color: var(--warning, var(--fg-2));
+}
+
+.nix-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.nix-bar {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-3);
+}
+
+.nix-bar__fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width var(--dur) var(--ease);
+}
+
+/* The preview table. */
+.nix-table {
+  display: flex;
+  flex-direction: column;
+  max-height: 46vh;
+  overflow: auto;
+  border-radius: var(--radius);
+  box-shadow: 0 0 0 1px var(--border);
+  font-size: var(--text-xs);
+}
+
+.nix-row {
+  display: grid;
+  grid-template-columns: 28px minmax(160px, 1.4fr) minmax(140px, 1.3fr) 110px minmax(140px, 1.2fr) minmax(130px, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 7px 10px;
+  border-top: 1px solid var(--border);
+}
+
+.nix-row > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.nix-row small {
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+}
+
+.nix-row--head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  border-top: 0;
+  background: var(--surface-2, var(--surface));
+  color: var(--fg-3);
+  font-weight: 550;
+}
+
+.nix-row--off {
+  color: var(--fg-3);
+}
+
+.nix-row input,
+.nix-group input {
+  width: 15px;
+  height: 15px;
+  margin: 1px 0 0;
+  accent-color: var(--accent);
+}
+
+.nix-cell--path {
+  color: var(--fg-2);
+}
+
+.nix-group {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-2, var(--surface));
+  font-weight: 550;
+}
+
+.nix-status {
+  font-weight: 550;
+}
+
+.nix-status--new {
+  color: var(--accent);
+}
+
+.nix-status--changed,
+.nix-status--duplicate,
+.nix-status--in-trash {
+  color: var(--fg);
+}
+
+.nix-status--unreadable {
+  color: var(--danger);
+}
+
+.nix-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.nix-options legend {
+  margin-bottom: 6px;
+  padding: 0;
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+  font-weight: 550;
+}
+
+.nix-radio {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.nix-radio input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.nix-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 30vh;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+  font-size: var(--text-xs);
+}
+
+.nix-list li {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  overflow-wrap: anywhere;
+}
+
+.nix-list small {
+  color: var(--fg-3);
+}
+
+.nix-list--ticks label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.nix-list--ticks input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.nix-section {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.nix-section__title {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.nix-sources {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+}
+
+.nix-sources__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  max-height: 30vh;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.nix-sources__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.nix-sources__row input {
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+
+.nix-sources__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: var(--text-sm);
+}
+
+.nix-sources__meta {
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+}
+
+.nix-select {
+  max-width: 100%;
+  font: inherit;
+  font-size: var(--text-xs);
+}
+
+.nix-catalog {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Import history. */
+.nix-history {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nix-history li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.nix-history__text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  font-size: var(--text-sm);
+}
+
+.nix-history__text small {
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+}
+
+.nix-history__footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}

@@ -1,0 +1,33 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Webhooks in Settings ▸ Integrations. */
+
+.wh-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.wh-search {
+  flex: 1;
+  min-width: 0;
+}
+
+.wh-event {
+  align-items: flex-start;
+}
+
+.wh-tips {
+  font-size: var(--text-xs);
+  color: var(--fg-2);
+}
+
+.wh-tips summary {
+  cursor: pointer;
+  color: var(--fg);
+}
+
+.wh-tips p {
+  margin: 6px 0 0;
+}

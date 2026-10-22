@@ -1,0 +1,5 @@
+<!-- Jump list "Quit": a power symbol. Original drawing for Notula, 24-unit grid; mid-grey reads on light and dark taskbars. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#808080" stroke-width="2.5" stroke-linecap="round">
+  <path d="M12 2.75v8.5" />
+  <path d="M16.9 6.4A7.75 7.75 0 1 1 7.1 6.4" />
+</svg>

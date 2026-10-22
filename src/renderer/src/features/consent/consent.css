@@ -1,0 +1,151 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* The meeting notice. */
+
+.consent-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+.consent-link:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.consent-link:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.consent-chevron {
+  color: var(--fg-3);
+  font-size: var(--text-lg);
+}
+
+.consent-off {
+  margin: 0 0 16px;
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+}
+
+/* The sub-page's message editor and its chat-bubble preview. */
+.consent-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.consent-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 12px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.consent-preview__who {
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+}
+
+.consent-preview__bubble {
+  max-width: 100%;
+  padding: 8px 12px;
+  border-radius: 14px 14px 14px 4px;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  color: var(--fg);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.consent-editor__label {
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+}
+
+.consent-editor__text {
+  width: 100%;
+  min-height: 72px;
+  resize: vertical;
+  font: inherit;
+  font-size: var(--text-sm);
+}
+
+.consent-editor__foot {
+  display: flex;
+  justify-content: space-between;
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+}
+
+/* The note header's status line. */
+.consent-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 0 0 8px;
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+}
+
+.consent-status__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warning);
+}
+
+.consent-status.is-done .consent-status__dot {
+  background: var(--success);
+}
+
+.consent-status__actions {
+  display: inline-flex;
+  gap: 10px;
+}
+
+/* The deferred-start banner, top of the note page. */
+.consent-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--accent-soft);
+  font-size: var(--text-sm);
+}
+
+.consent-banner__spin {
+  flex: none;
+}
+
+.consent-banner__text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  color: var(--fg-2);
+}
+
+.consent-banner__text strong {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.consent-banner__actions {
+  display: flex;
+  flex: none;
+  gap: 6px;
+}

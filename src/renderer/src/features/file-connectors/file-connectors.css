@@ -1,0 +1,129 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* File connectors: the Files settings group and the chat cards. */
+
+.fc-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
+.fc-steps {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: var(--text-sm);
+  color: var(--fg-2);
+}
+
+.fc-steps code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  background: var(--surface-3);
+  border-radius: var(--radius-sm);
+  padding: 0 4px;
+}
+
+.fc-key {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.fc-key .n-input {
+  flex: 1;
+  max-width: 280px;
+}
+
+.fc-muted {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--fg-3);
+}
+
+.fc-link {
+  margin-left: auto;
+  background: none;
+  border: 0;
+  padding: 0 0 0 8px;
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.fc-link:hover {
+  text-decoration: underline;
+}
+
+.fc-doc {
+  margin: 8px 0;
+  max-width: 560px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.fc-doc__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-sm);
+  color: var(--fg-2);
+}
+
+.fc-doc__title {
+  font-weight: 600;
+  color: var(--fg);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fc-doc__body {
+  max-height: 260px;
+  overflow: auto;
+  padding: 10px 14px;
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  color: var(--fg-2);
+}
+
+.fc-doc__body p {
+  margin: 0 0 6px;
+}
+
+.fc-doc__h {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.fc-doc__h1 {
+  font-size: var(--text-md);
+}
+
+.fc-doc__li {
+  padding-left: 14px;
+  position: relative;
+}
+
+.fc-doc__li::before {
+  content: '•';
+  position: absolute;
+  left: 2px;
+  color: var(--fg-3);
+}
+
+.fc-doc__more {
+  margin: 0;
+  padding: 8px 14px 10px;
+  font-size: var(--text-xs);
+  color: var(--fg-3);
+  border-top: 1px solid var(--border);
+}

@@ -1,0 +1,138 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* The Customer calls view. */
+
+.cc-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 32px 32px 64px;
+}
+
+.cc-header {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.cc-header__text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cc-header__actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.cc-title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.cc-description {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--fg-2);
+}
+
+.cc-count {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--fg-3);
+}
+
+.cc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--success-soft);
+  color: var(--fg);
+  font-size: var(--text-xs);
+}
+
+.cc-adding {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: var(--text-sm);
+  color: var(--fg-2);
+}
+
+.cc-prompt {
+  background: var(--surface-2);
+}
+
+.cc-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.cc-tab {
+  padding: 8px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--fg-3);
+  cursor: pointer;
+}
+
+.cc-tab[aria-selected='true'] {
+  border-bottom-color: var(--fg);
+  color: var(--fg);
+}
+
+.cc-row {
+  align-items: center;
+}
+
+.cc-row__open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 0;
+  padding: 0;
+  background: none;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.cc-sync {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.cc-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.cc-check__title {
+  flex: 1;
+  min-width: 0;
+}
+
+.cc-check__date {
+  font-size: var(--text-xs);
+  color: var(--fg-3);
+}

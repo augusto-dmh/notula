@@ -1,0 +1,43 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Settings ▸ Notifications: the muted-app chips under their row. */
+
+.nt-muted {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 16px 14px;
+}
+
+.nt-muted.is-disabled {
+  opacity: 0.55;
+}
+
+.nt-muted__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 4px 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: var(--text-sm);
+}
+
+.nt-muted__remove {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--fg-2);
+  cursor: pointer;
+}
+
+.nt-muted__remove:hover:not(:disabled) {
+  background: var(--surface-3);
+  color: var(--fg);
+}

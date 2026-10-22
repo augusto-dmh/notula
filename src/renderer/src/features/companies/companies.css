@@ -1,0 +1,117 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Companies: the logo tile and the sidebar favorites. The
+   list and detail pages use features/people's directory styles. */
+
+.company-logo {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  overflow: hidden;
+  background: var(--surface-3);
+  color: var(--fg-2);
+}
+
+.company-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #fff;
+}
+
+.company-logo__letter {
+  font-weight: 600;
+  line-height: 1;
+}
+
+/* ---------- sidebar favorites ---------- */
+
+.sidebar-companies {
+  border-radius: var(--radius);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.sidebar-companies.is-drop {
+  background: var(--accent-soft);
+}
+
+.sidebar-companies__hint {
+  padding: 4px 10px 6px;
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+}
+
+.sidebar-companies__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sidebar-companies__row {
+  display: flex;
+  align-items: center;
+  border-radius: var(--radius);
+}
+
+.sidebar-companies__row:hover,
+.sidebar-companies__row.is-active {
+  background: var(--surface-2);
+}
+
+.sidebar-companies__link {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: var(--fg-2);
+  font-size: var(--text-md);
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebar-companies__row.is-active .sidebar-companies__link {
+  color: var(--fg);
+}
+
+.sidebar-companies__link:focus-visible {
+  outline: none;
+  border-radius: var(--radius);
+  box-shadow: var(--focus-ring);
+}
+
+.sidebar-companies__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-companies__remove {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin-right: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-3);
+  opacity: 0;
+  cursor: pointer;
+}
+
+.sidebar-companies__row:hover .sidebar-companies__remove,
+.sidebar-companies__remove:focus-visible {
+  opacity: 1;
+}
+
+.sidebar-companies__remove:hover {
+  background: var(--surface-3);
+  color: var(--fg);
+}

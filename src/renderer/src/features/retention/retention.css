@@ -1,0 +1,124 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Transcript auto-deletion and section delete. */
+
+.retention-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+.retention-link:hover {
+  text-decoration: underline;
+}
+
+.retention-pending {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+  margin: 0 16px 12px;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  background: var(--warning-soft);
+  color: var(--fg);
+  font-size: var(--text-sm);
+}
+
+.retention-error {
+  margin: 8px 0 0;
+  color: var(--danger);
+  font-size: var(--text-sm);
+}
+
+.retention-error--inline {
+  margin: 0 16px 12px;
+}
+
+.retention-dialog {
+  max-width: 460px;
+}
+
+.retention-dialog__counts {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--fg);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+.retention-dialog__warn {
+  margin: 12px 0 0;
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+.retention-dialog__hint {
+  margin: 8px 0 0;
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+}
+
+.retention-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.retention-log {
+  margin: 0;
+  padding: 4px 16px 12px;
+  list-style: none;
+}
+
+.retention-log__row {
+  display: grid;
+  grid-template-columns: minmax(130px, auto) 1fr;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px dashed var(--border);
+  font-size: var(--text-sm);
+}
+
+.retention-log__row:last-child {
+  border-bottom: 0;
+}
+
+.retention-log__when {
+  color: var(--fg-3);
+  white-space: nowrap;
+}
+
+.retention-log__what {
+  color: var(--fg);
+}
+
+.retention-log__period {
+  color: var(--fg-3);
+}
+
+.retention-log__errors {
+  color: var(--warning);
+}
+
+.retention-notice {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin: 48px 24px;
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+
+.retention-notice p {
+  margin: 0;
+}

@@ -1,0 +1,143 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Preferences ▸ App icon. The swatches mirror main's art in src/main/app-icon/tints.ts. */
+
+.app-icon-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.app-icon-option {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  width: 64px;
+  padding: 8px 4px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--fg-2);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+
+.app-icon-option:hover:not(.is-locked) {
+  background: var(--surface-2);
+}
+
+.app-icon-option:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+.app-icon-option.is-selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--fg);
+}
+
+.app-icon-option.is-locked {
+  cursor: not-allowed;
+}
+
+.app-icon-option.is-locked .app-icon-swatch {
+  opacity: 0.38;
+  filter: saturate(0.6);
+}
+
+.app-icon-option.is-locked .app-icon-option__label {
+  color: var(--fg-3);
+}
+
+.app-icon-option__lock {
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--fg-2);
+}
+
+/* A 36 px tile: the colour, a page, three lines (256 px art scaled by 36/256 ≈ 0.14). */
+.app-icon-swatch {
+  --tile: #1f1f23;
+  --page: #ffffff;
+  --line: #1f1f23;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  background: var(--tile);
+  /* A hairline in the text colour keeps the black tile visible on the dark theme. */
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg) 14%, transparent);
+}
+
+.app-icon-swatch__page {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  justify-content: center;
+  width: 15px;
+  height: 20px;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: var(--page);
+}
+
+.app-icon-swatch__page i {
+  display: block;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--line);
+}
+
+.app-icon-swatch__page i:last-child {
+  width: 70%;
+}
+
+.app-icon-swatch--default {
+  --tile: linear-gradient(145deg, var(--surface-3), var(--surface-2));
+  --page: var(--fg-2);
+  --line: var(--surface);
+  background: var(--tile);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.app-icon-swatch--white {
+  --tile: #ffffff;
+  --page: #26262b;
+  --line: #ffffff;
+  box-shadow: inset 0 0 0 1px #d6d6dc;
+}
+
+.app-icon-swatch--blue {
+  --tile: #2f6bff;
+  --line: #2f6bff;
+}
+
+.app-icon-swatch--yellow {
+  --tile: #f5b800;
+  --line: #d99e00;
+}
+
+.app-icon-swatch--red {
+  --tile: #e5484d;
+  --line: #e5484d;
+}
+
+.app-icon-swatch--pink {
+  --tile: #ec6cb9;
+  --line: #ec6cb9;
+}

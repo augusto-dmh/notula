@@ -1,0 +1,361 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* The bubble pill and its side windows. Always dark. */
+
+.bubble-stage {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bubble-pill {
+  position: relative;
+  width: 34px;
+  height: 62px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0 12px;
+  border-radius: 17px;
+  background: rgba(17, 17, 16, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 2px 6px rgba(0, 0, 0, 0.25);
+  color: #f4f4f1;
+  cursor: pointer;
+  touch-action: none;
+  transition:
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+
+.bubble-pill.is-hovered {
+  background: rgba(30, 30, 28, 0.97);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.bubble-pill.is-pressed {
+  transform: scale(0.96);
+}
+
+.bubble-glyph {
+  display: grid;
+  place-items: center;
+  color: rgba(255, 255, 255, 0.86);
+}
+
+.bubble-center {
+  height: 18px;
+  display: grid;
+  place-items: center;
+}
+
+.bubble-bars {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 18px;
+}
+
+.bubble-bar {
+  width: 3px;
+  min-height: 3px;
+  border-radius: 2px;
+  background: #f4f4f1;
+  transition: height 110ms ease-out;
+}
+
+.bubble-spinner {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.22);
+  border-top-color: #f4f4f1;
+  animation: bubble-spin 0.8s linear infinite;
+}
+
+.bubble-spinner.is-error {
+  border-top-color: #e6a948;
+}
+
+@keyframes bubble-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.bubble-badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #f5c542;
+  color: #1b1b19;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 13px;
+  text-align: center;
+  box-shadow: 0 0 0 1.5px rgba(17, 17, 16, 0.95);
+}
+
+/* ---------- the hover transcript panel (300 × 350) ---------- */
+
+.bubble-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 12px;
+  background: #1a1a19;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  color: var(--fg);
+  user-select: text;
+}
+
+.bubble-panel > * {
+  flex: 1;
+  min-height: 0;
+}
+
+.bubble-panel__empty {
+  display: grid;
+  place-items: center;
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+}
+
+/* ---------- the inactivity window (336 wide) ---------- */
+
+.bubble-inactivity {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  padding: 8px;
+}
+
+/* ---------- the snapshot button (130 px pill) ---------- */
+.bubble-pill.has-snapshot {
+  height: 122px;
+  justify-content: flex-start;
+  gap: 14px;
+  padding-bottom: 6px;
+}
+.bubble-snap {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin-top: auto;
+  padding: 0;
+  border: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 9px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.82);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.bubble-snap:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+.bubble-snap:disabled {
+  cursor: default;
+}
+.bubble-snap.is-capturing {
+  opacity: 0.45;
+}
+.bubble-snap.is-done {
+  color: #7ee2a8;
+}
+.bubble-snap.is-failed {
+  color: #e6a948;
+}
+.bubble-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+/* ---------- the hover panel's captions toggle and snapshots, and the snapshot notices ---------- */
+.bubble-panel--stack > .bubble-panel__transcript {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.bubble-panel--compact {
+  height: auto;
+  max-height: 100%;
+}
+.bubble-panel__bar {
+  display: flex;
+  gap: 6px;
+  padding: 8px 10px 0;
+}
+.bubble-panel__bar:empty {
+  display: none;
+}
+.bubble-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: transparent;
+  color: rgba(244, 244, 241, 0.85);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.bubble-chip:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+.bubble-chip.is-on {
+  border-color: rgba(126, 226, 168, 0.5);
+  background: rgba(126, 226, 168, 0.14);
+  color: #bff3d4;
+}
+
+.bubble-snaps {
+  margin: 8px 10px 0;
+  padding: 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #f4f4f1;
+  font-size: 12px;
+  user-select: none;
+}
+.bubble-snaps__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.bubble-snaps__title {
+  font-weight: 600;
+}
+.bubble-snaps__count {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.14);
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+  box-sizing: border-box;
+}
+.bubble-snaps__hint,
+.bubble-snaps__empty {
+  margin-top: 4px;
+  color: rgba(244, 244, 241, 0.6);
+}
+.bubble-snaps__strip {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.bubble-snaps__img {
+  flex: none;
+  width: 72px;
+  height: 45px;
+  border-radius: 5px;
+  object-fit: cover;
+  background: #111;
+}
+.bubble-snaps__off {
+  width: 100%;
+  height: 28px;
+  margin-top: 10px;
+  border: 0;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #f4f4f1;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.bubble-snaps__off:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.bubble-notice {
+  position: relative;
+  width: 100%;
+  padding: 14px 16px;
+  box-sizing: border-box;
+  border-radius: 12px;
+  background: rgba(26, 26, 25, 0.97);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #f4f4f1;
+  font-size: 12.5px;
+  animation: bubble-notice-in 180ms var(--ease);
+}
+.bubble-notice__close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(244, 244, 241, 0.55);
+  cursor: pointer;
+}
+.bubble-notice__close:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+.bubble-notice__title {
+  padding-right: 22px;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.bubble-notice__body {
+  margin-top: 4px;
+  line-height: 1.4;
+  color: rgba(244, 244, 241, 0.68);
+}
+.bubble-notice__btn {
+  height: 28px;
+  margin-top: 10px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 7px;
+  background: #f4f4f1;
+  color: #141413;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+@keyframes bubble-notice-in {
+  from {
+    opacity: 0;
+    transform: translateX(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.bubble-panel > .bubble-panel__bar,
+.bubble-panel > .bubble-snaps {
+  flex: none;
+}
+.bubble-panel--compact {
+  padding-bottom: 10px;
+}

@@ -1,0 +1,224 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* The demo meeting: the stage window, the note bar and the home row. */
+
+/* ---------- stage window ---------- */
+html.demo-window,
+html.demo-window body {
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+}
+html.demo-window #root {
+  height: 100%;
+}
+
+.demo-stage {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  color: var(--fg);
+  background:
+    radial-gradient(120% 80% at 50% 0%, var(--accent-soft), transparent 70%),
+    var(--bg);
+}
+
+.demo-stage__bar {
+  -webkit-app-region: drag;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 36px;
+  padding: 0 150px 0 16px;
+  font-size: var(--text-sm);
+  color: var(--fg-2);
+  user-select: none;
+}
+:root[data-platform='darwin'] .demo-stage__bar {
+  padding-left: 84px;
+}
+.demo-stage__brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.demo-stage__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg-3);
+}
+.demo-stage__dot.is-live {
+  background: var(--live);
+  animation: demo-pulse 1.6s var(--ease) infinite;
+}
+.demo-stage__mode {
+  color: var(--fg-3);
+}
+
+.demo-stage__body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 24px 48px;
+  text-align: center;
+  min-height: 0;
+}
+.demo-stage__avatar {
+  display: grid;
+  place-items: center;
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  color: var(--accent-fg);
+  background: var(--accent);
+  box-shadow: var(--shadow-lg);
+}
+.demo-stage__speaker {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--fg-2);
+}
+.demo-stage__caption {
+  max-width: 34em;
+  margin: 0;
+  font-size: clamp(20px, 2.6vw, 30px);
+  line-height: 1.38;
+  font-weight: 500;
+  color: var(--fg);
+  animation: demo-caption-in 320ms var(--ease);
+}
+.demo-stage__caption.is-waiting {
+  color: var(--fg-3);
+}
+
+.demo-stage__controls {
+  padding: 0 24px 20px;
+}
+.demo-stage__progress {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.demo-stage__progress > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 250ms linear;
+}
+.demo-stage__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 12px;
+}
+.demo-stage__time {
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-3);
+}
+.demo-stage__buttons {
+  display: flex;
+  gap: 8px;
+}
+
+@keyframes demo-caption-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes demo-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* ---------- note dock bar ---------- */
+.demo-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+.demo-bar__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-right: 4px;
+  font-size: var(--text-sm);
+  color: var(--fg-2);
+}
+.demo-bar__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--fg-3);
+}
+.demo-bar__status.is-live .demo-bar__dot {
+  background: var(--live);
+  animation: demo-pulse 1.6s var(--ease) infinite;
+}
+.demo-bar .n-icon-btn.is-active {
+  background: var(--surface-3);
+  color: var(--fg);
+}
+
+.demo-transcript {
+  position: fixed;
+  right: 16px;
+  bottom: 84px;
+  height: min(460px, calc(100vh - 150px));
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  width: min(340px, calc(100vw - 32px));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  animation: demo-caption-in 200ms var(--ease);
+}
+
+/* ---------- home row ---------- */
+.demo-row .demo-row__thumb {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  margin-right: 2px;
+  border-radius: 10px;
+  color: var(--accent-fg);
+  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .demo-stage__caption,
+  .demo-transcript {
+    animation: none;
+  }
+  .demo-stage__dot.is-live,
+  .demo-bar__status.is-live .demo-bar__dot {
+    animation: none;
+  }
+}

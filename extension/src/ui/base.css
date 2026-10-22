@@ -1,0 +1,119 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --fg: #1c1b1a;
+  --muted: #6b6862;
+  --line: #e6e3de;
+  --accent: #4a57d4;
+  --accent-fg: #ffffff;
+  --soft: #f4f2ee;
+  --warn: #9a4b0a;
+  --ok: #2c6a3f;
+  font: 13px/1.45 system-ui, 'Segoe UI', sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1d1c1b;
+    --fg: #ecebe8;
+    --muted: #a19d96;
+    --line: #34322f;
+    --accent: #8e98ff;
+    --accent-fg: #13153a;
+    --soft: #272523;
+    --warn: #e2a066;
+    --ok: #8fcf9f;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+h1,
+h2 {
+  margin: 0;
+  font-weight: 600;
+}
+
+h1 {
+  font-size: 15px;
+}
+
+h2 {
+  font-size: 13px;
+}
+
+p {
+  margin: 0;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.warn {
+  color: var(--warn);
+}
+
+.ok {
+  color: var(--ok);
+}
+
+button,
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--soft);
+  color: var(--fg);
+  font: inherit;
+  padding: 6px 10px;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+button.primary,
+.button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+a {
+  color: var(--accent);
+}
+
+kbd {
+  font: 12px ui-monospace, Consolas, monospace;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 4px;
+  background: var(--soft);
+}
+
+[hidden] {
+  display: none !important;
+}

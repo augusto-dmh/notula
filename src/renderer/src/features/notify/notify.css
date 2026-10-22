@@ -1,0 +1,253 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* The v1 notification card. The window is the
+   card plus a 12 px transparent margin on every side (main sizes it to content + 24). */
+
+.nt-note-stage {
+  padding: 12px;
+}
+
+.nt-note {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 12px 12px 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 4px 10px rgba(0, 0, 0, 0.12);
+  color: var(--fg);
+  font-size: var(--text-sm);
+  touch-action: none;
+  animation: nt-note-in 240ms var(--ease);
+  transition:
+    transform 260ms var(--ease),
+    opacity 260ms var(--ease);
+}
+
+.nt-note.is-swiping {
+  transition: none;
+}
+
+.nt-note.is-leaving {
+  transform: translateX(110%);
+  opacity: 0;
+}
+
+@keyframes nt-note-in {
+  from {
+    transform: translateX(28px);
+    opacity: 0;
+  }
+}
+
+.nt-note__close {
+  position: absolute;
+  top: -7px;
+  left: -7px;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--fg-2);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+
+.nt-note:hover .nt-note__close,
+.nt-note__close:focus-visible {
+  opacity: 1;
+}
+
+.nt-note__close:hover {
+  color: var(--fg);
+}
+
+.nt-note__text {
+  flex: 1;
+  min-width: 0;
+}
+
+.nt-note__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: var(--text-md);
+  line-height: 1.3;
+}
+
+.nt-note__title-text,
+.nt-note__body {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nt-note__color {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.nt-note__body {
+  margin-top: 2px;
+  color: var(--fg-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The prep brief's headline, two lines at most. */
+.nt-note__detail {
+  margin-top: 4px;
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.nt-note__actions {
+  flex: none;
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.nt-note__primary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 12px 0 10px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.nt-note__primary:hover {
+  background: var(--accent-hover);
+}
+
+.nt-note__primary-icon {
+  display: grid;
+  place-items: center;
+}
+
+.nt-note__provider-icon {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+.nt-note__primary-label {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.2;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.nt-note__primary-sub {
+  font-size: 11px;
+  font-weight: 400;
+  opacity: 0.82;
+}
+
+.nt-note__more {
+  width: 30px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--fg-2);
+  cursor: pointer;
+}
+
+.nt-note__more:hover,
+.nt-note__more.is-open {
+  background: var(--surface-2);
+  color: var(--fg);
+}
+
+.nt-note__progress {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 5px;
+  height: 2px;
+  overflow: hidden;
+  border-radius: 1px;
+  background: var(--border);
+}
+
+.nt-note__progress > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transform-origin: left center;
+  transition: transform 100ms linear;
+}
+
+.nt-note__menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 2;
+  width: 250px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1), 0 6px 14px rgba(0, 0, 0, 0.12);
+  animation: nt-note-menu-in 140ms var(--ease);
+}
+
+@keyframes nt-note-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+.nt-note__item {
+  display: block;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nt-note__item:hover,
+.nt-note__item:focus-visible {
+  outline: none;
+  background: var(--surface-2);
+}
+
+.nt-note__sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}

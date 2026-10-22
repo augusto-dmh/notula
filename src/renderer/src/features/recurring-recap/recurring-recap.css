@@ -1,0 +1,60 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* "Last time" on the meeting reminder card. */
+
+.lt-recap {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.lt-recap__head {
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+/* The expandable panel: open while the pointer is over the card. */
+.lt-recap__body {
+  display: none;
+  margin-top: 4px;
+}
+
+.nt-note:hover .lt-recap__body,
+.nt-note:focus-within .lt-recap__body {
+  display: block;
+  animation: lt-in 180ms var(--ease);
+}
+
+@keyframes lt-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.lt-recap__title {
+  display: -webkit-box;
+  margin: 0 0 3px;
+  overflow: hidden;
+  font-weight: 600;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+}
+
+.lt-recap__bullets {
+  margin: 0;
+  padding-left: 16px;
+  color: var(--fg-2);
+  line-height: 1.4;
+}
+
+.lt-recap__bullets li {
+  display: list-item;
+  overflow: hidden;
+  max-height: calc(1.4em * 4);
+}
+
+.lt-recap:not(.is-ready) .lt-recap__title,
+.lt-recap:not(.is-ready) .lt-recap__bullets {
+  color: var(--fg-2);
+}

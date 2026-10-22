@@ -1,0 +1,499 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Enhanced notes, title, generate button, notes menu and the regenerate dialog.
+   Global tokens come from styles.css. */
+
+/* ---------- title ---------- */
+
+.enh-title {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  resize: none;
+  overflow: hidden;
+  background: transparent;
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: var(--text-2xl);
+  font-weight: 650;
+  line-height: 1.25;
+  letter-spacing: -0.015em;
+}
+
+.enh-title::placeholder {
+  color: var(--fg-3);
+}
+
+.enh-title:focus-visible {
+  box-shadow: none;
+}
+
+/* ---------- generate button (note dock) ---------- */
+
+.enh-generate {
+  height: 36px;
+  padding: 0 16px;
+  border-radius: 999px;
+  box-shadow: var(--shadow);
+  animation: enh-rise var(--dur) var(--ease);
+}
+
+@keyframes enh-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ---------- panel view ---------- */
+
+.enh-view {
+  min-height: 160px;
+}
+
+.enh-view--empty {
+  min-height: 240px;
+}
+
+.enh-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  color: var(--fg-2);
+  font-size: var(--text-md);
+  font-weight: 500;
+}
+
+.enh-progress__spark {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: enh-pulse 1.2s ease-in-out infinite;
+}
+
+.enh-progress__label {
+  background: linear-gradient(90deg, var(--fg-2) 0%, var(--fg) 50%, var(--fg-2) 100%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: enh-shimmer 2s linear infinite;
+}
+
+@keyframes enh-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes enh-shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+
+.enh-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.enh-skeleton__line {
+  height: 14px;
+}
+
+.enh-skeleton__line:first-child {
+  height: 18px;
+}
+
+.enh-skeleton__gap {
+  height: 8px;
+}
+
+/* ---------- streamed lines (mirrors the panel editor's typography) ---------- */
+
+.enh-stream {
+  color: var(--fg);
+  font-size: var(--text-base);
+  line-height: 1.65;
+  word-wrap: break-word;
+}
+
+.enh-stream > * + * {
+  margin-top: 0.35em;
+}
+
+.enh-stream > *:last-child {
+  animation: enh-fade-in var(--dur) var(--ease);
+}
+
+@keyframes enh-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.enh-stream__heading {
+  margin: 1.1em 0 0.25em;
+  font-weight: 650;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+
+.enh-stream > .enh-stream__heading:first-child {
+  margin-top: 0;
+}
+
+h1.enh-stream__heading {
+  font-size: 1.45em;
+}
+
+h2.enh-stream__heading {
+  font-size: 1.2em;
+}
+
+h3.enh-stream__heading {
+  font-size: 1.05em;
+}
+
+.enh-stream__para {
+  margin: 0;
+}
+
+.enh-stream__item {
+  position: relative;
+  margin: 0.1em 0;
+  padding-left: calc(1.65em + var(--depth, 0) * 1.5em);
+}
+
+.enh-stream__item::before {
+  position: absolute;
+  left: calc(0.5em + var(--depth, 0) * 1.5em);
+  color: var(--fg-3);
+}
+
+.enh-stream__item--bullet::before {
+  content: '•';
+}
+
+.enh-stream__item--number::before {
+  content: attr(data-number) '.';
+  left: calc(var(--depth, 0) * 1.5em);
+  color: var(--fg-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.enh-stream__item--task {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding-left: calc(0.25em + var(--depth, 0) * 1.5em);
+}
+
+.enh-stream__box {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 4px;
+  transform: translateY(2px);
+}
+
+.enh-stream__box.is-checked {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.enh-stream code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+.enh-stream__link {
+  color: var(--accent);
+}
+
+/* ---------- show in transcript ---------- */
+
+/* Reaches into the column's right padding (32 px or more), where the button sits,
+   so moving to it keeps the hover. */
+.enh-reveal-host {
+  position: relative;
+  margin-right: -32px;
+  padding-right: 32px;
+}
+
+/* Scoped under the host so it wins over the shared .n-tooltip (position: relative). */
+.enh-reveal-host .enh-reveal {
+  position: absolute;
+  right: 2px;
+  margin-top: -1px;
+  animation: enh-fade-in var(--dur-fast) var(--ease);
+}
+
+.enh-reveal .n-icon-btn {
+  color: var(--fg-3);
+}
+
+.enh-reveal .n-icon-btn:hover {
+  color: var(--accent);
+}
+
+/* AI-written lines are quieter than the user's own words. */
+.enh-line--ai {
+  color: var(--fg-2);
+}
+
+/* ---------- failure ---------- */
+
+.enh-failed {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.enh-failed__icon {
+  display: inline-flex;
+  margin-bottom: 6px;
+  color: var(--danger);
+}
+
+.enh-failed__title {
+  margin: 0;
+  color: var(--fg);
+  font-size: var(--text-base);
+  font-weight: 600;
+}
+
+.enh-failed__body,
+.enh-failed__hint {
+  margin: 0;
+  color: var(--fg-2);
+  font-size: var(--text-md);
+}
+
+.enh-failed__hint {
+  color: var(--fg-3);
+}
+
+.enh-failed__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+/* ---------- notes menu ---------- */
+
+.enh-menu {
+  position: relative;
+  min-width: 0;
+}
+
+.enh-menu__trigger {
+  gap: 6px;
+  min-width: 0;
+  max-width: min(240px, 100%);
+}
+
+.enh-menu__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.enh-menu__popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 900;
+  min-width: 240px;
+  max-width: 320px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  animation: enh-pop var(--dur-fast) var(--ease);
+}
+
+@keyframes enh-pop {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.enh-menu__row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.enh-menu__item {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg);
+  font-size: var(--text-md);
+  text-align: left;
+}
+
+.enh-menu__item:hover,
+.enh-menu__item:focus-visible {
+  background: var(--surface-2);
+  box-shadow: none;
+}
+
+.enh-menu__item > svg {
+  flex: none;
+  color: var(--fg-2);
+}
+
+.enh-menu__text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.enh-menu__item > .enh-menu__check {
+  color: var(--accent);
+}
+
+/* Keeps text aligned with the rows that have an icon. */
+.enh-menu__glyph {
+  flex: none;
+  width: 15px;
+}
+
+.enh-menu__popover {
+  max-height: min(520px, calc(100vh - 140px));
+  overflow-y: auto;
+}
+
+.enh-menu__regen[aria-disabled='true'] {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.enh-menu__divider {
+  height: 1px;
+  margin: 6px 4px;
+  background: var(--border);
+}
+
+.enh-menu__heading {
+  padding: 4px 8px 2px;
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.enh-spin {
+  animation: n-spin 0.9s linear infinite;
+}
+
+/* ---------- regenerate dialog ---------- */
+
+.enh-dialog {
+  width: min(420px, calc(100vw - 48px));
+  padding: 22px 22px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--fg);
+  box-shadow: var(--shadow-lg);
+}
+
+.enh-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.32);
+}
+
+.enh-dialog[open] {
+  animation: enh-pop var(--dur) var(--ease);
+}
+
+.enh-dialog__title {
+  margin: 0 0 8px;
+  font-size: var(--text-lg);
+  font-weight: 650;
+}
+
+.enh-dialog__body {
+  margin: 0;
+  color: var(--fg-2);
+  font-size: var(--text-md);
+  line-height: 1.55;
+}
+
+.enh-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.n-btn.enh-btn--danger {
+  border-color: var(--danger);
+  background: var(--danger);
+  color: #fff;
+}
+
+.n-btn.enh-btn--danger:hover:not(:disabled) {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 88%, #000);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .enh-progress__spark,
+  .enh-progress__label,
+  .enh-spin,
+  .enh-generate,
+  .enh-stream > *:last-child {
+    animation: none;
+  }
+
+  .enh-progress__label {
+    color: var(--fg-2);
+  }
+}

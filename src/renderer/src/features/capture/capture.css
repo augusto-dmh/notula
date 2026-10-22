@@ -1,0 +1,333 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Meeting controls, input picker and audio panel. Global tokens come from styles.css. */
+
+.nt-cap-bar {
+  --nt-cap-line: color-mix(in srgb, var(--fg) 14%, transparent);
+  --nt-cap-soft: color-mix(in srgb, var(--fg) 6%, transparent);
+  --nt-cap-accent: var(--accent);
+  --nt-cap-ok: var(--success);
+  --nt-cap-warn: var(--warning);
+  --nt-cap-err: var(--danger);
+  /* The bar floats over the note in the bottom dock: it carries its own backing. */
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  font-size: var(--text-sm);
+}
+
+/* A very narrow note (both the sidebar and a side panel open): the bar wraps onto two
+   rows instead of running under the side panel. */
+@container note-main (max-width: 600px) {
+  .nt-cap-bar {
+    flex-wrap: wrap;
+    justify-content: center;
+    border-radius: 20px;
+  }
+}
+
+.nt-cap-btn,
+.nt-cap-wave,
+.nt-cap-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  font: inherit;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid var(--nt-cap-line);
+  border-radius: 999px;
+  padding: 0 12px;
+  cursor: pointer;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.nt-cap-btn:hover:not(:disabled),
+.nt-cap-wave:hover,
+.nt-cap-pill:hover {
+  background: var(--nt-cap-soft);
+}
+
+.nt-cap-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.nt-cap-btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+  font-weight: 500;
+}
+
+.nt-cap-btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.nt-cap-btn-stop {
+  border-color: color-mix(in srgb, var(--nt-cap-err) 50%, transparent);
+}
+
+.nt-cap-toggle-wrap {
+  position: relative;
+}
+
+.nt-cap-wave {
+  justify-content: center;
+  width: 30px;
+  padding: 0;
+  border-color: transparent;
+}
+
+.nt-cap-wave-on {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.nt-cap-wave-anim rect {
+  animation: nt-cap-pulse 1s ease-in-out infinite;
+  transform-origin: center;
+}
+
+.nt-cap-wave-anim rect:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.nt-cap-wave-anim rect:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes nt-cap-pulse {
+  50% {
+    transform: scaleY(0.6);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nt-cap-wave-anim rect {
+    animation: none;
+  }
+}
+
+/* The first-run popover points at the waveform button from above: the bar lives in the bottom dock. */
+.nt-cap-popover {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: max-content;
+  max-width: 240px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--fg);
+  color: var(--bg);
+  box-shadow: var(--shadow-lg);
+}
+
+.nt-cap-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px 0 8px;
+  color: var(--fg-2);
+  white-space: nowrap;
+}
+
+.nt-cap-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--nt-cap-warn);
+}
+
+.nt-cap-status-active .nt-cap-dot {
+  background: var(--nt-cap-ok);
+}
+
+.nt-cap-status-error {
+  color: var(--nt-cap-err);
+}
+
+.nt-cap-status-error .nt-cap-dot {
+  background: var(--nt-cap-err);
+}
+
+/* The picker gives way first when the dock is narrow; its label ellipsizes. */
+.nt-cap-picker {
+  position: relative;
+  min-width: 0;
+  max-width: 220px;
+}
+
+.nt-cap-pill {
+  gap: 6px;
+  max-width: 100%;
+  min-width: 0;
+  border-color: transparent;
+  color: var(--fg-2);
+}
+
+.nt-cap-pill:hover {
+  color: var(--fg);
+}
+
+.nt-cap-pill > svg {
+  flex: none;
+}
+
+.nt-cap-pill-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The picker sits in the bottom dock: the menu opens upward unless InputPicker
+   measures more room below (nt-cap-menu--down). Its max-height comes from there too. */
+.nt-cap-menu {
+  position: absolute;
+  right: 0;
+  z-index: 30;
+  min-width: 260px;
+  max-width: min(340px, calc(100vw - 16px));
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.nt-cap-menu--up {
+  bottom: calc(100% + 6px);
+  animation: nt-cap-pop-up var(--dur-fast) var(--ease);
+}
+
+.nt-cap-menu--down {
+  top: calc(100% + 6px);
+}
+
+@keyframes nt-cap-pop-up {
+  from {
+    opacity: 0;
+    translate: 0 4px;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+
+.nt-cap-menu-section {
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-2);
+}
+
+.nt-cap-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nt-cap-option:hover {
+  background: var(--nt-cap-soft);
+}
+
+.nt-cap-check {
+  width: 14px;
+  flex: none;
+}
+
+.nt-cap-option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.nt-cap-option-desc {
+  font-size: 12px;
+  color: var(--fg-2);
+}
+
+.nt-cap-info {
+  color: var(--fg-2);
+  cursor: help;
+}
+
+.nt-cap-audio {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 8px;
+  border-top: 1px solid var(--nt-cap-line);
+}
+
+.nt-cap-audio-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.nt-cap-audio-key {
+  color: var(--fg-2);
+  flex: none;
+}
+
+.nt-cap-audio-val {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nt-cap-meter {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--nt-cap-soft);
+  overflow: hidden;
+}
+
+.nt-cap-meter-fill {
+  height: 100%;
+  background: var(--nt-cap-ok);
+  transition: width 90ms linear;
+}
+
+.nt-cap-link {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--nt-cap-accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+.nt-cap-link:hover {
+  text-decoration: underline;
+}

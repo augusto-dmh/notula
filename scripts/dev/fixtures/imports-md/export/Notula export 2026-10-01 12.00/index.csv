@@ -1,0 +1,3 @@
+﻿id,title,meeting_date,created_at,updated_at,attendees,folders,has_summary,has_transcript,trashed,created_via,notes_file,transcript_file
+11111111-2222-4333-8444-555555555555,Weekly sync,2026-09-01T09:00:00.000Z,2026-09-01T09:00:00.000Z,2026-09-01T10:15:00.000Z,Ana Example <ana@example.test>; <bo@example.test>,Team,true,true,false,Windows,notes/2026-09-01 Weekly sync (11111111).md,transcripts/2026-09-01 Weekly sync (11111111).txt
+22222222-2222-4333-8444-555555555555,Notes with a template-like heading,2026-09-02T09:00:00.000Z,2026-09-02T09:00:00.000Z,2026-09-02T09:00:00.000Z,,,false,false,false,Windows,notes/2026-09-02 Team meeting heading (22222222).md,

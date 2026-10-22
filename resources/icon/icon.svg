@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- Notula app icon: a single white stroke drawing a lowercase n, whose tail ends in the red recording dot, on Notula's indigo tile. -->
+  <rect x="32" y="32" width="448" height="448" rx="96" fill="#4a57d4"/>
+  <path d="M150 360V250c0-58 44-96 102-96s102 38 102 96v58" fill="none" stroke="#ffffff" stroke-width="52" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="354" cy="366" r="34" fill="#e5484d"/>
+</svg>

@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Notula</title>
+    <link rel="stylesheet" href="base.css" />
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <img src="icons/icon-48.png" width="32" height="32" alt="" />
+        <h1 data-i18n="optionsTitle"></h1>
+      </header>
+
+      <section id="disclosure" class="card">
+        <h2 data-i18n="disclosureTitle"></h2>
+        <p data-i18n="disclosureBody"></p>
+        <p data-i18n="disclosureDetail"></p>
+        <div class="row">
+          <button id="accept" class="primary" data-i18n="disclosureAccept" hidden></button>
+          <p id="accepted" class="muted" data-i18n="disclosureAccepted" hidden></p>
+        </div>
+      </section>
+
+      <section>
+        <h2 data-i18n="sitesTitle"></h2>
+        <p class="muted" data-i18n="sitesYoutube"></p>
+        <ul id="sites"></ul>
+        <p id="sites-empty" class="muted" data-i18n="sitesEmpty" hidden></p>
+        <p class="muted" data-i18n="sitesHint"></p>
+      </section>
+
+      <section>
+        <label class="switch">
+          <input id="captions" type="checkbox" />
+          <span>
+            <strong data-i18n="captionsLabel"></strong>
+            <span class="muted" data-i18n="captionsDesc"></span>
+          </span>
+        </label>
+        <label class="switch">
+          <input id="incognito" type="checkbox" />
+          <span>
+            <strong data-i18n="incognitoLabel"></strong>
+            <span class="muted" data-i18n="incognitoDesc"></span>
+            <span id="incognito-browser" class="warn" data-i18n="incognitoBrowserOff" hidden></span>
+          </span>
+        </label>
+      </section>
+
+      <section>
+        <h2 data-i18n="shortcutTitle"></h2>
+        <div class="row">
+          <span data-i18n="markMoment"></span>
+          <kbd id="shortcut"></kbd>
+          <button id="change-shortcut" data-i18n="changeShortcut"></button>
+        </div>
+        <p class="muted" data-i18n="shortcutHint"></p>
+      </section>
+
+      <section>
+        <h2 data-i18n="notulaTitle"></h2>
+        <p class="muted" data-i18n="notulaBody"></p>
+        <div class="row">
+          <a class="button" href="notula://open" data-i18n="openNotula"></a>
+        </div>
+      </section>
+
+      <section>
+        <h2 data-i18n="privacyTitle"></h2>
+        <p class="muted" data-i18n="privacyBody"></p>
+        <div class="row">
+          <a href="privacy.html" target="_blank" data-i18n="privacyLink"></a>
+        </div>
+      </section>
+    </main>
+    <script src="options.js"></script>
+  </body>
+</html>

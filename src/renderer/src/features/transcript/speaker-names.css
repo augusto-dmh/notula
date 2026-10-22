@@ -1,0 +1,141 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* The speaker-name suggestion card. */
+
+.nt-sn {
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  font-size: var(--text-sm);
+}
+
+.nt-sn--panel {
+  margin: 8px 12px;
+}
+
+.nt-sn__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.nt-sn__line {
+  color: var(--fg);
+  font-size: var(--text-md);
+}
+
+.nt-sn__label,
+.nt-sn__name {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.nt-sn__label {
+  border: 0;
+  padding: 0;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.nt-sn__quotes {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.nt-sn__quote {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nt-sn__quote:hover {
+  background: var(--surface-3);
+}
+
+.nt-sn__time {
+  flex: none;
+  color: var(--fg-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.nt-sn__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nt-sn__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.nt-sn__field {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.nt-sn__field-label {
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+}
+
+.nt-sn__picker {
+  margin-top: 4px;
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.nt-sn__group-title {
+  padding: 6px 10px 2px;
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+}
+
+.nt-sn__option {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nt-sn__option:hover,
+.nt-sn__option[aria-selected='true'] {
+  background: var(--accent-soft);
+}
+
+.nt-sn__option--used {
+  opacity: 0.55;
+}
+
+.nt-sn__option-note {
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+}

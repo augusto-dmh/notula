@@ -1,0 +1,177 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Preferences ▸ Your data ▸ Export notes. Global tokens come from styles.css. */
+
+.dx-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.32);
+  animation: dx-fade var(--dur) var(--ease);
+}
+
+@keyframes dx-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+.dx-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(480px, 100%);
+  max-height: calc(100vh - 32px);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg), 0 0 0 1px var(--border);
+  color: var(--fg);
+}
+
+.dx-dialog__title {
+  margin: 0;
+  padding: 20px 20px 8px;
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+
+.dx-dialog__body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 8px 20px 4px;
+  overflow-y: auto;
+}
+
+.dx-dialog__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 16px 20px 20px;
+}
+
+.dx-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.dx-group legend {
+  margin-bottom: 6px;
+  padding: 0;
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+  font-weight: 550;
+}
+
+.dx-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.dx-check input {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+
+.dx-check label {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  cursor: pointer;
+}
+
+.dx-check input:disabled + label {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.dx-check__label {
+  font-size: var(--text-sm);
+}
+
+.dx-check__hint {
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+}
+
+.dx-ack {
+  margin-left: 26px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--warning-soft);
+}
+
+.dx-folder {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.dx-folder__path {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+.dx-folder__path--empty {
+  direction: ltr;
+  color: var(--fg-3);
+}
+
+.dx-note {
+  margin: -6px 0 0;
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+}
+
+.dx-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--text-sm);
+}
+
+.dx-warning {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  background: var(--warning-soft);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.dx-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.dx-bar {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-3);
+}
+
+.dx-bar__fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width var(--dur) var(--ease);
+}

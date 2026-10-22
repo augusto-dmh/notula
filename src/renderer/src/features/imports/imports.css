@@ -1,0 +1,206 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Recording imports: drop overlay, confirm dialog, progress panel. */
+
+.nt-imp-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  border: 2px dashed var(--accent);
+  pointer-events: none;
+}
+
+.nt-imp-overlay__card {
+  text-align: center;
+  padding: 24px 32px;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.nt-imp-overlay__title {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.nt-imp-overlay__sub {
+  margin-top: 4px;
+  font-size: var(--text-sm);
+  color: var(--fg-2);
+}
+
+.nt-imp-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 910;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(20, 20, 18, 0.32);
+}
+
+.nt-imp-dialog {
+  width: min(460px, calc(100vw - 32px));
+  max-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.nt-imp-dialog__title {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+
+.nt-imp-dialog__sub {
+  margin: 4px 0 12px;
+  font-size: var(--text-sm);
+  color: var(--fg-2);
+}
+
+.nt-imp-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.nt-imp-file {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 12px;
+  padding: 8px 12px;
+  font-size: var(--text-sm);
+}
+
+.nt-imp-file + .nt-imp-file {
+  border-top: 1px solid var(--border);
+}
+
+.nt-imp-file__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nt-imp-file__size {
+  color: var(--fg-3);
+}
+
+.nt-imp-file__error {
+  grid-column: 1 / -1;
+  color: var(--danger);
+  font-size: var(--text-xs);
+}
+
+.nt-imp-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.nt-imp-panel {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 880;
+  width: min(340px, calc(100vw - 32px));
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-lg);
+  font-size: var(--text-sm);
+}
+
+.nt-imp-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px 6px;
+}
+
+.nt-imp-panel__title {
+  font-weight: 600;
+}
+
+.nt-imp-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0 12px 10px;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.nt-imp-row {
+  display: grid;
+  grid-template-columns: 12px 1fr auto;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 4px 0;
+}
+
+.nt-imp-row__icon {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg-3);
+}
+
+.nt-imp-row--creating .nt-imp-row__icon,
+.nt-imp-row--reading .nt-imp-row__icon,
+.nt-imp-row--transcribing .nt-imp-row__icon,
+.nt-imp-row--summarizing .nt-imp-row__icon {
+  background: var(--accent);
+  animation: nt-imp-pulse 1.2s var(--ease) infinite;
+}
+
+.nt-imp-row--complete .nt-imp-row__icon {
+  background: var(--success);
+}
+
+.nt-imp-row--failed .nt-imp-row__icon {
+  background: var(--danger);
+}
+
+.nt-imp-row__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nt-imp-row__name--link {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nt-imp-row__phase {
+  color: var(--fg-2);
+}
+
+.nt-imp-row__error {
+  grid-column: 2 / -1;
+  color: var(--danger);
+  font-size: var(--text-xs);
+}
+
+@keyframes nt-imp-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}

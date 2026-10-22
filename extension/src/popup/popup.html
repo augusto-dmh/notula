@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Notula</title>
+    <link rel="stylesheet" href="base.css" />
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <img src="icons/icon-32.png" width="20" height="20" alt="" />
+      <h1 data-i18n="extName">Notula</h1>
+    </header>
+
+    <section id="setup" class="card" hidden>
+      <h2 data-i18n="disclosureTitle"></h2>
+      <p data-i18n="disclosureBody"></p>
+      <div class="row">
+        <button id="accept" class="primary" data-i18n="disclosureAccept"></button>
+        <a href="privacy.html" target="_blank" data-i18n="privacyLink"></a>
+      </div>
+    </section>
+
+    <section id="main" hidden>
+      <div class="status" role="status">
+        <span id="dot" class="dot" aria-hidden="true"></span>
+        <p id="connection"></p>
+      </div>
+      <div id="connection-actions" class="row" hidden>
+        <a id="open-notula" class="button" href="notula://open" data-i18n="openNotula"></a>
+        <button id="retry" data-i18n="tryAgain"></button>
+      </div>
+
+      <div class="block">
+        <p id="site" class="muted"></p>
+        <p id="incognito" class="warn" data-i18n="incognitoPaused" hidden></p>
+        <p id="captions-hint" class="muted" data-i18n="captionsHint" hidden></p>
+        <div id="site-actions" class="row" hidden>
+          <button id="enable-site" data-i18n="enableSite"></button>
+          <button id="link-tab" data-i18n="linkTab"></button>
+        </div>
+        <div id="site-off" class="row" hidden>
+          <button id="disable-site" data-i18n="disableSite"></button>
+        </div>
+        <div id="transcript" class="row" hidden>
+          <button id="read-transcript" data-i18n="readTranscript"></button>
+        </div>
+        <p id="transcript-result" class="muted" aria-live="polite"></p>
+      </div>
+
+      <div class="block">
+        <div class="row">
+          <button id="mark" class="primary" data-i18n="markMoment"></button>
+          <kbd id="shortcut"></kbd>
+        </div>
+        <p id="mark-result" class="muted" aria-live="polite"></p>
+      </div>
+    </section>
+
+    <footer>
+      <a href="options.html" target="_blank" data-i18n="settingsLink"></a>
+      <a href="privacy.html" target="_blank" data-i18n="privacyLink"></a>
+    </footer>
+    <script src="popup.js"></script>
+  </body>
+</html>

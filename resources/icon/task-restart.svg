@@ -1,0 +1,5 @@
+<!-- Jump list "Restart": a circular arrow turning clockwise. Original drawing for Notula. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M12 4.25A7.75 7.75 0 1 1 5.29 8.13" fill="none" stroke="#808080" stroke-width="2.5" stroke-linecap="round" />
+  <path d="M7.1 5.5L7.8 10.8L1.8 7.3Z" fill="#808080" stroke="#808080" stroke-width="1" stroke-linejoin="round" />
+</svg>

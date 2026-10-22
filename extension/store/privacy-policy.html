@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Notula browser extension: privacy policy</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #ffffff;
+        --fg: #1c1b1a;
+        --muted: #6b6862;
+        --line: #e6e3de;
+        --accent: #4a57d4;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #1d1c1b;
+          --fg: #ecebe8;
+          --muted: #a19d96;
+          --line: #34322f;
+          --accent: #8e98ff;
+        }
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font: 16px/1.6 system-ui, 'Segoe UI', sans-serif;
+      }
+      main {
+        max-width: 680px;
+        margin: 0 auto;
+        padding: 40px 16px 64px;
+      }
+      h1 {
+        font-size: 26px;
+        line-height: 1.25;
+        margin: 0 0 4px;
+      }
+      h2 {
+        font-size: 18px;
+        margin: 32px 0 8px;
+      }
+      p,
+      li {
+        margin: 0 0 10px;
+      }
+      .muted {
+        color: var(--muted);
+      }
+      a {
+        color: var(--accent);
+      }
+      blockquote {
+        margin: 0;
+        padding: 8px 14px;
+        border-left: 3px solid var(--line);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Notula browser extension: privacy policy</h1>
+      <p class="muted">Applies to the Notula extension for Chrome and Microsoft Edge, version 1. Last updated 2026-10-20.</p>
+
+      <p>
+        The Notula extension tells the Notula app on your computer what is playing in your browser, so your
+        notes link to the video or lesson you’re watching. It has no server. Nothing it reads goes to Notula’s
+        developers or to anyone else.
+      </p>
+
+      <h2>What the extension reads</h2>
+      <p>On YouTube, on sites you turn on, and on a tab you link from the extension’s button:</p>
+      <ul>
+        <li>the playing video’s address, title, current time, duration, speed and play state;</li>
+        <li>whether an ad is showing;</li>
+        <li>the course, section and lesson shown on the page, and on YouTube the playlist and channel;</li>
+        <li>video captions or a transcript the page has already loaded, or one you ask it to read.</li>
+      </ul>
+      <p>
+        On YouTube, once you accept the explanation in the extension, it also watches the caption files the YouTube
+        player downloads, so it can pass them on without asking YouTube again. It doesn’t change those files or what the page shows.
+      </p>
+      <p>It never reads cookies, passwords, form fields, comments, your account name, other tabs or your browsing history.</p>
+
+      <h2>Where it goes</h2>
+      <p>
+        Only to the Notula app on the same computer, through the browser’s native messaging. The extension sends
+        nothing over the internet. Notula keeps these details only for the videos and lessons you take notes on.
+      </p>
+
+      <h2>When</h2>
+      <p>
+        Only while a video plays on YouTube or on a site you turned on, or when you press Mark this moment
+        (Alt+Shift+M). Before you first accept the explanation in the extension, it sends nothing.
+      </p>
+      <p>
+        The course, section, lesson, playlist and channel are sent only while Course pages is on in Notula ▸
+        Settings ▸ Sources. Captions are sent only while Captions from the player is on there.
+      </p>
+
+      <h2>Private windows</h2>
+      <p>
+        The extension runs in private (incognito or InPrivate) windows only if you allow it there in your browser.
+        Even then, nothing is sent from a private window unless you also turn on its Allow in private windows
+        switch and turn on private windows in Notula. All three are off by default.
+      </p>
+
+      <h2>Network requests</h2>
+      <p>
+        The extension makes one kind of request of its own: when Notula asks for a video’s captions and the YouTube
+        player hasn’t loaded them, it asks YouTube for that caption track, the same way the player does. It never
+        makes this request when Notula is in local-only mode.
+      </p>
+
+      <h2>Limited Use</h2>
+      <blockquote>
+        The use of information received from this extension complies with the Chrome Web Store User Data Policy,
+        including the Limited Use requirements.
+      </blockquote>
+
+      <h2>Your choices</h2>
+      <ul>
+        <li>Turn a site off in the extension’s settings, or remove its access in your browser.</li>
+        <li>Turn off the browser extension in Notula ▸ Settings ▸ Sources, or uninstall the extension.</li>
+        <li>Delete notes in Notula to delete what it kept about their videos.</li>
+      </ul>
+
+      <h2>Contact</h2>
+      <p>Questions about this policy: <a href="mailto:PUBLISHER_EMAIL">PUBLISHER_EMAIL</a>.</p>
+    </main>
+  </body>
+</html>
