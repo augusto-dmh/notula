@@ -1,0 +1,9 @@
+Meeting Title: Design review: Onboarding flow
+
+Transcript:
+Tom: Here's the new onboarding flow, five steps end to end.
+Maya: It feels long, and the progress bar makes that more obvious.
+Ines: The data says the team invite step is where most people drop off.
+Tom: We could move the invite into the first-week checklist.
+Maya: Let's do that, and swap the progress bar for step labels.
+Ines: I'll test the new version with five users next week.

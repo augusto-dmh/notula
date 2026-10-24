@@ -1,0 +1,9 @@
+Meeting Title: Hiring debrief: Senior backend engineer
+
+Transcript:
+Nina: Let's go round. Carlos, system design?
+Carlos: Strong. Clear trade-offs on the queue and the cache, and good questions back.
+Sofia: Coding was solid too. Clean code, even with the clock running.
+Nina: My one concern is testing. The answers there were thin.
+Carlos: Then let's move to an offer, with a reference check that asks about testing.
+Nina: I'll run the reference check by Thursday.

@@ -85,7 +85,7 @@ Your DCO sign-off covers AI-assisted work too.
 - **Code:** TypeScript, matching the code around your change: its naming, its comment density, and its idiom. Comments explain why, not what.
 - **Interface text:** every word the app shows follows [`style/COPY.md`](style/COPY.md).
 - **Licence headers:** new source files start with `// SPDX-License-Identifier: Apache-2.0` (or `/* … */` in CSS, `#` in PowerShell).
-- **Naming:** describe Notula on its own terms. Don't name or compare it to other products in code, comments, docs or commit messages.
+- **Naming:** describe Notula on its own terms. Don't name other products, or compare Notula with a named product, in code, comments, docs or commit messages. The anonymised [benchmarks](docs/benchmarks.md) follow the same rule.
 
 ## Security issues
 

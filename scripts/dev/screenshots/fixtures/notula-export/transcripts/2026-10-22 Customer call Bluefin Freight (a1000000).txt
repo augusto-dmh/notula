@@ -1,0 +1,9 @@
+Meeting Title: Customer call: Bluefin Freight
+
+Transcript:
+Me: Thanks for making time. How has the last quarter been for the team?
+Dana: Good overall. We're growing, so we'll need more seats before the renewal in January.
+Omar: The blocker for us is single sign-on. IT won't approve more accounts without it.
+Me: Understood. What else slows the team down today?
+Dana: The weekly report. Someone spends about two hours putting it together by hand.
+Me: I'll send pricing for forty seats with SSO this week, and book a call with your IT lead.

@@ -1,0 +1,10 @@
+Meeting Title: 1:1 with Jordan
+
+Transcript:
+Me: How's the week been?
+Jordan: Busy. On-call has been heavy for three weeks now, and it's hard to focus.
+Me: Let's rebalance the rotation from next month. What would you like to take on next?
+Jordan: I'd love to lead the API migration next quarter.
+Me: Great. Write a one-page plan and we can go through it together.
+Jordan: Will do. Also, is there budget for the spring conference?
+Me: I'll check and get back to you.

@@ -1,0 +1,9 @@
+Meeting Title: Q4 roadmap planning
+
+Transcript:
+Maya: Let's pick three themes for the quarter and stick to them.
+Priya: Search v2 has to finish. Onboarding is the second one.
+Ines: Reporting keeps coming up in customer calls. It's the most requested feature.
+Leo: Scheduled reports are doable this quarter. I can estimate them this week.
+Maya: Then mobile parity waits until Q1.
+Priya: I'll write it up as a one-page roadmap by next Friday.

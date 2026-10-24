@@ -1,0 +1,11 @@
+Meeting Title: Weekly product sync
+
+Transcript:
+Maya: Quick round today. Search v2 first: where are we?
+Leo: Feature complete. The only thing left is the CSV export bug, and I have a fix in review.
+Priya: Then I'd like to start the rollout at ten percent on Monday, behind the flag.
+Maya: Agreed. Can we ship the new empty states with it instead of waiting?
+Tom: Design has them ready. I just need final copy.
+Maya: I'll confirm the copy with design by Monday.
+Priya: I'll share the rollout dashboard so everyone can watch the numbers.
+Leo: And we keep the old search as a fallback for one more sprint.

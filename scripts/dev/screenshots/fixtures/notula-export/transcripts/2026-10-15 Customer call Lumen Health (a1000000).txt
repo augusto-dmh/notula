@@ -1,0 +1,9 @@
+Meeting Title: Customer call: Lumen Health
+
+Transcript:
+Grace: We'd like to start with a pilot in three clinics.
+Rafael: The hard requirement is that data stays in our region.
+Me: That works. Anything else your security team will ask for?
+Rafael: An audit log of exports for the admins.
+Grace: We'll decide by the end of the month.
+Me: I'll send our security overview and the data-residency answer this week.
