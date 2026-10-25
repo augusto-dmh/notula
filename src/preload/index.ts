@@ -1109,6 +1109,9 @@ const api: NotulaApi = {
     update: (req) => ipcRenderer.invoke('user-context:update' satisfies InvokeChannel, req),
     setNames: (req) => ipcRenderer.invoke('user-context:set-names' satisfies InvokeChannel, req),
     draft: (req) => ipcRenderer.invoke('user-context:draft' satisfies InvokeChannel, req),
+    export: (req) => ipcRenderer.invoke('user-context:export' satisfies InvokeChannel, req),
+    agents: () => ipcRenderer.invoke('user-context:agents' satisfies InvokeChannel),
+    setAgentPaused: (req) => ipcRenderer.invoke('user-context:set-agent-paused' satisfies InvokeChannel, req),
     onDraftProgress: (cb) => {
       const listener = (_e: IpcRendererEvent, p: PushPayload<'user-context:draft-progress'>): void => cb(p)
       ipcRenderer.on('user-context:draft-progress' satisfies PushChannel, listener)

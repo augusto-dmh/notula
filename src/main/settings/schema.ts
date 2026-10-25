@@ -355,6 +355,10 @@ const VALIDATORS: { [K in SettingKey]: Validator } = {
   'userContext.inSummaries': bool,
   'userContext.inChat': bool,
   'userContext.nameDictionary': nameDictionary,
+  'userContext.shareWithAgents': bool,
+  'userContext.pausedAgentTokens': (v) =>
+    Array.isArray(v) && v.length <= 200 && new Set(v).size === v.length && v.every((x) => typeof x === 'string' && UUID.test(x)),
+  'userContext.agentReads': (v) => record(200, 36, isoTime)(v) && Object.keys(v as object).every((k) => UUID.test(k)),
   'dispatcher.enabled': bool,
   'dispatcher.morningRun': bool,
   'dispatcher.morningHour': integer(0, 23),

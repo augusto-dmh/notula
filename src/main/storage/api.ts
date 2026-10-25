@@ -1148,6 +1148,8 @@ export interface StorageApi {
   upsertUserContextSection(s: { section_id: UserContextSectionId; content: string; origin: 'user' | 'drafted'; drafted_at: IsoTime | null }): Promise<UserContextSection>
   userContextPeople(q: { decayDays: number; limit: number; myEmails: string[] }): Promise<UserContextPerson[]>
   userContextDraftInputs(q: { since: IsoTime; notes: number; chars: number }): Promise<{ noteId: string; title: string | null; date: IsoTime; text: string }[]>
+  /** The user's own notes with a transcript, demo notes aside, counted up to `cap`. */
+  userContextRecordedNotes(q: { cap: number }): Promise<number>
 
   // dispatch (src/main/repos/dispatch-repo.ts)
   listDispatchTodos(q: { statuses?: DispatchTodoStatus[]; since?: IsoTime }): Promise<DispatchTodo[]>

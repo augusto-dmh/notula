@@ -5,16 +5,23 @@
 //   in the main-only setting `userContext.nameDictionary` (normalized here, `user-context:set-names`), and People
 //   derived from the attendees of the user's own notes.
 // - Drafting (purpose `user-context`): one run at a time over the last 60 days (40 notes,
-//   60,000 characters), JSON per section. A section the user wrote is never overwritten unless
-//   the request says `overwriteUser` (the renderer asks first).
-// - ctx.promptExtras: the non-empty sections in domain order, then "How to work with me",
-//   cut to 6,000 characters at a section boundary, for summaries and chat; the name dictionary for
-//   the ASR keywords. Each is empty while the feature or its switch is off, or under local-only
-//   mode with a cloud provider (logged as `local-only mode`).
+//   60,000 characters) and the people met most, JSON per section, with a progress event per
+//   stage. It needs 10 of the user's own recorded notes (demo notes aside); below that main
+//   refuses it. Only sections marked `drafted` are drafted. A section the user wrote is never
+//   overwritten unless the request says `overwriteUser` (the renderer asks first).
+// - ctx.promptExtras: the non-empty sections in their usual order, cut to 6,000 characters at a
+//   section boundary, for summaries and chat; the name dictionary for the ASR keywords. Each is
+//   empty while the feature or its switch is off, or under local-only mode with a cloud provider
+//   (logged as `local-only mode`).
 // - The read-only chat tool `readWritingStyle { medium }` returns the Communication section.
+// - Export: the profile as Markdown (`profileMarkdown`), copied or saved to a file the user picks.
+//   The MCP server serves the same text as `readAboutMe` while `userContext.shareWithAgents` is
+//   on; reads are recorded per token, and a paused token can't read.
 
 import { randomUUID } from 'node:crypto'
-import { ipcMain } from 'electron'
+import { writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { notulaError } from '@shared/errors'
 import type { InvokeChannel, InvokeReq, InvokeRes, PushChannel } from '@shared/ipc'
 import {
@@ -34,6 +41,9 @@ import { egressBlocked, LOCAL_ONLY_REASON } from '../privacy'
 const IDS = new Set<string>(USER_CONTEXT_SECTIONS.map((s) => s.id))
 const DAY_MS = 86_400_000
 const TONE_TOOL = 'readWritingStyle'
+/** Transcript writes come in bursts while recording; the unlock count follows a little later. */
+const UNLOCK_RECOUNT_MS = 3_000
+const DRAFTED_IDS = new Set<string>(USER_CONTEXT_SECTIONS.filter((s) => s.drafted).map((s) => s.id))
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
@@ -64,7 +74,7 @@ export function normalizeNames(list: unknown): string[] {
   return out
 }
 
-/** The injected text: titled sections in domain order, cut at a section boundary. */
+/** The injected text: titled sections in their usual order, cut at a section boundary. */
 function profileText(sections: UserContextSection[]): { text: string; ids: UserContextSectionId[] } {
   const parts: string[] = []
   const ids: UserContextSectionId[] = []
@@ -83,6 +93,55 @@ function profileText(sections: UserContextSection[]): { text: string; ids: UserC
   return { text: parts.join('\n\n'), ids }
 }
 
+/**
+ * The profile as one Markdown page: every non-empty section under its title, then the name
+ * dictionary. People are left out. `empty` when there is nothing to export.
+ */
+export async function profileMarkdown(ctx: MainContext): Promise<{ markdown: string; empty: boolean }> {
+  const [sections, names] = await Promise.all([ctx.storage.listUserContextSections(), ctx.settings.get('userContext.nameDictionary')])
+  const parts: string[] = ['# About me']
+  for (const def of USER_CONTEXT_SECTIONS) {
+    const content = sections.find((x) => x.section_id === def.id)?.content.trim()
+    if (content) parts.push(`## ${def.title}\n\n${content}`)
+  }
+  if (names.length) parts.push(`## Names to spell correctly\n\n${names.map((n) => `- ${n}`).join('\n')}`)
+  return { markdown: `${parts.join('\n\n')}\n`, empty: parts.length === 1 }
+}
+
+/**
+ * Whether an app connected to the MCP server may read the profile: `off` (sharing or About me
+ * off, or nothing written yet), `paused` for that token, else `ok`.
+ */
+export async function agentAccess(ctx: MainContext, tokenId: string): Promise<'ok' | 'paused' | 'off'> {
+  const s = await ctx.settings.getAll()
+  if (!s['userContext.shareWithAgents'] || !s['userContext.enabled']) return 'off'
+  if ((await profileMarkdown(ctx)).empty) return 'off'
+  return s['userContext.pausedAgentTokens'].includes(tokenId) ? 'paused' : 'ok'
+}
+
+export async function recordAgentRead(ctx: MainContext, tokenId: string): Promise<void> {
+  const reads = await ctx.settings.get('userContext.agentReads')
+  await ctx.settings.set('userContext.agentReads', { ...reads, [tokenId]: new Date().toISOString() })
+  log('info', 'user-context:agent-read', { tokenId })
+  for (const wc of ctx.windows.targets()) wc.send('user-context:changed' satisfies PushChannel)
+}
+
+/** A revoked token leaves no trace in the sharing settings. */
+export async function forgetAgent(ctx: MainContext, tokenId: string): Promise<void> {
+  const s = await ctx.settings.getAll()
+  if (s['userContext.pausedAgentTokens'].includes(tokenId)) {
+    await ctx.settings.set(
+      'userContext.pausedAgentTokens',
+      s['userContext.pausedAgentTokens'].filter((t) => t !== tokenId)
+    )
+  }
+  if (tokenId in s['userContext.agentReads']) {
+    const reads = { ...s['userContext.agentReads'] }
+    delete reads[tokenId]
+    await ctx.settings.set('userContext.agentReads', reads)
+  }
+}
+
 const DRAFT_SYSTEM = `You keep a private "About me" page for the user of a meeting notes app. Other AI features read it so that their summaries and answers fit the user: their role, their work, the people around them and how they like things done.
 
 From the user's recent meeting notes, draft the sections whose ids are requested. What each section holds:
@@ -93,7 +152,8 @@ From the user's recent meeting notes, draft the sections whose ids are requested
 - communication: how they write and speak (tone, length, language, preferred formats), so drafts can sound like them.
 - calendar: their recurring meetings and scheduling habits.
 - reference: the products, internal names, acronyms and tools they use, with short explanations, and where things usually go (channels, folders, systems).
-- assistant-guide: practical guidance for an assistant working for them, drawn from the other sections.
+
+The people they meet most often are listed with their meeting counts. Use that list to judge who matters, mainly for relationships, but describe a person only from what the notes show.
 
 Rules:
 - Only what the notes show, with recurring patterns over one-off events. Write nothing you cannot ground in the notes, and leave a section out when the notes say nothing about it.
@@ -112,8 +172,26 @@ export function registerUserContext(ctx: MainContext): PromptExtrasApi {
     for (const wc of ctx.windows.targets()) wc.send('user-context:changed' satisfies PushChannel)
   }
 
+  const recorded = (): Promise<number> => ctx.storage.userContextRecordedNotes({ cap: USER_CONTEXT_LIMITS.unlockMeetings })
+  /** The last count the page saw; null until asked. At the threshold it stops being watched. */
+  let lastRecorded: number | null = null
+  let recount: ReturnType<typeof setTimeout> | null = null
+
   ctx.bus.on('storage:changed', (c) => {
     if (c.tables.includes('user_context_sections')) changed()
+    // Below the threshold, a newly recorded (or deleted) note moves the ring without a restart.
+    if (lastRecorded === null || lastRecorded >= USER_CONTEXT_LIMITS.unlockMeetings || recount) return
+    if (!c.tables.includes('documents') && !c.tables.includes('transcript_chunks')) return
+    recount = setTimeout(() => {
+      recount = null
+      recorded()
+        .then((n) => {
+          if (n === lastRecorded) return
+          lastRecorded = n
+          changed()
+        })
+        .catch(() => undefined)
+    }, UNLOCK_RECOUNT_MS)
   })
 
   async function myEmails(): Promise<string[]> {
@@ -212,16 +290,27 @@ export function registerUserContext(ctx: MainContext): PromptExtrasApi {
         chars: USER_CONTEXT_LIMITS.draftChars
       })
       if (notes.length === 0) throw new JsonTaskError('no-json', 'There are no recent notes to draft from.')
+      push({ runId, type: 'stage', stage: 'notes' })
+      const people = await ctx.storage.userContextPeople({
+        decayDays: USER_CONTEXT_LIMITS.peopleDecayDays,
+        limit: USER_CONTEXT_LIMITS.draftPeople,
+        myEmails: await myEmails()
+      })
+      push({ runId, type: 'stage', stage: 'people' })
       const me = [s['profile.name'], s['profile.email'], s['profile.company']].map((x) => x.trim()).filter(Boolean)
       const user = [
         me.length ? `About the person: ${me.join(', ')}` : '',
         `Requested section ids: ${ids.join(', ')}`,
         '',
+        ...(people.length
+          ? [`The people they meet most:\n${people.map((p) => `- ${p.name} (${p.count} ${p.count === 1 ? 'meeting' : 'meetings'})`).join('\n')}`]
+          : []),
         'Their meeting notes from the last 60 days, newest first:',
         ...notes.map((n) => `### ${n.title ?? 'Untitled'} (${n.date.slice(0, 10)})\n${n.text}`)
       ]
         .filter((l, i) => l !== '' || i > 0)
         .join('\n\n')
+      push({ runId, type: 'stage', stage: 'writing' })
       const reply = await runJsonTask(provider, { purpose: 'user-context', system: DRAFT_SYSTEM, user, timeoutMs: USER_CONTEXT_LIMITS.draftTimeoutMs })
       const got = isObject(reply['sections']) ? reply['sections'] : {}
       const current = await ctx.storage.listUserContextSections()
@@ -264,11 +353,13 @@ export function registerUserContext(ctx: MainContext): PromptExtrasApi {
       ctx.storage.listUserContextSections(),
       ctx.storage.userContextPeople({ decayDays: USER_CONTEXT_LIMITS.peopleDecayDays, limit: USER_CONTEXT_LIMITS.peopleMax, myEmails: await myEmails() })
     ])
+    lastRecorded = await recorded()
     return {
       sections,
       nameDictionary: s['userContext.nameDictionary'],
       people,
-      settings: { enabled: s['userContext.enabled'], inSummaries: s['userContext.inSummaries'], inChat: s['userContext.inChat'] }
+      settings: { enabled: s['userContext.enabled'], inSummaries: s['userContext.inSummaries'], inChat: s['userContext.inChat'] },
+      unlock: { recorded: lastRecorded, needed: USER_CONTEXT_LIMITS.unlockMeetings }
     }
   })
 
@@ -298,8 +389,13 @@ export function registerUserContext(ctx: MainContext): PromptExtrasApi {
     'user-context:draft' satisfies InvokeChannel,
     async (_e, req: InvokeReq<'user-context:draft'>): Promise<InvokeRes<'user-context:draft'>> => {
       if (!isObject(req) || !Array.isArray(req['sectionIds']) || req['sectionIds'].length === 0) throw bad('sectionIds is required.')
-      const ids = [...new Set(req['sectionIds'].map(sectionId))]
+      const ids = [...new Set(req['sectionIds'].map(sectionId))].filter((id) => DRAFTED_IDS.has(id))
+      if (ids.length === 0) throw bad('Only you can write these sections.')
       if (running) throw expected(notulaError('busy', 'A draft is already running.'))
+      if ((await recorded()) < USER_CONTEXT_LIMITS.unlockMeetings) {
+        log('info', 'user-context:draft-refused', { reason: 'too few recorded meetings' })
+        throw expected(notulaError('invalid-input', 'Record a few more meetings first.'))
+      }
       if (await egressBlocked(ctx, { kind: 'llm' })) {
         log('info', 'user-context:draft-refused', { reason: LOCAL_ONLY_REASON })
         throw expected(notulaError('invalid-input', 'With Nothing leaves this machine on, drafting needs a local AI model.'))
@@ -308,6 +404,69 @@ export function registerUserContext(ctx: MainContext): PromptExtrasApi {
       running = runId
       void draft(runId, ids, req['overwriteUser'] === true)
       return { runId }
+    }
+  )
+
+  // ---------- export and sharing ----------
+
+  ipcMain.handle(
+    'user-context:export' satisfies InvokeChannel,
+    async (e, req: InvokeReq<'user-context:export'>): Promise<InvokeRes<'user-context:export'>> => {
+      const action = isObject(req) ? req['action'] : null
+      if (action !== 'copy' && action !== 'save') throw bad('action is invalid.')
+      const { markdown } = await profileMarkdown(ctx)
+      if (action === 'copy') {
+        log('info', 'user-context:exported', { action, chars: markdown.length })
+        return { markdown }
+      }
+      const options: Electron.SaveDialogOptions = {
+        title: 'Save as Markdown',
+        buttonLabel: 'Save',
+        defaultPath: join(app.getPath('documents'), 'about-me.md'),
+        filters: [{ name: 'Markdown', extensions: ['md'] }]
+      }
+      // Dev builds only: NOTULA_DEV_DIALOG_DIR answers the save dialog, for scripted checks.
+      const devDir = ctx.isDev ? process.env['NOTULA_DEV_DIALOG_DIR'] : undefined
+      const owner = BrowserWindow.fromWebContents(e.sender)
+      const picked = devDir
+        ? { canceled: false, filePath: join(devDir, 'about-me.md') }
+        : owner
+          ? await dialog.showSaveDialog(owner, options)
+          : await dialog.showSaveDialog(options)
+      if (picked.canceled || !picked.filePath) return { saved: false }
+      try {
+        await writeFile(picked.filePath, markdown, 'utf8')
+      } catch (err) {
+        log('warn', 'user-context:export-failed', { code: (err as NodeJS.ErrnoException).code })
+        throw expected(notulaError('internal', 'Couldn’t save the file. Try another folder.'))
+      }
+      log('info', 'user-context:exported', { action, chars: markdown.length })
+      return { saved: true, path: picked.filePath }
+    }
+  )
+
+  ipcMain.handle('user-context:agents' satisfies InvokeChannel, async (): Promise<InvokeRes<'user-context:agents'>> => {
+    const s = await ctx.settings.getAll()
+    const reads = s['userContext.agentReads']
+    const paused = new Set(s['userContext.pausedAgentTokens'])
+    const tokens = await ctx.storage.listMcpServerTokens()
+    return tokens
+      .filter((t) => typeof reads[t.id] === 'string')
+      .map((t) => ({ tokenId: t.id, name: t.name, lastReadAt: reads[t.id] as string, paused: paused.has(t.id) }))
+      .sort((a, b) => b.lastReadAt.localeCompare(a.lastReadAt))
+  })
+
+  ipcMain.handle(
+    'user-context:set-agent-paused' satisfies InvokeChannel,
+    async (_e, req: InvokeReq<'user-context:set-agent-paused'>): Promise<void> => {
+      if (!isObject(req) || typeof req['tokenId'] !== 'string' || typeof req['paused'] !== 'boolean') throw bad('tokenId and paused are required.')
+      const tokenId = req['tokenId']
+      if (!(await ctx.storage.listMcpServerTokens()).some((t) => t.id === tokenId)) throw expected(notulaError('not-found', 'This app is no longer connected.'))
+      const current = await ctx.settings.get('userContext.pausedAgentTokens')
+      const next = req['paused'] ? [...new Set([...current, tokenId])] : current.filter((t) => t !== tokenId)
+      await ctx.settings.set('userContext.pausedAgentTokens', next)
+      log('info', 'user-context:agent-paused', { tokenId, paused: req['paused'] })
+      changed()
     }
   )
 

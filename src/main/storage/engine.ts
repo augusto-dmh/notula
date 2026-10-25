@@ -472,6 +472,7 @@ export class StorageEngine {
     upsertUserContextSection: (...a) => userContextRepo.upsertUserContextSection(this.need(), ...a),
     userContextPeople: (...a) => userContextRepo.userContextPeople(this.need(), ...a),
     userContextDraftInputs: (...a) => userContextRepo.userContextDraftInputs(this.need(), ...a),
+    userContextRecordedNotes: (...a) => userContextRepo.userContextRecordedNotes(this.need(), ...a),
     listDispatchTodos: (...a) => dispatchRepo.listDispatchTodos(this.need(), ...a),
     upsertDispatchTodos: (...a) => dispatchRepo.upsertDispatchTodos(this.need(), ...a),
     setDispatchTodoStatus: (...a) => dispatchRepo.setDispatchTodoStatus(this.need(), ...a),

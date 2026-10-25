@@ -84,6 +84,8 @@
 
 .uc-header__actions {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 8px;
 }
 
@@ -303,4 +305,124 @@
   color: var(--fg-3);
   font-size: var(--text-xs);
   font-variant-numeric: tabular-nums;
+}
+
+.uc-stage {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 14px;
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+}
+
+/* Before drafting turns on. */
+
+.uc-unlock {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 4px 0 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.uc-unlock__ring {
+  flex: none;
+}
+
+.uc-unlock__track,
+.uc-unlock__done {
+  fill: none;
+  stroke-width: 3;
+}
+
+.uc-unlock__track {
+  stroke: var(--border);
+}
+
+.uc-unlock__done {
+  stroke: var(--accent);
+  stroke-linecap: round;
+}
+
+.uc-unlock__count {
+  margin: 0;
+  color: var(--fg);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.uc-unlock__text {
+  margin: 2px 0 0;
+  color: var(--fg-3);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+/* Use with other AI apps. */
+
+.uc-share {
+  display: grid;
+  gap: 10px;
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.uc-share__title {
+  margin: 0;
+  color: var(--fg);
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+
+.uc-share__server {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.uc-share__server .uc-muted,
+.uc-share > .uc-muted {
+  margin: 0;
+}
+
+.uc-agents {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.uc-agent {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+
+.uc-agent__name {
+  overflow: hidden;
+  color: var(--fg);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.uc-agent__meta {
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+}
+
+.uc-agent__access {
+  width: auto;
+  padding-block: 2px;
+  font-size: var(--text-sm);
 }

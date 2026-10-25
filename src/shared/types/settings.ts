@@ -281,6 +281,12 @@ export interface Settings {
   'userContext.inChat': boolean
   /** Also used by transcription through `promptExtras`. Main-only (`user-context:set-names`). */
   'userContext.nameDictionary': string[]
+  /** Apps connected to Notula's MCP server may read the profile (`readAboutMe`). */
+  'userContext.shareWithAgents': boolean
+  /** MCP token ids that may not read the profile. Main-only (`user-context:set-agent-paused`). */
+  'userContext.pausedAgentTokens': string[]
+  /** MCP token id → the last time it read the profile. Main-only. */
+  'userContext.agentReads': Record<string, IsoTime>
   'dispatcher.enabled': boolean
   'dispatcher.morningRun': boolean
   'dispatcher.morningHour': number
@@ -522,6 +528,9 @@ export const DEFAULT_SETTINGS: Settings = {
   'userContext.inSummaries': true,
   'userContext.inChat': true,
   'userContext.nameDictionary': [],
+  'userContext.shareWithAgents': false,
+  'userContext.pausedAgentTokens': [],
+  'userContext.agentReads': {},
   'dispatcher.enabled': false,
   'dispatcher.morningRun': true,
   'dispatcher.morningHour': 7,
@@ -608,6 +617,8 @@ export const MAIN_ONLY_SETTING_KEYS = [
   'meetingDock.size',
   'summaryFeedback.lastShownAt',
   'userContext.nameDictionary',
+  'userContext.pausedAgentTokens',
+  'userContext.agentReads',
   'localApi.enabled',
   'ui.appIcon',
   'nux.dismissed',

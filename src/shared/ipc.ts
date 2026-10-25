@@ -262,6 +262,7 @@ import type {
 import type { TranscriptReport, TranscriptReportInput } from './types/transcript-reports'
 import type { RuleDecision, TranscriptionRule } from './types/transcription-rules'
 import type {
+  UserContextAgent,
   UserContextDraftEvent,
   UserContextSection,
   UserContextSectionId,
@@ -656,6 +657,11 @@ export interface InvokeChannels {
   'user-context:set-names': [{ firstNames: string[] }, { firstNames: string[] }]
   /** Rejects `busy` while a run is in flight. */
   'user-context:draft': [{ sectionIds: UserContextSectionId[]; overwriteUser?: boolean }, { runId: string }]
+  /** The profile as Markdown: returned for `copy`; written where the user picks for `save` (cancel: `saved: false`). */
+  'user-context:export': [{ action: 'copy' | 'save' }, { markdown: string } | { saved: boolean; path?: string }]
+  /** The MCP apps that have read the profile, newest read first. */
+  'user-context:agents': [void, UserContextAgent[]]
+  'user-context:set-agent-paused': [{ tokenId: string; paused: boolean }, void]
   'dispatch:list': [{ view: 'today' | 'archived' | 'todos' }, DispatchList]
   'dispatch:run-note': [{ noteId: string }, void]
   'dispatch:run-morning': [void, { status: 'started' | 'busy' | 'paused' }]
@@ -1710,6 +1716,9 @@ export interface NotulaApi {
     update: InvokeMember<'user-context:update'>
     setNames: InvokeMember<'user-context:set-names'>
     draft: InvokeMember<'user-context:draft'>
+    export: InvokeMember<'user-context:export'>
+    agents: InvokeMember<'user-context:agents'>
+    setAgentPaused: InvokeMember<'user-context:set-agent-paused'>
     onDraftProgress: PushMember<'user-context:draft-progress'>
     onChanged: PushMember<'user-context:changed'>
   }

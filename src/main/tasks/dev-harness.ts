@@ -5,6 +5,7 @@
 // quits. Run it only against a scratch NOTULA_USER_DATA_DIR and a mock LLM
 // (NOTULA_DEV_ANTHROPIC_BASE_URL): it seeds notes and turns those features' switches on.
 
+import { randomUUID } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import * as Y from 'yjs'
@@ -129,6 +130,26 @@ export async function runKHarness(ctx: MainContext, phase: 1 | 2): Promise<void>
         crdt_version: 1
       })
       notes.push({ id: note.id, panelId: panel.id })
+      // A line of transcript makes the note a recorded meeting, so About me drafting is unlocked.
+      const identity = await ctx.storage.identity()
+      const session = randomUUID()
+      await ctx.storage.createSession({ id: session, document_id: note.id, provider: 'import', model: 'harness', language: 'en', started_at: now })
+      await ctx.storage.upsertChunks([
+        {
+          id: randomUUID(),
+          document_id: note.id,
+          workspace_id: identity.workspaceId,
+          owner_id: identity.ownerId,
+          transcription_session_id: session,
+          source: 'microphone',
+          start_timestamp: now,
+          end_timestamp: now,
+          text: `Let us go through the launch plan for meeting ${n}.`,
+          is_final: true,
+          detected_speaker_name: null,
+          detectedSpeaker: null
+        }
+      ])
     }
     const n0 = notes[0]!
     await ctx.storage.appendYdoc(`summary:1:${n0.panelId}`, seedRoom(), 'k-harness')

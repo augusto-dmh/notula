@@ -12,7 +12,8 @@
 //   stored, compared in constant time.
 // - Tools: the ten read-only library tools through `ctx.chat.runLibraryTool` (chat's own
 //   implementation: same caps and shapes as chat), `readOnlyHint: true`, at most 4
-//   concurrent calls per token. No model calls, no writes.
+//   concurrent calls per token. No model calls, no writes. `readAboutMe` is listed too while
+//   the user shares their About me profile and the token isn't paused (user-context).
 // - `<userData>/mcp/endpoint.json` tells the shim where to connect; removed on quit.
 // - Local-only mode stops the server.
 
@@ -40,6 +41,7 @@ import type { MainContext } from '../context'
 import { resourcePath } from '../lifecycle/resources'
 import { log } from '../log'
 import { egressBlocked } from '../privacy'
+import { agentAccess, forgetAgent, profileMarkdown, recordAgentRead } from '../user-context'
 
 interface Session {
   transport: StreamableHTTPServerTransport
@@ -54,6 +56,15 @@ interface Bucket {
 }
 
 const sha256 = (s: string): string => createHash('sha256').update(s, 'utf8').digest('hex')
+
+const ABOUT_ME_TOOL = {
+  name: 'readAboutMe',
+  title: 'About me',
+  description:
+    'Returns the profile the user wrote about themselves in Notula, as Markdown: their role, current work, the people they work with and how they like things done. Read it to fit your answers to the user.',
+  inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  annotations: { title: 'About me', readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+} as const
 
 function deny(res: ServerResponse, status: number, message: string, headers: Record<string, string> = {}): void {
   if (res.headersSent) return
@@ -169,6 +180,18 @@ export function registerMcpServer(ctx: MainContext): void {
     if (activity.length > MCP_LIMITS.activityMax) activity.length = MCP_LIMITS.activityMax
   }
 
+  /** `readAboutMe`: the profile while it is shared with this token; each read is recorded. */
+  const readAboutMe = async (tokenId: string, client: string | null, started: number): Promise<CallToolResult> => {
+    const access = await agentAccess(ctx, tokenId).catch(() => 'off' as const)
+    const ok = access === 'ok'
+    recordActivity({ at: new Date(started).toISOString(), client, tool: ABOUT_ME_TOOL.name, ok, durationMs: Date.now() - started })
+    if (access === 'paused') return { content: [{ type: 'text', text: "The user has paused this app's access to their profile." }], isError: true }
+    if (!ok) return { content: [{ type: 'text', text: `Unknown tool ${ABOUT_ME_TOOL.name}.` }], isError: true }
+    const { markdown } = await profileMarkdown(ctx)
+    await recordAgentRead(ctx, tokenId).catch((err: unknown) => log('warn', 'mcp-server:about-me-record-failed', { err: err instanceof Error ? err.message : String(err) }))
+    return { content: [{ type: 'text', text: markdown }] }
+  }
+
   const newSession = (tokenId: string): StreamableHTTPServerTransport => {
     const server = new Server({ name: 'notula', version: app.getVersion() }, { capabilities: { tools: {} } })
     const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
@@ -180,20 +203,24 @@ export function registerMcpServer(ctx: MainContext): void {
     transport.onclose = () => {
       if (transport.sessionId) sessions.delete(transport.sessionId)
     }
-    server.setRequestHandler(ListToolsRequestSchema, () => ({
-      tools: ctx.chat.libraryTools().map((t) => ({
-        name: t.name,
-        title: t.title,
-        description: t.description,
-        inputSchema: t.inputSchema as { type: 'object'; [k: string]: unknown },
-        outputSchema: { ...t.outputSchema, type: 'object' } as { type: 'object'; [k: string]: unknown },
-        annotations: { title: t.title, readOnlyHint: true, destructiveHint: false, openWorldHint: false }
-      }))
+    server.setRequestHandler(ListToolsRequestSchema, async () => ({
+      tools: [
+        ...ctx.chat.libraryTools().map((t) => ({
+          name: t.name,
+          title: t.title,
+          description: t.description,
+          inputSchema: t.inputSchema as { type: 'object'; [k: string]: unknown },
+          outputSchema: { ...t.outputSchema, type: 'object' } as { type: 'object'; [k: string]: unknown },
+          annotations: { title: t.title, readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+        })),
+        ...((await agentAccess(ctx, tokenId).catch(() => 'off')) === 'ok' ? [ABOUT_ME_TOOL] : [])
+      ]
     }))
     server.setRequestHandler(CallToolRequestSchema, async (request, extra): Promise<CallToolResult> => {
       const name = request.params.name
       const started = Date.now()
       const client = server.getClientVersion()?.name ?? null
+      if (name === ABOUT_ME_TOOL.name) return readAboutMe(tokenId, client, started)
       const known = ctx.chat.libraryTools().some((t) => t.name === name)
       if (!known) return { content: [{ type: 'text', text: `Unknown tool ${name}.` }], isError: true }
       const n = running.get(tokenId) ?? 0
@@ -401,6 +428,7 @@ export function registerMcpServer(ctx: MainContext): void {
       void s.server.close().catch(() => undefined)
     }
     buckets.delete(p.id)
+    await forgetAgent(ctx, p.id).catch(() => undefined)
     log('info', 'mcp-server:token-revoked')
   })
 

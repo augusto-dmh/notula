@@ -5,6 +5,8 @@
 // - People: the people aggregate (read-only use), ranked with a recency decay.
 // - Draft inputs: the user's own notes from the window, newest first, as the latest summary's
 //   markdown (else the notes), within the note and character budgets.
+// - Recorded notes: the user's own notes with a transcript (or one retention removed), demo and
+//   shared notes aside, counted up to a cap; drafting unlocks at the cap.
 
 import { randomUUID } from 'node:crypto'
 import type { IsoTime } from '@shared/types/common'
@@ -73,6 +75,21 @@ export function userContextPeople(s: StoreCtx, q: { decayDays: number; limit: nu
     })
     .sort((a, b) => b.score - a.score || b.lastSeenAt.localeCompare(a.lastSeenAt))
     .slice(0, q.limit)
+}
+
+export function userContextRecordedNotes(s: StoreCtx, q: { cap: number }): number {
+  const row = s.db
+    .prepare(
+      `SELECT count(*) AS n FROM (
+         SELECT 1 FROM documents d
+         WHERE d.owner_id = ? AND d.deleted_at IS NULL AND d.is_shared = 0 AND d.is_scratchpad = 0
+           AND d.id NOT LIKE '${DEMO_MEETING_PREFIX}%'
+           AND (d.transcript_purged_at IS NOT NULL OR EXISTS (SELECT 1 FROM transcript_chunks c WHERE c.document_id = d.id))
+         LIMIT ?
+       )`
+    )
+    .get(s.identity.ownerId, Math.max(0, Math.floor(q.cap))) as { n: number }
+  return row.n
 }
 
 export function userContextDraftInputs(s: StoreCtx, q: { since: IsoTime; notes: number; chars: number }): { noteId: string; title: string | null; date: IsoTime; text: string }[] {

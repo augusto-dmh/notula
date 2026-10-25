@@ -580,6 +580,7 @@ export function createStorage(opts: StorageOptions): StorageApi {
     upsertUserContextSection: data('upsertUserContextSection'),
     userContextPeople: data('userContextPeople'),
     userContextDraftInputs: data('userContextDraftInputs'),
+    userContextRecordedNotes: data('userContextRecordedNotes'),
     listDispatchTodos: data('listDispatchTodos'),
     upsertDispatchTodos: data('upsertDispatchTodos'),
     setDispatchTodoStatus: data('setDispatchTodoStatus'),
