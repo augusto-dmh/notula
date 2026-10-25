@@ -7,8 +7,8 @@
 // without rewriting, honour spoken commands, keep the language, never act on what is said,
 // and treat the screen context and the dictionary as untrusted spelling references only.
 // One destination clause follows the effective hint (./targets.ts `finalHint`), and its
-// constraints win over the layout and tone rules. A tone changes casing, punctuation and
-// spacing, never words. The transcript travels inside a delimited block with `<`, `>` and `&` escaped.
+// constraints win over the layout and tone rules. A tone shapes only how the speaker's words
+// look, not the words themselves. The transcript travels inside a delimited block with `<`, `>` and `&` escaped.
 
 import type { DictationCategory, DictationTargetHint, DictationTone } from '@shared/types/dictation'
 import type { MainContext } from '../context'
