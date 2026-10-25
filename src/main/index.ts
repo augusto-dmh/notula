@@ -345,7 +345,8 @@ function placeholderCapture(): CaptureQuery {
     registerStartGate: () => () => undefined,
     heldStart: () => null,
     releaseHeldStart: () => undefined,
-    cancelHeldStart: () => undefined
+    cancelHeldStart: () => undefined,
+    recoverAfterInactivity: async () => undefined
   }
 }
 

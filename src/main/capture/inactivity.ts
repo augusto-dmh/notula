@@ -4,6 +4,10 @@
 // change (partials included); the warning card and the bubble window only draw the
 // `capture:inactivity` push. The meeting-app-left stop follows the mic-app list.
 //
+// "I'm still here" resolves the warning and re-arms the timers; with Labs
+// `capture.restartOnStillHere` on it then asks capture to recover (a fresh transcription
+// session, then the audio sources), in case the transcript stalled rather than the room.
+//
 // A system-only capture (a source note watching a video) is capturing like any other: both
 // inactivity timers run on its transcript. A meeting app closing says nothing about the video,
 // so the app-left stop skips it; end of watching (sources) stops it instead.
@@ -117,11 +121,22 @@ export class InactivityMonitor {
     if (action === 'keep') {
       this.resolve('keep')
       this.arm()
+      void this.recoverIfOn(noteId)
       return
     }
     this.resolve('stop')
     this.clearTimers()
     void this.stopCapture('inactivity_prompt_stop')
+  }
+
+  private async recoverIfOn(noteId: string): Promise<void> {
+    try {
+      if (!(await this.ctx.settings.get('capture.restartOnStillHere'))) return
+    } catch (err) {
+      log('warn', 'capture:inactivity-settings-failed', { err })
+      return
+    }
+    await this.ctx.capture.recoverAfterInactivity(noteId)
   }
 
   private async loadAndArm(): Promise<void> {

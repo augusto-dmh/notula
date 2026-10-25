@@ -98,6 +98,8 @@ export interface Settings {
   'capture.autoStopWhenMeetingAppCloses': boolean
   /** Ask the LLM whether the meeting ended before an app-left stop. */
   'capture.llmAutoStop': boolean
+  /** Labs: "I'm still here" on the inactivity warning also restarts transcription and audio. */
+  'capture.restartOnStillHere': boolean
   /** Word-level speaker turns. */
   'transcription.diarization': boolean
   'asr.deepgram.multilingualVersion': DeepgramMultilingualVersion
@@ -411,6 +413,7 @@ export const DEFAULT_SETTINGS: Settings = {
   'capture.inactivityAutoStopMinutes': 15,
   'capture.autoStopWhenMeetingAppCloses': true,
   'capture.llmAutoStop': false,
+  'capture.restartOnStillHere': false,
   'transcription.diarization': false,
   'asr.deepgram.multilingualVersion': 'default',
   'asr.assemblyai.multilingualModel': 'universal-3-5-pro',

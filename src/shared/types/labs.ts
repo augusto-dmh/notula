@@ -73,6 +73,7 @@ export type LabsSettingKey =
   | 'integrations.salesforce.enabled'
   | 'integrations.pipedriveAshby.enabled'
   | 'sources.enabled'
+  | 'capture.restartOnStillHere'
 
 export interface LabsFeature {
   key: LabsSettingKey
@@ -205,6 +206,13 @@ export const LABS_FEATURES: readonly LabsFeature[] = [
     key: 'meetingDock.enabled',
     label: 'Meeting dock',
     description: 'During a meeting, keep a small window on top with chat, your notes and the live transcript.',
+    section: 'meetings',
+    kind: 'switch'
+  },
+  {
+    key: 'capture.restartOnStillHere',
+    label: 'Reconnect transcription when you answer “I’m still here”',
+    description: 'If the transcript stalled, Notula reconnects transcription and restarts the meeting audio.',
     section: 'meetings',
     kind: 'switch'
   },

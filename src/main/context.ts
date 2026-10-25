@@ -129,6 +129,12 @@ export interface CaptureQuery {
   releaseHeldStart(noteId: string): void
   /** Pushes `capture:stop-requested { reason }`, so the renderer's desired state goes off. */
   cancelHeldStart(noteId: string, reason: StopReason): void
+  /**
+   * "I'm still here" with Labs `capture.restartOnStillHere` on: restarts the note's
+   * transcription session, then its capture sources. Logs and skips when the note is no
+   * longer capturing; never throws.
+   */
+  recoverAfterInactivity(noteId: string): Promise<void>
 }
 
 /** The consent deferral and the transcription rules. */

@@ -4,7 +4,8 @@
 // the transcription IPC handlers.
 //
 // `reconfigure` restarts a note's session in place on a language or
-// provider change; a local session whose model is
+// provider change, and `restartSession` does the same swap unchanged (inactivity recovery);
+// a local session whose model is
 // missing downloads it first; with diarization
 // on, sessions tee their audio and the note gets one diarization pass when its
 // capture stops.
@@ -37,6 +38,11 @@ const AWAIT_STOPPED_CAP_MS = 30_000
 const SHUTDOWN_DRAIN_MS = 8_000
 /** The end reason of a session restarted in place. */
 export const CONFIG_CHANGED = 'config_changed'
+/** The end reason of a session restarted by inactivity recovery: a swap, like `config_changed`. */
+export const INACTIVITY_RECOVERY = 'inactivity_recovery'
+
+/** End reasons of a swap: the note keeps capturing, so its capture did not stop. */
+const SWAPS: ReadonlySet<string> = new Set([CONFIG_CHANGED, INACTIVITY_RECOVERY])
 
 /**
  * The language a session actually uses: on-device
@@ -294,6 +300,38 @@ export class TranscriptionManager {
       to: `${opts.asr}/${language}`,
       oldSessionId: old.id
     })
+    await this.swap(noteId, old, opts, CONFIG_CHANGED)
+  }
+
+  /**
+   * Inactivity recovery: the same swap as `reconfigure`, with the session's current
+   * language, provider, keywords and sources, run even though nothing changed. The old
+   * session ends with `inactivity_recovery`. Resolves once the new session has started,
+   * so capture can restart its audio while the old one drains (a stalled socket can take
+   * the whole drain timeout). False when the note has no running session.
+   */
+  async restartSession(noteId: string): Promise<boolean> {
+    const old = this.active.get(noteId)
+    const req = this.requested.get(noteId)
+    if (!old || !req) return false
+    log('info', 'asr:restart', { noteId, kind: INACTIVITY_RECOVERY, oldSessionId: old.id })
+    void this.swap(noteId, old, { language: req.language, asr: req.asr, keywords: old.keywords }, INACTIVITY_RECOVERY).catch((err: unknown) =>
+      log('warn', 'asr:restart-drain-failed', { noteId, err })
+    )
+    return true
+  }
+
+  /**
+   * The new session starts first, so capture's audio keeps flowing into it; the old one's
+   * untranscribed audio moves over, then it drains and ends with `reason`. The swap itself
+   * is synchronous; the returned promise is the old session's drain.
+   */
+  private swap(
+    noteId: string,
+    old: TranscriptionSession,
+    opts: { language: string; asr: AsrProviderId; keywords: string[] },
+    reason: string
+  ): Promise<void> {
     this.active.delete(noteId)
     this.bootFailed.delete(old)
     // The new session transcribes the same sources as the old one.
@@ -307,7 +345,7 @@ export class TranscriptionManager {
       log('info', 'asr:reconfigure-backlog-moved', { noteId, entries: moved, ms: Math.round(ms) })
       this.active.get(noteId)?.restoreBacklog(backlog)
     }
-    await this.retire(noteId, old, CONFIG_CHANGED)
+    return this.retire(noteId, old, reason)
   }
 
   /** Drains and flushes. Resolves with the stopped session, or null if none ran. */
@@ -321,7 +359,7 @@ export class TranscriptionManager {
     const done = (async () => {
       await this.retire(noteId, session, reason)
       // The note's capture stopped: one diarization pass over all of its audio.
-      if (reason !== CONFIG_CHANGED && !this.active.has(noteId)) this.diarizer.noteStopped(noteId)
+      if (!SWAPS.has(reason) && !this.active.has(noteId)) this.diarizer.noteStopped(noteId)
       return { sessionId: session.id, startedAt: session.startedAt }
     })()
     let set = this.stops.get(noteId)

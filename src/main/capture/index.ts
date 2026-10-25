@@ -78,6 +78,25 @@ export function registerCapture(ctx: MainContext): CaptureQuery {
   const stopFromMain = (reason: StopReason): Promise<void> => controller.stopFromMain(reason)
   const health = new AudioHealth(ctx, () => controller.restart('system'))
   const inactivity = new InactivityMonitor(ctx, transcription, stopFromMain)
+
+  /**
+   * "I'm still here" with recovery on: a fresh transcription session for the same note, then
+   * the run's audio sources. Each step checks the note is still the one capturing.
+   */
+  const recoverAfterInactivity = async (noteId: string): Promise<void> => {
+    log('info', 'capture:inactivity-recovery-requested', { noteId })
+    const skip = (reason: 'not_capturing' | 'restart_declined' | 'note_changed_during_restart'): void =>
+      log('info', 'capture:inactivity-recovery-skipped', { reason })
+    try {
+      if (controller.currentNoteId() !== noteId || !transcription.isActive(noteId)) return skip('not_capturing')
+      if (!(await transcription.restartSession(noteId))) return skip('restart_declined')
+      if (controller.currentNoteId() !== noteId) return skip('note_changed_during_restart')
+      const r = controller.restartForRecovery(noteId)
+      if (!r.ok) log('warn', 'capture:inactivity-recovery-failed', { err: r.reason ?? 'unknown' })
+    } catch (err) {
+      log('warn', 'capture:inactivity-recovery-failed', { err })
+    }
+  }
   controller.setHooks({
     started: (noteId, sources) => {
       health.started(noteId, sources)
@@ -220,7 +239,8 @@ export function registerCapture(ctx: MainContext): CaptureQuery {
     registerStartGate: (g) => controller.registerStartGate(g),
     heldStart: () => controller.heldStart(),
     releaseHeldStart: (noteId) => controller.releaseHeldStart(noteId),
-    cancelHeldStart: (noteId, reason) => controller.cancelHeldStart(noteId, reason)
+    cancelHeldStart: (noteId, reason) => controller.cancelHeldStart(noteId, reason),
+    recoverAfterInactivity
   }
 }
 

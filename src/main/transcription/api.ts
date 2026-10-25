@@ -55,6 +55,13 @@ export interface TranscriptionControl {
     opts: { language: TranscriptionLanguage; asr: AsrProviderId; keywords: string[] }
   ): Promise<void>
   /**
+   * Inactivity recovery: the `reconfigure` swap with the session's current settings, run
+   * even though nothing changed (the old session ends with `inactivity_recovery`). Resolves
+   * once the new session has started, while the old one drains; false when the note has no
+   * running session.
+   */
+  restartSession(noteId: string): Promise<boolean>
+  /**
    * Writes each line as a final `system` chunk of a new session (provider `simulated`) with
    * `detected_speaker_name` = the line's speaker, through the same store-and-push path as
    * ASR finals. Never touches capture.

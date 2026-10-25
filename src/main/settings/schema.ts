@@ -198,6 +198,7 @@ const VALIDATORS: { [K in SettingKey]: Validator } = {
   'capture.inactivityAutoStopMinutes': nullOr(integer(1, 240)),
   'capture.autoStopWhenMeetingAppCloses': bool,
   'capture.llmAutoStop': bool,
+  'capture.restartOnStillHere': bool,
   'transcription.diarization': bool,
   'asr.deepgram.multilingualVersion': oneOf('default', '58-lang-beta'),
   'asr.assemblyai.multilingualModel': oneOf('universal-3-5-pro', 'universal-3-6-pro'),

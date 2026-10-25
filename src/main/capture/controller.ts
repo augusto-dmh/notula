@@ -639,6 +639,30 @@ export class CaptureController {
     return { ok: true }
   }
 
+  /**
+   * Inactivity recovery: always restarts the run's capture sources (a system-only run,
+   * its system source alone). It is user-initiated and at most once per warning, so it
+   * spends no restart budget.
+   */
+  restartForRecovery(noteId: string): { ok: boolean; reason?: string } {
+    const r = this.running
+    if (!r || r.noteId !== noteId) return { ok: false, reason: 'not-capturing' }
+    log('info', 'capture:restart', { scope: 'recovery', used: this.restartsUsed })
+    if (!r.sources.includes('microphone')) {
+      this.setStates({ systemCapture: 'starting' })
+      pushCommand(this.ctx.windows, { type: 'restart-system-audio' })
+      return { ok: true }
+    }
+    r.seen.clear()
+    r.startLoggedAt = Date.now()
+    this.setStates(captureStarting(r.sources))
+    pushCommand(this.ctx.windows, { type: 'stop' })
+    this.input.resetApplied()
+    pushCommand(this.ctx.windows, startCommand(this.input.startPin(), r.sources))
+    this.afterInputReconcile('capture-started')
+    return { ok: true }
+  }
+
   // ---------- engine events ----------
 
   onEngineEvent(e: CaptureEngineEvent): void {

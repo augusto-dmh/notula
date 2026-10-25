@@ -59,6 +59,7 @@ export function transcriptionControl(ctx: MainContext): TranscriptionControl {
     getTranscript: (noteId) => m.getTranscript(noteId),
     onSourceState: (listener) => m.onSourceState(listener),
     reconfigure: (noteId, opts) => m.reconfigure(noteId, opts),
+    restartSession: (noteId) => m.restartSession(noteId),
     // The demo's scripted lines as final system chunks.
     startSimulated: (noteId, lines) => startSimulatedSession(ctx, m.store, noteId, lines)
   }
