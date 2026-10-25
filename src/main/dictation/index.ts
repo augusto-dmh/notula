@@ -985,11 +985,17 @@ export function registerDictation(ctx: MainContext): void {
   // ---------- the dictation bar ----------
 
   const ACTIONS: readonly DictationBarAction[] = ['dictate', 'record', 'notes', 'menu', 'snooze', 'hide', 'reset-position']
-  ipcMain.handle('dictation-bar:action' satisfies InvokeChannel, (e, p: { action?: unknown }): InvokeRes<'dictation-bar:action'> => {
+  ipcMain.handle('dictation-bar:action' satisfies InvokeChannel, (e, p: { action?: unknown; anchorX?: unknown }): InvokeRes<'dictation-bar:action'> => {
     if (ctx.windows.kindOf(e.sender) !== 'dictation-pill') throw notulaError('invalid-input', 'the bar only')
     const action = p?.action
     if (typeof action !== 'string' || !(ACTIONS as readonly string[]).includes(action)) throw notulaError('invalid-input', 'unknown action')
-    bar.action(action as DictationBarAction)
+    const anchorX = typeof p.anchorX === 'number' && Number.isFinite(p.anchorX) ? p.anchorX : undefined
+    bar.action(action as DictationBarAction, anchorX)
+  })
+
+  ipcMain.on('dictation-bar:menu-pick' satisfies SendChannel, (e, p: { id?: unknown }) => {
+    if (ctx.windows.kindOf(e.sender) !== 'dictation-bar-menu') return
+    bar.menuPick(typeof p?.id === 'string' ? p.id : null)
   })
 
   ipcMain.on('dictation-bar:hit-rects' satisfies SendChannel, (e, p: { rects?: unknown }) => {

@@ -1,12 +1,260 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /* The dictation bar: the pill window's bar mode. The window is the
    pill's 320 × 180 transparent window; the bar sits 12 DIP above its bottom edge, which main
-   puts on the work area's bottom edge. Resting is 60 % opacity; hover or a menu makes it 100 %. */
+   puts on the work area's bottom edge. */
 
 .dict-pill-root--bar {
+  /* The house ease: almost every bar transition is 100 ms on this curve. */
+  --dbar-ease: cubic-bezier(0.05, 0.6, 0.4, 0.95);
+  /* The record button's 200 ms spring, sampled; no overshoot. */
+  --dbar-spring: linear(
+    0.0015, 0.0214 2.13%, 0.0739 4.26%, 0.1638 6.93%, 0.479 15.46%, 0.5791 18.66%, 0.6512 21.32%,
+    0.832 30.92%, 0.8757 34.65%, 0.9126 38.91%, 0.9418 43.71%, 0.9633 49.04%, 0.9781 54.9%,
+    0.9882 61.83%, 0.9948 70.89%, 0.9982 82.09%, 0.9997 99.68%, 1
+  );
   position: relative;
   padding-bottom: 12px;
 }
+
+/* ---------- compact: the hot area, the bubble and its right-hand buttons ---------- */
+
+/* The hot area. The bubble stays centred on the window and grows from its bottom edge, so the
+   row is anchored half a bubble left of the centre and the buttons hang off the right. */
+.dbar {
+  position: absolute;
+  bottom: 6px;
+  left: 50%;
+  z-index: 0;
+  display: flex;
+  align-items: flex-end;
+  margin-left: -30px;
+  padding: 6px 10px;
+  cursor: default;
+  transition: margin-left 100ms var(--dbar-ease);
+  animation: dbar-fade-in 100ms ease both;
+}
+
+.dbar.is-ready {
+  margin-left: -35px;
+}
+
+/* While expanded, 12 px of invisible slack around the hot area keeps small drift from
+   collapsing the bar. It sits under the buttons. */
+.dbar-slack {
+  position: absolute;
+  inset: -12px;
+  z-index: -1;
+}
+
+.dbar-bubble {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 40px;
+  height: 8px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  box-sizing: border-box;
+  cursor: pointer;
+  transition: all 100ms var(--dbar-ease);
+}
+
+.dbar.is-ready .dbar-bubble {
+  width: 50px;
+  height: 30px;
+  border-color: #30302f;
+  border-radius: 22.5px;
+  background: #000;
+}
+
+.dbar.is-ready .dbar-bubble:hover {
+  border-color: #5b5b59;
+  background: #30302f;
+}
+
+.dbar-bubble svg {
+  width: 16px;
+  height: 16px;
+}
+
+.dbar-picks {
+  display: flex;
+  align-items: center;
+  transition: padding 100ms var(--dbar-ease);
+}
+
+.dbar.is-ready .dbar-picks {
+  padding: 0 12px 0 2px;
+}
+
+/* Hidden pickers: visibility, size and pointer events snap, so on collapse they vanish at once
+   while the bubble shrinks; on expand they scale and fade in from their centre. */
+.dbar-rec,
+.dbar-note {
+  flex: none;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  transform: scale(0);
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.dbar.is-ready .dbar-rec,
+.dbar.is-ready .dbar-note {
+  width: 30px;
+  height: 30px;
+  opacity: 1;
+  transform: scale(1);
+  visibility: visible;
+  pointer-events: auto;
+}
+
+/* The record button and the pill behind it; on hover or focus they widen and the chevron
+   slides out from under the circle. */
+.dbar-rec {
+  position: relative;
+  transition:
+    opacity 100ms var(--dbar-ease),
+    transform 100ms var(--dbar-ease),
+    width 200ms var(--dbar-spring);
+}
+
+.dbar.is-ready .dbar-rec:hover,
+.dbar.is-ready .dbar-rec:focus-within {
+  width: 54px;
+}
+
+.dbar-rec__pill {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  border: 1.5px solid transparent;
+  border-radius: 15px;
+  background: #1a1a1a;
+  box-sizing: border-box;
+  overflow: hidden;
+  transition: border-color 50ms ease;
+}
+
+.dbar-rec:hover .dbar-rec__pill,
+.dbar-rec:focus-within .dbar-rec__pill {
+  border-color: #30302f;
+}
+
+.dbar-chev {
+  display: grid;
+  place-items: center;
+  flex: none;
+  min-width: 22px;
+  height: 22px;
+  margin-right: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #878683;
+  cursor: pointer;
+  transition: color 100ms ease;
+}
+
+.dbar-chev:hover {
+  color: #fff;
+}
+
+.dbar-chev svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* The round buttons. Their hover highlight is instant (no transition) and nothing scales on
+   press. */
+.dbar-circle {
+  position: relative;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1.5px solid #30302f;
+  border-radius: 50%;
+  background: #000;
+  color: #f4f4f2;
+  box-sizing: border-box;
+  cursor: pointer;
+}
+
+.dbar-circle:hover {
+  border-color: #5b5b59;
+  background: #30302f;
+  color: #fff;
+}
+
+.dbar-circle svg {
+  width: 16px;
+  height: 16px;
+}
+
+.dbar-circle--rec {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  width: 30px;
+  height: 30px;
+  color: #c9c8c5;
+}
+
+.dbar-note {
+  margin-left: 0;
+  border-width: 0;
+  transition:
+    opacity 100ms var(--dbar-ease),
+    transform 100ms var(--dbar-ease),
+    width 100ms var(--dbar-ease),
+    margin 100ms var(--dbar-ease);
+}
+
+.dbar.is-ready .dbar-note {
+  margin-left: 2px;
+  border-width: 1.5px;
+}
+
+.dbar-dot {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px #1a1a1a;
+}
+
+.dbar-dot--ready {
+  background: #10b981;
+}
+
+.dbar-dot--permission {
+  background: #e9a23b;
+}
+
+.dbar-bubble:focus-visible,
+.dbar-circle:focus-visible,
+.dbar-chev:focus-visible {
+  outline: 2px solid #b9c0ff;
+  outline-offset: 1px;
+}
+
+@keyframes dbar-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* ---------- wide: the recording bar ---------- */
 
 .dbar-pill {
   display: flex;
@@ -23,12 +271,7 @@
     0 6px 20px rgba(0, 0, 0, 0.28);
   box-sizing: border-box;
   cursor: default;
-  transition: opacity var(--dur-fast) var(--ease);
   animation: dict-pill-in 160ms var(--ease) both;
-}
-
-.dbar-pill--resting {
-  opacity: 0.6;
 }
 
 .dbar-pill--wide {
@@ -83,24 +326,6 @@
   background: #ef5f63;
 }
 
-.dbar-dot {
-  position: absolute;
-  top: 5px;
-  right: 5px;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  box-shadow: 0 0 0 2px rgba(24, 24, 22, 0.94);
-}
-
-.dbar-dot--ready {
-  background: #3fb871;
-}
-
-.dbar-dot--permission {
-  background: #e9a23b;
-}
-
 .dbar-time {
   display: flex;
   align-items: center;
@@ -123,32 +348,46 @@
   }
 }
 
+/* ---------- the tooltip ---------- */
+
+/* One shared tooltip, placed by the view (centred on the button, 4 px above it, 12 px inside
+   the window). It fades in and vanishes at once; between buttons it jumps, or slides on macOS. */
 .dbar-tip {
   position: absolute;
-  bottom: 60px;
-  transform: translateX(-50%);
   display: flex;
   align-items: baseline;
-  gap: 6px;
-  padding: 6px 10px;
-  border-radius: 8px;
-  background: rgba(24, 24, 22, 0.96);
-  color: #f4f4f2;
-  font: 500 12px/1.2 var(--font-sans);
+  gap: 4px;
+  padding: 6px 14px;
+  border: 1px solid #30302f;
+  border-radius: 34px;
+  background: #000;
+  color: #fff;
+  font: 400 15px/20px var(--font-sans);
   white-space: nowrap;
+  box-sizing: border-box;
   pointer-events: none;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
-  animation: dict-pill-in 120ms var(--ease) both;
+  animation: dbar-fade-in 120ms ease both;
+}
+
+.dbar-tip--slide {
+  transition: left 180ms ease;
 }
 
 .dbar-tip__key {
   font-weight: 700;
 }
 
+/* Reduced motion: the record button and the tooltip slide stop; the bubble
+   morph, the notes button and the tooltip fade stay. */
 @media (prefers-reduced-motion: reduce) {
   .dbar-pill,
-  .dbar-tip,
   .dbar-live {
     animation: none;
+  }
+
+  .dbar-rec,
+  .dbar-rec__pill,
+  .dbar-tip--slide {
+    transition: none;
   }
 }

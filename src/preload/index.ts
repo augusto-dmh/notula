@@ -851,7 +851,15 @@ const api: NotulaApi = {
     },
     action: (req) => ipcRenderer.invoke('dictation-bar:action' satisfies InvokeChannel, req),
     reportHitRects: (p) => ipcRenderer.send('dictation-bar:hit-rects' satisfies SendChannel, p),
-    drag: (p) => ipcRenderer.send('dictation-bar:drag' satisfies SendChannel, p)
+    drag: (p) => ipcRenderer.send('dictation-bar:drag' satisfies SendChannel, p),
+    onMenu: (cb) => {
+      const listener = (_e: IpcRendererEvent, p: PushPayload<'dictation-bar:menu'>): void => cb(p)
+      ipcRenderer.on('dictation-bar:menu' satisfies PushChannel, listener)
+      return () => {
+        ipcRenderer.removeListener('dictation-bar:menu' satisfies PushChannel, listener)
+      }
+    },
+    pickMenu: (p) => ipcRenderer.send('dictation-bar:menu-pick' satisfies SendChannel, p)
   },
   netdoctor: {
     run: () => ipcRenderer.invoke('netdoctor:run' satisfies InvokeChannel),

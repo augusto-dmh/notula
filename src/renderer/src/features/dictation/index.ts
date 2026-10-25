@@ -9,12 +9,18 @@ import { Switch } from '../settings/controls'
 import { SettingsRow } from '../settings/primitives'
 import { setPrefs, usePrefs } from '../settings/prefs-store'
 import { ChatVoiceButton } from './ChatVoice'
+import { DictationBarMenuView } from './DictationBarMenu'
 import { DictationPill } from './Pill'
 import { VoiceTypingSettingsView } from './VoiceTypingSettings'
 
 /** `#/dictation-pill`. */
 export function DictationPillRoot(): JSX.Element {
   return createElement(DictationPill)
+}
+
+/** `#/dictation-bar-menu`: the bar menu overlay. */
+export function DictationBarMenuRoot(): JSX.Element {
+  return createElement(DictationBarMenuView)
 }
 
 /** Settings ▸ Voice typing (shown while `voiceTyping.enabled`). */

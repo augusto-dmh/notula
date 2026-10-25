@@ -13,15 +13,17 @@
 //   lets the mouse in only while the cursor is inside one of them.
 // - Buttons: mic (the session's hands-free toggle, from registerDictation), record (a new note
 //   with transcription, or stop the running capture), notes (the Scratchpad, or the live note).
-// - The chevron / right-click menu is a native popup; the tray item lives in the tray module.
+// - The chevron / right-click menu is an in-app panel in a transparent, non-focusable overlay over
+//   the bar's display; a click outside the panel lands on the overlay
+//   and closes it. The tray item lives in the tray module.
 
 import { readFileSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { Menu, screen, systemPreferences, type BrowserWindow, type MenuItemConstructorOptions } from 'electron'
+import { screen, systemPreferences, type BrowserWindow } from 'electron'
 import type { PushChannel } from '@shared/ipc'
 import type { DictationState } from '@shared/types/dictation'
-import { DICTATION_BAR_LIMITS as BAR, type DictationBarAction, type DictationBarCaptureReady, type DictationBarMode, type DictationBarRect, type DictationBarState } from '@shared/types/dictation-bar'
+import { DICTATION_BAR_LIMITS as BAR, type DictationBarAction, type DictationBarCaptureReady, type DictationBarMenu, type DictationBarMenuEntry, type DictationBarMode, type DictationBarRect, type DictationBarState } from '@shared/types/dictation-bar'
 import { DICTATION_LIMITS as L } from '@shared/types/dictation'
 import type { Settings } from '@shared/types/settings'
 import type { MainContext } from '../context'
@@ -53,7 +55,10 @@ export class DictationBar {
   private captureReady: DictationBarCaptureReady = 'ready'
   private offsets: Record<string, number> = {}
   private error: { text: string; timer: ReturnType<typeof setTimeout> } | null = null
-  private openMenu: Menu | null = null
+  private menuWin: BrowserWindow | null = null
+  private menuOpen = false
+  private menuPoll: ReturnType<typeof setInterval> | null = null
+  private menuHide: ReturnType<typeof setTimeout> | null = null
   private synced = false
   private readonly file: string
 
@@ -113,6 +118,7 @@ export class DictationBar {
       this.hovered = false
       this.rects = []
       this.dragging = null
+      this.closeMenu()
     }
     this.schedule()
   }
@@ -150,7 +156,7 @@ export class DictationBar {
     else if (dict.kind === 'processing') mode = 'processing'
     else if (dict.kind === 'error' || this.error) mode = 'error'
     else if (this.capture) mode = 'recording'
-    else mode = this.hovered ? 'ready' : 'resting'
+    else mode = this.hovered || this.menuOpen ? 'ready' : 'resting'
     return {
       enabled: this.enabled(),
       layout: active || this.capture ? 'wide' : 'compact',
@@ -169,7 +175,10 @@ export class DictationBar {
     this.captureReady = this.readiness()
     const active = this.d.dictation().kind !== 'idle'
     const up = active || this.barShown()
+    if (this.menuOpen && (!up || active || this.capture)) this.closeMenu()
     if (!w) return up
+    // The menu overlay loads while the bar is up, so the first chevron click finds it mounted.
+    if (up && this.enabled()) this.overlay()
     w.webContents.send('dictation-bar:state' satisfies PushChannel, this.state())
     if (up && !w.isVisible()) {
       this.place(w)
@@ -295,25 +304,28 @@ export class DictationBar {
     const w = this.d.pill()
     if (!w) return
     if (this.dragging) return
-    let inside = false
-    if (hovered) {
-      const p = screen.getCursorScreenPoint()
-      const b = w.getBounds()
-      const x = p.x - b.x
-      const y = p.y - b.y
-      const pad = 6
-      inside = this.rects.some((r) => x >= r.x - pad && x <= r.x + r.width + pad && y >= r.y - pad && y <= r.y + r.height + pad)
-    }
+    const inside = hovered && this.cursorInside(w)
     w.setIgnoreMouseEvents(!inside, { forward: true })
+    log('debug', 'dictation-bar:hover', { hovered, inside })
     if (inside !== this.hovered) {
       this.hovered = inside
       this.refresh()
     }
   }
 
+  private cursorInside(w: BrowserWindow): boolean {
+    const p = screen.getCursorScreenPoint()
+    const b = w.getBounds()
+    const x = p.x - b.x
+    const y = p.y - b.y
+    const pad = 6
+    return this.rects.some((r) => x >= r.x - pad && x <= r.x + r.width + pad && y >= r.y - pad && y <= r.y + r.height + pad)
+  }
+
   // ---------- actions ----------
 
-  action(a: DictationBarAction): void {
+  /** `anchorX`: the opener's centre x in the pill window, for the menu. */
+  action(a: DictationBarAction, anchorX?: number): void {
     switch (a) {
       case 'dictate':
         return this.d.dictate()
@@ -322,7 +334,7 @@ export class DictationBar {
       case 'notes':
         return this.openNotes()
       case 'menu':
-        return this.menu()
+        return this.menu(anchorX)
       case 'snooze':
         return void this.d.ctx.settings.set('dictationBar.snoozeUntil', Date.now() + BAR.snoozeMs)
       case 'hide':
@@ -365,47 +377,153 @@ export class DictationBar {
     main.webContents.send('deeplink:received' satisfies PushChannel, { type: 'open', data: { path: '/scratchpad' } })
   }
 
-  /** The chevron toggles the menu; it opens above the bar's right end, never at the cursor. */
-  private menu(): void {
-    const w = this.d.pill()
-    if (!w) return
-    if (this.openMenu) {
-      this.openMenu.closePopup(w)
-      this.openMenu = null
-      return
-    }
+  // ---------- the menu ----------
+
+  /** The overlay the menu draws in: the bar display's work area, transparent and never focused. */
+  private overlay(): BrowserWindow {
+    if (this.menuWin && !this.menuWin.isDestroyed()) return this.menuWin
+    const mac = process.platform === 'darwin'
+    const w = this.d.ctx.windows.createSecondary({
+      kind: 'dictation-bar-menu',
+      route: '/dictation-bar-menu',
+      title: 'Dictation bar menu',
+      width: 400,
+      height: 300,
+      resizable: false,
+      minimizable: false,
+      maximizable: false,
+      fullscreenable: false,
+      focusable: false,
+      skipTaskbar: true,
+      alwaysOnTop: true,
+      frame: false,
+      transparent: true,
+      hasShadow: false,
+      backgroundColor: '#00000000',
+      ...(mac ? { type: 'panel', hiddenInMissionControl: true } : {})
+    })
+    w.setAlwaysOnTop(true, 'screen-saver')
+    w.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+    w.setContentProtection(true)
+    w.setIgnoreMouseEvents(true)
+    w.on('closed', () => {
+      if (this.menuWin !== w) return
+      this.menuWin = null
+      this.menuOpen = false
+    })
+    this.menuWin = w
+    return w
+  }
+
+  private menuItems(): DictationBarMenuEntry[] {
     const capturing = this.d.ctx.capture.isCapturing()
     const mic = this.settings?.['dictation.microphone'] ?? null
     const micLabel = mic && mic !== 'system-default' ? mic.label || 'Selected microphone' : 'System default'
-    const template: MenuItemConstructorOptions[] = [
-      { label: capturing ? 'Stop recording' : 'Start recording', click: () => this.toggleRecord() },
+    const items: DictationBarMenuEntry[] = [
+      capturing ? { kind: 'item', id: 'record', label: 'Stop recording', icon: 'stop' } : { kind: 'item', id: 'record', label: 'Start recording', icon: 'record' },
       {
+        kind: 'item',
+        id: 'mic',
         label: 'Choose microphone',
+        icon: 'mic',
         submenu: [
-          { label: micLabel, type: 'radio', checked: true, enabled: false },
-          { type: 'separator' },
-          { label: 'Microphone settings…', click: () => openSettingsSection('voice-typing', 'dictation-bar') }
+          { kind: 'item', id: 'mic-current', label: micLabel, checked: true },
+          { kind: 'separator' },
+          { kind: 'item', id: 'mic-settings', label: 'Microphone settings…', icon: 'settings' }
         ]
-      },
-      ...(this.settings?.['scratchpad.enabled'] ? [{ label: 'Open scratchpad', click: () => this.openNotes(true) }] : []),
-      { type: 'separator' },
-      { label: 'Hide for 1 hour', click: () => this.action('snooze') },
-      { label: 'Hide bar', click: () => this.action('hide') },
-      { type: 'separator' },
-      { label: 'Settings…', click: () => openSettingsSection('voice-typing', 'dictation-bar') }
-    ]
-    const menu = Menu.buildFromTemplate(template)
-    this.openMenu = menu
-    const last = this.rects[this.rects.length - 1]
-    log('debug', 'dictation-bar:menu-open')
-    menu.popup({
-      window: w,
-      x: Math.round(last ? last.x + last.width : L.pill.width / 2),
-      y: Math.round(last ? last.y : L.pill.height - 52),
-      callback: () => {
-        log('debug', 'dictation-bar:menu-closed')
-        if (this.openMenu === menu) this.openMenu = null
       }
-    })
+    ]
+    if (this.settings?.['scratchpad.enabled']) items.push({ kind: 'item', id: 'scratchpad', label: 'Open scratchpad', icon: 'notes' })
+    items.push(
+      { kind: 'separator' },
+      { kind: 'item', id: 'snooze', label: 'Hide for 1 hour', icon: 'snooze' },
+      { kind: 'item', id: 'hide', label: 'Hide bar', icon: 'hide' },
+      { kind: 'separator' },
+      { kind: 'item', id: 'settings', label: 'Settings…', icon: 'settings' }
+    )
+    return items
+  }
+
+  /** The chevron toggles the menu. It opens upward, centred on the opener, 6 px above the bar. */
+  private menu(anchorX?: number): void {
+    if (this.menuOpen) return this.closeMenu()
+    const pill = this.d.pill()
+    if (!pill?.isVisible()) return
+    const w = this.overlay()
+    if (w.webContents.isLoading()) {
+      w.webContents.once('did-finish-load', () => setTimeout(() => this.menu(anchorX), 250))
+      return
+    }
+    const d = this.display()
+    const wa = d.workArea
+    // Windows: 2 px short of the work area.
+    const area = { x: wa.x, y: wa.y, width: wa.width, height: wa.height - (process.platform === 'win32' ? 2 : 0) }
+    const b = pill.getBounds()
+    const panelBottom = b.y + b.height - BAR.bottomGapDip - BAR.barHeightPx - BAR.menuGapPx
+    const menu: DictationBarMenu = {
+      open: true,
+      items: this.menuItems(),
+      anchor: { x: b.x + (anchorX ?? b.width / 2) - area.x, bottom: area.y + area.height - panelBottom }
+    }
+    if (this.menuHide) clearTimeout(this.menuHide)
+    this.menuHide = null
+    w.setBounds(area)
+    w.setIgnoreMouseEvents(false)
+    w.webContents.send('dictation-bar:menu' satisfies PushChannel, menu)
+    if (!w.isVisible()) w.showInactive()
+    w.moveTop()
+    this.menuOpen = true
+    log('debug', 'dictation-bar:menu-open')
+    this.refresh()
+    this.menuPoll = setInterval(() => {
+      if (screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).id !== d.id) this.closeMenu()
+    }, BAR.menuDisplayPollMs)
+  }
+
+  /** Closes at once (no exit motion). The bar stays expanded only while the cursor is on it. */
+  private closeMenu(): void {
+    if (!this.menuOpen) return
+    this.menuOpen = false
+    if (this.menuPoll) clearInterval(this.menuPoll)
+    this.menuPoll = null
+    const w = this.menuWin
+    if (w && !w.isDestroyed()) {
+      w.setIgnoreMouseEvents(true)
+      const closed: DictationBarMenu = { open: false, items: [], anchor: { x: 0, bottom: 0 } }
+      w.webContents.send('dictation-bar:menu' satisfies PushChannel, closed)
+      // Hide once the empty frame has painted, so the next open never flashes the old panel.
+      this.menuHide = setTimeout(() => {
+        this.menuHide = null
+        if (!this.menuOpen && !w.isDestroyed()) w.hide()
+      }, 150)
+    }
+    log('debug', 'dictation-bar:menu-closed')
+    setTimeout(() => {
+      if (this.menuOpen) return
+      const pill = this.d.pill()
+      if (pill && !this.cursorInside(pill)) {
+        this.hovered = false
+        pill.setIgnoreMouseEvents(true, { forward: true })
+      }
+      this.refresh()
+    }, BAR.menuCollapseMs)
+  }
+
+  /** From the overlay: a row, or null for a click outside the panel. */
+  menuPick(id: string | null): void {
+    if (!this.menuOpen) return
+    this.closeMenu()
+    switch (id) {
+      case 'record':
+        return this.toggleRecord()
+      case 'scratchpad':
+        return this.openNotes(true)
+      case 'snooze':
+      case 'hide':
+        return this.action(id)
+      case 'settings':
+      case 'mic-settings':
+        return openSettingsSection('voice-typing', 'dictation-bar')
+    }
   }
 }

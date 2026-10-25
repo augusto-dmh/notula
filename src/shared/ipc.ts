@@ -103,7 +103,7 @@ import type {
   DictationState,
   DictationStatus
 } from './types/dictation'
-import type { DictationBarAction, DictationBarRect, DictationBarState, HookStatus } from './types/dictation-bar'
+import type { DictationBarAction, DictationBarMenu, DictationBarRect, DictationBarState, HookStatus } from './types/dictation-bar'
 import type { DispatchList, DispatchStatus, DispatchTodoStatus } from './types/dispatch'
 import type {
   ActiveGeneration,
@@ -758,7 +758,8 @@ export interface InvokeChannels {
 
   // ---------- the dictation bar ----------
   /** From the pill window only. */
-  'dictation-bar:action': [{ action: DictationBarAction }, void]
+  /** `anchorX`: the opener's centre x, window-relative DIP (the menu centres on it). */
+  'dictation-bar:action': [{ action: DictationBarAction; anchorX?: number }, void]
 
   // ---------- content sources (Windows; refused while locked) ----------
   'sources:get-status': [void, SourcesStatus]
@@ -915,6 +916,8 @@ export interface SendChannels {
   'dictation-bar:hit-rects': { rects: DictationBarRect[] }
   /** Horizontal drag along the bottom edge; `screenX` in DIP. */
   'dictation-bar:drag': { phase: 'start' | 'move' | 'end'; screenX: number }
+  /** From the menu overlay: the picked row, or null for a click outside the panel. */
+  'dictation-bar:menu-pick': { id: string | null }
   /** Main applies the Reposition switch to `join`. */
   'window:mode': { mode: WindowMode; reason?: WindowModeReason }
   'window:ensure-min-width': { width: number }
@@ -1080,6 +1083,8 @@ export interface PushChannels {
   // ---------- the dictation bar ----------
   /** The pill window. */
   'dictation-bar:state': DictationBarState
+  /** The menu overlay. */
+  'dictation-bar:menu': DictationBarMenu
   'shortcuts:hook-status': HookStatus
 
   // ---------- content sources ----------
@@ -1560,6 +1565,9 @@ export interface NotulaApi {
     action: InvokeMember<'dictation-bar:action'>
     reportHitRects: SendMember<'dictation-bar:hit-rects'>
     drag: SendMember<'dictation-bar:drag'>
+    /** The menu overlay window. */
+    onMenu: PushMember<'dictation-bar:menu'>
+    pickMenu: SendMember<'dictation-bar:menu-pick'>
   }
   netdoctor: {
     run: InvokeMember<'netdoctor:run'>

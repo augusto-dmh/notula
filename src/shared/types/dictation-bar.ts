@@ -26,6 +26,21 @@ export interface DictationBarState {
 /** `dictation-bar:action`. `reset-position` is the double-click. */
 export type DictationBarAction = 'dictate' | 'record' | 'notes' | 'menu' | 'snooze' | 'hide' | 'reset-position'
 
+/** A row's leading glyph in the bar menu. */
+export type DictationBarMenuIcon = 'record' | 'stop' | 'mic' | 'notes' | 'snooze' | 'hide' | 'settings'
+
+export type DictationBarMenuEntry =
+  | { kind: 'item'; id: string; label: string; icon?: DictationBarMenuIcon; checked?: boolean; disabled?: boolean; submenu?: DictationBarMenuEntry[] }
+  | { kind: 'separator' }
+
+/** `dictation-bar:menu`, main → the menu overlay. `anchor` is overlay-relative DIP: the opener's
+ *  centre x, and the panel's bottom edge as a distance from the overlay's bottom. */
+export interface DictationBarMenu {
+  open: boolean
+  items: DictationBarMenuEntry[]
+  anchor: { x: number; bottom: number }
+}
+
 export interface DictationBarRect {
   x: number
   y: number
@@ -46,7 +61,22 @@ export const DICTATION_BAR_LIMITS = {
   dragThresholdPx: 3,
   /** Bar bottom above the work area. */
   bottomGapDip: 12,
-  tooltipDelayMs: 400,
+  /** Tooltip delay on a button; 0 when a tooltip is already showing. */
+  tooltipDelayMs: 50,
+  /** The mic tooltip after the bar expands. */
+  bubbleTooltipDelayMs: 150,
+  /** A hover change applies at once, then holds further changes this long. */
+  hoverLockMs: 100,
+  /** The menu panel's bottom edge above the expanded bar's top. */
+  menuGapPx: 6,
+  /** The expanded bar's height. */
+  barHeightPx: 30,
+  /** Close the menu when the cursor moves to another display (polled). */
+  menuDisplayPollMs: 400,
+  /** After the menu closes, collapse the bar if the cursor is off it. */
+  menuCollapseMs: 50,
+  /** The expand's longest transition (the record button's 200 ms spring), plus a frame. */
+  expandSettleMs: 210,
   errorMs: 4_000,
   snoozeMs: 3_600_000,
   fullscreenPollMs: 2_000

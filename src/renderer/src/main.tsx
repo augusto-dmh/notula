@@ -40,6 +40,8 @@ function rootFor(hash: string): ComponentType {
       return lazy(() => import('./features/quick-ask').then((m) => ({ default: m.QuickAskRoot })))
     case '/dictation-pill':
       return lazy(() => import('./features/dictation').then((m) => ({ default: m.DictationPillRoot })))
+    case '/dictation-bar-menu':
+      return lazy(() => import('./features/dictation').then((m) => ({ default: m.DictationBarMenuRoot })))
     case '/screen-corner':
       return lazy(() => import('./features/window-modes').then((m) => ({ default: m.ScreenCornerRoot })))
     case '/window-preview':

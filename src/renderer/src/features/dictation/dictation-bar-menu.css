@@ -1,0 +1,135 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* The dictation bar's menu overlay: a transparent window over the bar's display with one light
+   panel (and a flyout) in it. */
+
+html.dbm-doc,
+html.dbm-doc body {
+  margin: 0;
+  background: transparent !important;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* The backdrop: a click on it, outside any panel, closes the menu. */
+.dbm-root {
+  position: fixed;
+  inset: 0;
+}
+
+.dbm-panel {
+  position: absolute;
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  max-height: 250px;
+  overflow-y: auto;
+  padding: 5px;
+  border: 1px solid #eeebe3;
+  border-radius: 10px;
+  background: #fcfcfb;
+  color: #1a1a1a;
+  font: 400 15px/20px var(--font-sans);
+  box-shadow:
+    0 25px 50px -12px rgb(26 26 26 / 0.25),
+    0 8px 10px -6px rgb(26 26 26 / 0.1);
+  box-sizing: border-box;
+}
+
+/* Opens with a 4 px rise; the flyout and every close have no motion. */
+.dbm-panel--main {
+  animation: dbm-rise 150ms cubic-bezier(0, 0, 0.58, 1) both;
+}
+
+@keyframes dbm-rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+.dbm-panel::-webkit-scrollbar {
+  width: 6px;
+}
+
+.dbm-panel::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: #c5c0b3;
+}
+
+.dbm-row {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  min-width: 240px;
+  height: 32px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+  box-sizing: border-box;
+  cursor: default;
+}
+
+/* The highlight is instant; there is no press style. */
+.dbm-row:hover:not(:disabled),
+.dbm-row.is-open {
+  background: #f5f4f0;
+}
+
+.dbm-row:disabled {
+  opacity: 0.6;
+}
+
+.dbm-row.is-checked {
+  padding: 6px;
+}
+
+.dbm-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+}
+
+.dbm-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.dbm-check {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+}
+
+.dbm-check svg {
+  width: 14px;
+  height: 14px;
+}
+
+.dbm-label {
+  flex: 1;
+}
+
+.dbm-more {
+  margin-left: auto;
+}
+
+.dbm-sep {
+  flex: none;
+  padding: 4px 6px;
+}
+
+.dbm-sep span {
+  display: block;
+  height: 1px;
+  background: #eeebe3;
+}

@@ -72,6 +72,7 @@ export type SecondaryKind =
   | 'screen-guide-spotlight'
   | 'quick-ask'
   | 'dictation-pill'
+  | 'dictation-bar-menu'
   | 'screen-corner'
   | 'window-preview'
   // Content windows, hidden while Notula is locked
