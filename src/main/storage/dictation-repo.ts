@@ -6,6 +6,9 @@
 // dropped with its row (crypto-shredding, as recordings do). `dictation_sessions_ad`
 // queues `rel:dictation-audio/<id>` whenever a row with a key goes; clearing the key of a
 // kept row (`audio_purge_at: null` after a sweep or a Retry) queues the file here.
+//
+// `speech_duration_ms` and `word_count` are usage: forgetting a dictation (Clear all,
+// Delete) removes its text and audio but keeps a row that has a word count.
 
 import type { IsoTime } from '@shared/types/common'
 import type { DictationAttempt, DictationAttemptStatus, DictationFailureReason } from '@shared/types/dictation'
@@ -14,11 +17,13 @@ import { nowIso, toBuffer } from './rows'
 import { inTransaction, invalid, notFound, type StoreCtx } from './store'
 import { processFileDeletions } from './trash-repo'
 
-const COLS = 'id, created_at, status, failure_reason, language, audio_duration_ms, text, audio_purge_at, audio_key'
+const COLS = 'id, created_at, status, failure_reason, language, audio_duration_ms, text, audio_purge_at, audio_key, speech_duration_ms, word_count'
 const STATUSES: readonly DictationAttemptStatus[] = ['recording', 'pasted', 'clipboard', 'delivery_failed', 'empty', 'failed', 'cancelled', 'retried']
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const ISO = /^\d{4}-\d{2}-\d{2}T/
 const MAX_IDS = 10_000
+
+const optInt = (v: unknown): number | null => (v === null || v === undefined ? null : Math.max(0, Math.round(Number(v) || 0)))
 
 function toRow(r: Record<string, unknown>): DictationAttemptRow {
   const key = r['audio_key']
@@ -32,6 +37,8 @@ function toRow(r: Record<string, unknown>): DictationAttemptRow {
     text: typeof r['text'] === 'string' ? r['text'] : null,
     audio_purge_at: typeof r['audio_purge_at'] === 'string' ? r['audio_purge_at'] : null,
     has_audio: key instanceof Uint8Array && key.byteLength > 0,
+    speech_duration_ms: optInt(r['speech_duration_ms']),
+    word_count: optInt(r['word_count']),
     audio_key: key instanceof Uint8Array && key.byteLength > 0 ? key : null
   }
 }
@@ -80,10 +87,20 @@ export function updateDictationAttempt(s: StoreCtx, id: string, patch: Dictation
   inTransaction(s.db, () => {
     s.db
       .prepare(
-        `UPDATE dictation_sessions SET status = ?, failure_reason = ?, language = ?, audio_duration_ms = ?, text = ?, audio_purge_at = ?
-           ${dropKey ? ', audio_key = NULL' : ''} WHERE id = ?`
+        `UPDATE dictation_sessions SET status = ?, failure_reason = ?, language = ?, audio_duration_ms = ?, text = ?, audio_purge_at = ?,
+           speech_duration_ms = ?, word_count = ? ${dropKey ? ', audio_key = NULL' : ''} WHERE id = ?`
       )
-      .run(next.status, next.failure_reason ?? null, next.language ?? null, Math.max(0, Math.round(Number(next.audio_duration_ms) || 0)), next.text ?? null, next.audio_purge_at ?? null, id)
+      .run(
+        next.status,
+        next.failure_reason ?? null,
+        next.language ?? null,
+        Math.max(0, Math.round(Number(next.audio_duration_ms) || 0)),
+        next.text ?? null,
+        next.audio_purge_at ?? null,
+        optInt(next.speech_duration_ms),
+        optInt(next.word_count),
+        id
+      )
     if (dropKey) queueFile(s, id)
   })
   s.touch('dictation_sessions', id)
@@ -101,7 +118,7 @@ export function getDictationAttempt(s: StoreCtx, id: string): DictationAttemptRo
   return typeof id === 'string' ? read(s, id) : null
 }
 
-export function deleteDictationAttempts(s: StoreCtx, q: { ids?: string[]; all?: true; expiredBefore?: IsoTime }): { deleted: string[] } {
+export function deleteDictationAttempts(s: StoreCtx, q: { ids?: string[]; all?: true; expiredBefore?: IsoTime; forget?: true }): { deleted: string[] } {
   if (!q || typeof q !== 'object') throw invalid('a query is required')
   let ids: string[]
   if (q.all === true) {
@@ -120,10 +137,38 @@ export function deleteDictationAttempts(s: StoreCtx, q: { ids?: string[]; all?: 
   } else {
     throw invalid('ids, all or expiredBefore is required')
   }
+  if (q.forget === true) return forget(s, ids)
   const deleted: string[] = []
   inTransaction(s.db, () => {
     const del = s.db.prepare(`DELETE FROM dictation_sessions WHERE id = ?`)
     for (const id of ids) if (del.run(id).changes) deleted.push(id)
+  })
+  if (deleted.length) s.touch('dictation_sessions', ...deleted)
+  return { deleted }
+}
+
+/**
+ * Forget: 1. drop each row's audio (key and file); 2. delete the rows without a word count;
+ * 3. clear the text and expiry of the rest. `deleted` lists every row touched.
+ */
+function forget(s: StoreCtx, ids: string[]): { deleted: string[] } {
+  const deleted: string[] = []
+  inTransaction(s.db, () => {
+    const get = s.db.prepare(`SELECT audio_key IS NOT NULL AS keyed, word_count FROM dictation_sessions WHERE id = ?`)
+    const dropKey = s.db.prepare(`UPDATE dictation_sessions SET audio_key = NULL WHERE id = ?`)
+    const del = s.db.prepare(`DELETE FROM dictation_sessions WHERE id = ?`)
+    const clear = s.db.prepare(`UPDATE dictation_sessions SET text = NULL, audio_purge_at = NULL WHERE id = ?`)
+    for (const id of ids) {
+      const r = get.get(id) as { keyed: number; word_count: number | null } | undefined
+      if (!r) continue
+      if (r.keyed) {
+        dropKey.run(id)
+        queueFile(s, id)
+      }
+      if (r.word_count === null) del.run(id)
+      else clear.run(id)
+      deleted.push(id)
+    }
   })
   if (deleted.length) s.touch('dictation_sessions', ...deleted)
   return { deleted }

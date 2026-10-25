@@ -45,11 +45,107 @@ html.dict-pill-doc body {
   justify-content: center;
 }
 
+.dict-pill--pasted,
 .dict-pill--copied,
 .dict-pill--empty,
-.dict-pill--saved,
 .dict-pill--error {
   padding: 0 16px;
+}
+
+.dict-pill--pasted {
+  min-width: 0;
+}
+
+/* The retry card: the same dark surface, taller, inside the window's 180 px. */
+.dict-pill--saved {
+  width: 280px;
+  max-width: 280px;
+  height: auto;
+  padding: 12px 12px 12px 16px;
+  border-radius: 14px;
+}
+
+.dict-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+}
+
+.dict-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.dict-card__title {
+  font-weight: 600;
+}
+
+.dict-card__line {
+  padding-right: 4px;
+  color: rgba(244, 244, 242, 0.7);
+  font-weight: 400;
+  line-height: 1.35;
+}
+
+.dict-card__close {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: rgba(244, 244, 242, 0.65);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.dict-card__close:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #f4f4f2;
+}
+
+.dict-card__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.dict-card__btn {
+  height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #f4f4f2;
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.dict-card__btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.dict-card__btn--primary {
+  background: #f4f4f2;
+  color: #181816;
+}
+
+.dict-card__btn--primary:hover {
+  background: #ffffff;
+}
+
+.dict-card__btn:focus-visible,
+.dict-card__close:focus-visible {
+  outline: 2px solid #b9c0ff;
+  outline-offset: 2px;
 }
 
 @keyframes dict-pill-in {

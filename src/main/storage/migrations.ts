@@ -1303,9 +1303,19 @@ CREATE TRIGGER source_series_folder_bd BEFORE DELETE ON folders BEGIN
 END;
 `
 
+/**
+ * Version 10: voice typing usage. Both columns stay null on older rows; a cleared or deleted
+ * dictation that has a word count keeps its row without its text or audio.
+ */
+const DICTATION_USAGE = `
+ALTER TABLE dictation_sessions ADD speech_duration_ms INTEGER;
+ALTER TABLE dictation_sessions ADD word_count INTEGER;
+`
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: BASELINE_VERSION, name: 'baseline', sql: BASELINE },
-  { version: 9, name: 'sources-and-imports', sql: SOURCES_AND_IMPORTS }
+  { version: 9, name: 'sources-and-imports', sql: SOURCES_AND_IMPORTS },
+  { version: 10, name: 'dictation-usage', sql: DICTATION_USAGE }
 ]
 
 /**

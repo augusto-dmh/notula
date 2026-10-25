@@ -5,7 +5,8 @@
 # line, {"id":n,"ok":true,...}. No network, no files. Ops:
 #   ping        -> {}
 #   foreground  -> {process, title, pid}
-#   context     -> {result, process, title, field:{name,type,password,editable}, before, after, selection}
+#   context     -> {result, process, title, field:{name,type,password,editable,multiline}, before, after, selection}
+#                  multiline: ES_MULTILINE of the field's own edit window; null without one
 #                  result: captured | empty | secure_input | error
 #   modifiers   -> {held:bool}   (Shift, Ctrl, Alt, Win)
 #   paste       -> {sent:bool}   (Ctrl+V into the foreground window)
@@ -42,6 +43,14 @@ public static class NotulaDesk {
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr h, StringBuilder s, int n);
   [DllImport("user32.dll")] public static extern IntPtr GetShellWindow();
   [DllImport("user32.dll")] public static extern IntPtr GetDesktopWindow();
+  [DllImport("user32.dll", EntryPoint = "GetWindowLongW")] public static extern int GetWindowLong(IntPtr h, int index);
+  // ES_MULTILINE (0x4) is an edit-class style bit, so only edit windows are read; -1 = unknown.
+  public static int EditMultiline(IntPtr h) {
+    if (h == IntPtr.Zero) return -1;
+    var cls = new StringBuilder(128); GetClassName(h, cls, 128);
+    if (cls.ToString().IndexOf("edit", StringComparison.OrdinalIgnoreCase) < 0) return -1;
+    return (GetWindowLong(h, -16) & 0x4) != 0 ? 1 : 0;
+  }
   // The monitor's top-left when the foreground window covers it entirely (not the desktop or the shell).
   public static int[] FullscreenMonitor() {
     IntPtr h = GetForegroundWindow();
@@ -93,7 +102,12 @@ function Context {
   try { $tp = $el.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern) } catch {}
   if ($null -ne $vp -and -not $vp.Current.IsReadOnly) { $editable = $true }
   if ($null -ne $tp) { $editable = $true }
-  $out.field = @{ name = (Clip $c.Name 240 $false); type = $c.ControlType.ProgrammaticName; password = [bool]$c.IsPassword; editable = $editable }
+  $multiline = $null
+  try {
+    $m = [NotulaDesk]::EditMultiline([IntPtr]$c.NativeWindowHandle)
+    if ($m -ge 0) { $multiline = ($m -eq 1) }
+  } catch {}
+  $out.field = @{ name = (Clip $c.Name 240 $false); type = $c.ControlType.ProgrammaticName; password = [bool]$c.IsPassword; editable = $editable; multiline = $multiline }
   if ($c.IsPassword) { $out.result = 'secure_input'; return $out }
   if ($null -ne $tp) {
     try {

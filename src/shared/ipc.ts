@@ -908,7 +908,7 @@ export interface SendChannels {
   'dictation:audio': { sessionId: string; pcm: Uint8Array }
   'dictation:capture-event': { sessionId: string; type: 'ready' | 'error'; error?: DictationMicError }
   'dictation:pill-action': {
-    action: 'finish' | 'cancel' | 'click' | 'show-settings' | 'hover'
+    action: 'finish' | 'cancel' | 'click' | 'show-settings' | 'hover' | 'retry' | 'open-history' | 'dismiss'
     hovered?: boolean
   }
   'dictation:chat-cancel': { sessionId: string }

@@ -9,7 +9,7 @@ import type { AsrProviderId } from './transcript'
 
 export type DictationTone = 'formal' | 'casual' | 'relaxed' | 'excited'
 export type DictationCategory = 'email' | 'work' | 'casual' | 'other'
-export type DictationTargetHint = 'email' | 'chat' | 'terminal'
+export type DictationTargetHint = 'email' | 'chat' | 'terminal' | 'ai-chat' | 'single-line' | 'code' | 'document'
 export type DictationRetention = 'off' | '24h' | '7d' | '14d'
 export type DictationAsrChoice = 'auto' | AsrProviderId
 export type DictationMicrophone = 'system-default' | { deviceId: string; label: string }
@@ -57,9 +57,13 @@ export interface DictationAttempt {
   text: string | null
   audio_purge_at: IsoTime | null
   has_audio: boolean
+  /** The speech meter's total for the attempt; null on rows from before it was kept. */
+  speech_duration_ms: number | null
+  /** Words delivered (pasted, copied or retried); null when no text was delivered. */
+  word_count: number | null
 }
 
-export type DictationStateKind = 'idle' | 'recording' | 'processing' | 'copied' | 'empty' | 'saved' | 'error'
+export type DictationStateKind = 'idle' | 'recording' | 'processing' | 'pasted' | 'copied' | 'empty' | 'saved' | 'error'
 
 /** `dictation:state` (pill window). */
 export interface DictationState {

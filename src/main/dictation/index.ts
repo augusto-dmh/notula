@@ -18,7 +18,11 @@
 // - While a session is active: the power-save blocker while recording, and bus
 //   `update:delay` (`dictationActive`) every second.
 // - Retention sweeps 5 min after start, hourly, and on a retention change; Retry re-reads
-//   the stored audio.
+//   the stored audio. A saved failure shows the pill's retry card: Retry re-transcribes the
+//   last saved attempt (as the settings Retry does) and delivers it into the focused app.
+// - Usage: every finish writes the speech meter's total (`speech_duration_ms`); delivered
+//   text writes its `word_count`. Clear all and Delete forget a dictation (its text and audio)
+//   but keep a row that has a word count.
 // - Chat voice input: its own recognizer per session id, audio on
 //   the same audio channel from the main window, plain text back, never formatted or pasted.
 // - The dictation bar: the pill's always-visible bar
@@ -50,8 +54,9 @@ import type { Settings } from '@shared/types/settings'
 import type { AsrProviderId } from '@shared/types/transcript'
 import type { MainContext } from '../context'
 import { FramedWriter, randomKey, readFramed } from '../crypto/blobs'
-import { showMainWindow } from '../lifecycle'
+import { openSettingsSection, showMainWindow } from '../lifecycle'
 import { log } from '../log'
+import type { DictationAttemptRow } from '../storage/api'
 import { RecognizerError, type SpeechRecognizer } from '../transcription/api'
 import { buildContextBlock, buildKeyterms } from './context'
 import { deliver } from './delivery'
@@ -60,7 +65,7 @@ import type { ChordEffect } from './chord-machine'
 import { DictationBar } from './dictation-bar'
 import { formatDictation, styleFor } from './format'
 import { HookShortcuts } from './hook'
-import { classifyTarget, type Target } from './targets'
+import { classifyTarget, finalHint, type Target } from './targets'
 
 const PLATFORM_OK = process.platform === 'win32' || process.platform === 'darwin'
 const RETENTION_MS: Record<Exclude<DictationRetention, 'off'>, number> = { '24h': 86_400_000, '7d': 7 * 86_400_000, '14d': 14 * 86_400_000 }
@@ -128,6 +133,18 @@ function asBuffer(pcm: unknown): Buffer | null {
   return null
 }
 
+/** An attempt whose audio is still stored. */
+type SavedRow = DictationAttemptRow & { audio_key: Uint8Array }
+
+const words = new Intl.Segmenter(undefined, { granularity: 'word' })
+
+/** Word-like segments, so languages without spaces count too. */
+function wordCount(text: string): number {
+  let n = 0
+  for (const seg of words.segment(text)) if (seg.isWordLike) n++
+  return n
+}
+
 function recognizerReason(err: unknown): DictationFailureReason {
   if (err instanceof RecognizerError) {
     if (err.reason === 'no-provider') return 'transcription_start'
@@ -150,6 +167,9 @@ export function registerDictation(ctx: MainContext): void {
   let startPress = 0
   let dismissTimer: ReturnType<typeof setTimeout> | null = null
   let hovered = false
+  /** The last attempt whose audio was saved: the retry card's target. */
+  let lastSaved: string | null = null
+  let retrying = false
   let blocker: number | null = null
   let delayTimer: ReturnType<typeof setInterval> | null = null
   const sessionStartedAt = new Date().toISOString()
@@ -224,7 +244,7 @@ export function registerDictation(ctx: MainContext): void {
     }
     if (state.kind === 'idle' || !w) return
     const persistent = state.kind === 'error' && (state.reason === 'mic_denied' || state.reason === 'mic_missing')
-    const ms = state.kind === 'empty' || state.kind === 'copied' ? L.copiedMs : state.kind === 'saved' || state.kind === 'error' ? AUTO_DISMISS_MS : 0
+    const ms = state.kind === 'empty' || state.kind === 'copied' || state.kind === 'pasted' ? L.copiedMs : state.kind === 'saved' || state.kind === 'error' ? AUTO_DISMISS_MS : 0
     if (ms && !persistent) armDismiss(ms)
   }
 
@@ -325,9 +345,11 @@ export function registerDictation(ctx: MainContext): void {
           status: 'failed',
           failure_reason: reason,
           audio_duration_ms: Math.round((r.plainBytes / 32_000) * 1_000),
-          audio_purge_at: new Date(Date.parse(sess.createdAt) + ttl).toISOString()
+          audio_purge_at: new Date(Date.parse(sess.createdAt) + ttl).toISOString(),
+          speech_duration_ms: sess.meter.speechMs
         })
         saved = true
+        lastSaved = sess.id
       } catch (err) {
         log('warn', 'dictation:audio-save-failed', { err: err instanceof Error ? err.name : 'error' })
       }
@@ -340,7 +362,7 @@ export function registerDictation(ctx: MainContext): void {
   }
 
   const start = (type: 'shortcut' | 'click', handsFree = true): void => {
-    if (!armed || session) return
+    if (!armed || session || retrying) return
     if (dismissTimer) clearTimeout(dismissTimer)
     const id = randomUUID()
     const lang = language()
@@ -386,7 +408,7 @@ export function registerDictation(ctx: MainContext): void {
     // Context first (600 ms), so the keyterms reach the recognizer.
     const screenOn = s('voiceTyping.screenContext', false) && s('dictation.screenContext', true)
     const fg = await desk.foreground(L.contextMs).catch(() => null)
-    sess.target = classifyTarget(fg?.process ?? '', fg?.title ?? '')
+    sess.target = classifyTarget(fg?.process ?? '', fg?.title ?? '', null, fg?.bundle ?? null)
     if (screenOn) sess.startContext = await desk.context(L.contextMs)
     if (session !== sess || sess.cancelled) return
     const terms = buildKeyterms(s('dictation.dictionary', []), sess.startContext, sess.target)
@@ -485,11 +507,14 @@ export function registerDictation(ctx: MainContext): void {
     }
     const screenOn = s('voiceTyping.screenContext', false) && s('dictation.screenContext', true)
     const contextBlock = screenOn ? buildContextBlock(field?.result === 'captured' ? field : sess.startContext, sess.target, sess.screenTerms) : ''
+    // A release reading without a field falls back to the start context when there is one.
+    const hintField = field?.field || field?.result === 'secure_input' || !screenOn || !sess.startContext ? field : sess.startContext
+    const hint = finalHint(sess.target, hintField)
     const tone = styleFor(s('dictation.styles', { email: null, work: null, casual: null, other: null }), sess.target.category, sess.target.hint)
     const formatted = await formatDictation(ctx, {
       raw,
       tone,
-      hint: sess.target.hint,
+      hint,
       language: detected ?? sess.language,
       contextBlock,
       dictionary: s('dictation.dictionary', [])
@@ -499,6 +524,7 @@ export function registerDictation(ctx: MainContext): void {
     if (sess.writer) await sess.writer.abort().catch(() => undefined)
     sess.writer = null
     const status = d.outcome
+    const delivered = d.outcome !== 'delivery_failed' && !!formatted.text
     try {
       await ctx.storage.updateDictationAttempt(sess.id, {
         status,
@@ -506,15 +532,17 @@ export function registerDictation(ctx: MainContext): void {
         language: detected ?? sess.language,
         audio_duration_ms: audioMs || Math.round((sess.audioBytes / 32_000) * 1_000),
         text: formatted.text,
-        audio_purge_at: null
+        audio_purge_at: null,
+        speech_duration_ms: sess.meter.speechMs,
+        ...(delivered ? { word_count: wordCount(formatted.text) } : {})
       })
     } catch (err) {
       log('warn', 'dictation:attempt-update-failed', { err: err instanceof Error ? err.message : String(err) })
     }
-    log('debug', 'dictation-done', { outcome: status, path: formatted.path, category: sess.target.category, chars: formatted.text.length })
+    log('debug', 'dictation-done', { outcome: status, path: formatted.path, category: sess.target.category, hint, chars: formatted.text.length })
     endSession()
     historyChanged()
-    if (d.outcome === 'pasted') setState({ kind: 'idle' })
+    if (d.outcome === 'pasted') setState({ kind: 'pasted' })
     else if (d.outcome === 'clipboard') setState({ kind: 'copied', reason: d.reason as DictationDeliveryFailure })
     else setState({ kind: 'error', reason: 'clipboard_failed' })
   }
@@ -964,6 +992,16 @@ export function registerDictation(ctx: MainContext): void {
         main?.webContents.send('settings:open' satisfies PushChannel, { section: 'voice-typing' })
         return
       }
+      case 'retry':
+        void retryFromPill()
+        return
+      case 'open-history':
+        if (state.kind === 'saved') setState({ kind: 'idle' })
+        openSettingsSection('voice-typing', 'dictation-pill')
+        return
+      case 'dismiss':
+        if (state.kind === 'saved') setState({ kind: 'idle' })
+        return
       case 'click': {
         const now = Date.now()
         if (now - lastClick < 300) return
@@ -1011,6 +1049,7 @@ export function registerDictation(ctx: MainContext): void {
 
   // ---------- history ----------
 
+  // A forgotten row (no text, no audio, a delivered status) stays hidden: only failed rows list without text.
   const shown = (a: DictationAttempt): boolean =>
     a.id !== session?.id && (!!a.text || a.has_audio || (a.status === 'recording' && a.created_at < sessionStartedAt) || a.status === 'failed')
 
@@ -1021,7 +1060,7 @@ export function registerDictation(ctx: MainContext): void {
 
   ipcMain.handle('dictation:history-delete' satisfies InvokeChannel, async (_e, p: { id: string }): Promise<InvokeRes<'dictation:history-delete'>> => {
     if (typeof p?.id !== 'string') throw notulaError('invalid-input', 'id is required')
-    await ctx.storage.deleteDictationAttempts({ ids: [p.id] })
+    await ctx.storage.deleteDictationAttempts({ ids: [p.id], forget: true })
     historyChanged()
   })
 
@@ -1029,14 +1068,12 @@ export function registerDictation(ctx: MainContext): void {
     if (p?.confirmed !== true) throw notulaError('invalid-input', 'confirmation is required')
     const rows = await ctx.storage.listDictationAttempts(1_000)
     const ids = rows.filter((a) => a.id !== session?.id).map((a) => a.id)
-    if (ids.length) await ctx.storage.deleteDictationAttempts({ ids })
+    if (ids.length) await ctx.storage.deleteDictationAttempts({ ids, forget: true })
     historyChanged()
   })
 
-  ipcMain.handle('dictation:history-retry' satisfies InvokeChannel, async (_e, p: { id: string }): Promise<InvokeRes<'dictation:history-retry'>> => {
-    const row = typeof p?.id === 'string' ? await ctx.storage.getDictationAttempt(p.id) : null
-    if (!row) throw notulaError('not-found', 'That dictation no longer exists.')
-    if (!row.audio_key) throw notulaError('invalid-input', 'No audio is stored for this dictation.')
+  /** The saved audio, transcribed and formatted again: the row's language, no style, hint or screen context. */
+  const retranscribe = async (row: SavedRow): Promise<string> => {
     const recognizer = ctx.speech.openRecognizer({
       purpose: 'dictation',
       choice: s('dictation.asr', 'auto'),
@@ -1057,7 +1094,67 @@ export function registerDictation(ctx: MainContext): void {
     }
     if (!raw) throw notulaError('provider-error', 'No speech was found. Try dictating again.')
     const formatted = await formatDictation(ctx, { raw, tone: null, hint: null, language: row.language, contextBlock: '', dictionary: s('dictation.dictionary', []) })
-    const updated = await ctx.storage.updateDictationAttempt(row.id, { status: 'retried', text: formatted.text, failure_reason: null, audio_purge_at: null })
+    return formatted.text
+  }
+
+  /** Both Retry paths write `retried`, the text and its word count, and drop the audio. */
+  const retried = (id: string, text: string): Promise<DictationAttempt> =>
+    ctx.storage.updateDictationAttempt(id, { status: 'retried', text, failure_reason: null, audio_purge_at: null, word_count: text ? wordCount(text) : null })
+
+  const savedRow = async (id: string | null): Promise<SavedRow | null> => {
+    const row = id ? await ctx.storage.getDictationAttempt(id) : null
+    return row?.audio_key ? (row as SavedRow) : null
+  }
+
+  /** The pill's Retry: re-transcribe the last saved attempt and deliver it into the focused app. */
+  const retryFromPill = async (): Promise<void> => {
+    if (retrying || session || state.kind !== 'saved') return
+    retrying = true
+    setState({ kind: 'processing' })
+    try {
+      const row = await savedRow(lastSaved).catch(() => null)
+      if (!row) {
+        log('info', 'dictation:pill-retry-failed', { reason: 'no_audio' })
+        lastSaved = null
+        setState({ kind: 'error', reason: 'processing_failed' })
+        return
+      }
+      let text: string
+      try {
+        text = await retranscribe(row)
+      } catch (err) {
+        log('info', 'dictation:pill-retry-failed', { reason: err instanceof Error ? err.message : 'error' })
+        setState({ kind: 'saved' })
+        return
+      }
+      const field = await desk.context(L.contextMs).catch(() => null)
+      const d = await deliver(desk, text, field, () => session === null)
+      if (d.outcome === 'delivery_failed') {
+        log('info', 'dictation:pill-retry-failed', { reason: 'delivery_failed' })
+        setState({ kind: 'saved' })
+        return
+      }
+      await retried(row.id, text).catch((err: unknown) =>
+        log('warn', 'dictation:attempt-update-failed', { err: err instanceof Error ? err.message : String(err) })
+      )
+      lastSaved = null
+      historyChanged()
+      log('debug', 'dictation:pill-retried', { outcome: d.outcome, chars: text.length })
+      if (session) return
+      if (d.outcome === 'pasted') setState({ kind: 'pasted' })
+      else setState({ kind: 'copied', reason: d.reason })
+    } finally {
+      retrying = false
+    }
+  }
+
+  ipcMain.handle('dictation:history-retry' satisfies InvokeChannel, async (_e, p: { id: string }): Promise<InvokeRes<'dictation:history-retry'>> => {
+    const row = typeof p?.id === 'string' ? await ctx.storage.getDictationAttempt(p.id) : null
+    if (!row) throw notulaError('not-found', 'That dictation no longer exists.')
+    if (!row.audio_key) throw notulaError('invalid-input', 'No audio is stored for this dictation.')
+    const text = await retranscribe(row as SavedRow)
+    const updated = await retried(row.id, text)
+    if (lastSaved === row.id) lastSaved = null
     historyChanged()
     return updated
   })

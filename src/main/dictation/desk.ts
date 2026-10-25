@@ -13,11 +13,14 @@ import { log } from '../log'
 export interface DeskForeground {
   process: string
   title: string
+  /** macOS only: the app's bundle id. */
+  bundle: string | null
 }
 
 export interface DeskContext extends DeskForeground {
   result: 'captured' | 'empty' | 'secure_input' | 'unsupported' | 'error' | 'timeout'
-  field: { name: string; type: string; password: boolean; editable: boolean } | null
+  /** `multiline`: the Win32 edit style when the field has its own edit window, else null. */
+  field: { name: string; type: string; password: boolean; editable: boolean; multiline: boolean | null } | null
   before: string
   after: string
   selection: string
@@ -138,18 +141,27 @@ export class Desk {
 
   async foreground(timeoutMs = 1_000): Promise<DeskForeground | null> {
     const r = await this.ask('foreground', timeoutMs)
-    return r ? { process: String(r['process'] ?? ''), title: String(r['title'] ?? '') } : null
+    return r ? { process: String(r['process'] ?? ''), title: String(r['title'] ?? ''), bundle: typeof r['bundle'] === 'string' && r['bundle'] ? r['bundle'] : null } : null
   }
 
   async context(timeoutMs: number): Promise<DeskContext> {
     const r = await this.ask('context', timeoutMs)
-    if (!r) return { result: 'timeout', process: '', title: '', field: null, before: '', after: '', selection: '' }
+    if (!r) return { result: 'timeout', process: '', title: '', bundle: null, field: null, before: '', after: '', selection: '' }
     const f = r['field'] as Record<string, unknown> | null
     return {
       result: (r['result'] as DeskContext['result']) ?? 'error',
       process: String(r['process'] ?? ''),
       title: String(r['title'] ?? ''),
-      field: f ? { name: String(f['name'] ?? ''), type: String(f['type'] ?? ''), password: f['password'] === true, editable: f['editable'] === true } : null,
+      bundle: typeof r['bundle'] === 'string' && r['bundle'] ? r['bundle'] : null,
+      field: f
+        ? {
+            name: String(f['name'] ?? ''),
+            type: String(f['type'] ?? ''),
+            password: f['password'] === true,
+            editable: f['editable'] === true,
+            multiline: typeof f['multiline'] === 'boolean' ? f['multiline'] : null
+          }
+        : null,
       before: String(r['before'] ?? ''),
       after: String(r['after'] ?? ''),
       selection: String(r['selection'] ?? '')

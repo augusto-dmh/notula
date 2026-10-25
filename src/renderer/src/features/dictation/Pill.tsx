@@ -5,7 +5,8 @@
 // (`dictation:capture` → `dictation:audio`, `dictation:capture-event`).
 //
 // - recording: a live waveform; hands-free adds Cancel and Finish;
-// - processing: animated bars; copied, empty, saved and the errors: one short line.
+// - processing: animated bars; pasted, copied, empty and the errors: one short line;
+// - saved: the retry card (Retry, Open history, Dismiss), which fits the 320 × 180 window.
 // Hovering makes the window clickable (`dictation:pill-action` `hover`); a click finishes a recording,
 // opens the microphone settings on `mic_denied`, or starts a hands-free dictation.
 // With the dictation bar on (`dictation-bar:state`), the same content is the bar's wide
@@ -32,6 +33,14 @@ const ERRORS: Record<string, string> = {
   processing_failed: 'Couldn’t process that. Try again',
   clipboard_failed: 'Couldn’t paste or copy the text'
 }
+
+/** A card button: the action goes to main, never to the pill's own click. */
+const pillAction =
+  (action: 'retry' | 'open-history' | 'dismiss') =>
+  (e: { stopPropagation(): void }): void => {
+    e.stopPropagation()
+    window.notula.dictation.pillAction({ action })
+  }
 
 function Waveform({ levels }: { levels: number[] }): JSX.Element {
   return (
@@ -172,21 +181,32 @@ export function DictationPill(): JSX.Element {
         </span>
       )
       break
-    case 'saved':
+    case 'pasted':
       body = (
         <span className="dict-pill__text" role="status">
-          <strong>Audio saved</strong>
-          <button
-            type="button"
-            className="dict-pill__link"
-            onClick={(e) => {
-              e.stopPropagation()
-              window.notula.dictation.pillAction({ action: 'show-settings' })
-            }}
-          >
-            Retry in settings
-          </button>
+          <strong>Pasted</strong>
         </span>
+      )
+      break
+    case 'saved':
+      body = (
+        <div className="dict-card" role="status">
+          <div className="dict-card__head">
+            <strong className="dict-card__title">Your audio is saved</strong>
+            <button type="button" className="dict-card__close" aria-label="Dismiss" onClick={pillAction('dismiss')}>
+              ✕
+            </button>
+          </div>
+          <span className="dict-card__line">Try again now, or find it in your history.</span>
+          <div className="dict-card__actions">
+            <button type="button" className="dict-card__btn" onClick={pillAction('open-history')}>
+              Open history
+            </button>
+            <button type="button" className="dict-card__btn dict-card__btn--primary" onClick={pillAction('retry')}>
+              Retry
+            </button>
+          </div>
+        </div>
       )
       break
     case 'error':

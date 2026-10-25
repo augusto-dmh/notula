@@ -324,7 +324,7 @@ export type McpConnectionRow = Omit<McpServerInfo, 'state' | 'error' | 'toolCoun
 export type DictationAttemptRow = DictationAttempt & { audio_key: Uint8Array | null }
 
 export type DictationAttemptPatch = Partial<
-  Pick<DictationAttempt, 'status' | 'failure_reason' | 'language' | 'audio_duration_ms' | 'text' | 'audio_purge_at'>
+  Pick<DictationAttempt, 'status' | 'failure_reason' | 'language' | 'audio_duration_ms' | 'text' | 'audio_purge_at' | 'speech_duration_ms' | 'word_count'>
 >
 
 
@@ -1046,8 +1046,11 @@ export interface StorageApi {
   listDictationAttempts(limit: number): Promise<DictationAttempt[]>
   /** With `audio_key`. */
   getDictationAttempt(id: string): Promise<DictationAttemptRow | null>
-  /** Files are queued by trigger. */
-  deleteDictationAttempts(q: { ids?: string[]; all?: true; expiredBefore?: IsoTime }): Promise<{ deleted: string[] }>
+  /**
+   * Files are queued by trigger. `forget` (with `ids`): drop the audio, delete rows without a
+   * word count, and keep the rest as usage only (no text, no expiry).
+   */
+  deleteDictationAttempts(q: { ids?: string[]; all?: true; expiredBefore?: IsoTime; forget?: true }): Promise<{ deleted: string[] }>
   markInterruptedDictations(): Promise<number>
 
   // scratchpad

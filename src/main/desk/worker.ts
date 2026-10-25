@@ -120,14 +120,14 @@ async function macOp(op: string): Promise<Record<string, unknown>> {
       return {}
     case 'foreground': {
       const out = await osascript(
-        'tell application "System Events"\nset p to first application process whose frontmost is true\nset n to name of p\nset t to ""\ntry\nset t to name of front window of p\nend try\nreturn n & linefeed & t\nend tell'
+        'tell application "System Events"\nset p to first application process whose frontmost is true\nset n to name of p\nset t to ""\ntry\nset t to name of front window of p\nend try\nset b to ""\ntry\nset b to bundle identifier of p\nend try\nreturn n & linefeed & t & linefeed & b\nend tell'
       )
-      const [process, title = ''] = out.split('\n')
-      return { process, title, pid: 0 }
+      const [process, title = '', bundle = ''] = out.split('\n')
+      return { process, title, bundle, pid: 0 }
     }
     case 'context': {
       const fg = await macOp('foreground')
-      return { result: 'unsupported', process: fg['process'], title: fg['title'], field: null, before: '', after: '', selection: '' }
+      return { result: 'unsupported', process: fg['process'], title: fg['title'], bundle: fg['bundle'], field: null, before: '', after: '', selection: '' }
     }
     case 'modifiers':
       return { held: null }
