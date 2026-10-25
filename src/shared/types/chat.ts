@@ -423,6 +423,9 @@ export const CHAT_AGENTIC_TOOLS = [
   'askUser'
 ] as const
 
+/** The calendar-write module's scheduling tools (offered with `calendarWrite.enabled`); their category is `calendar`. */
+export const SCHEDULING_TOOLS = ['checkAvailability', 'readPersonCalendar', 'replyToInvite', 'cancelEvent'] as const
+
 /** Write tools: they always ask for approval, since they change the user's notes or folders. */
 export const WRITE_TOOLS_NEEDING_APPROVAL = ['appendToEventNote', 'editEventNote', 'createFolder', 'organizeNote'] as const
 

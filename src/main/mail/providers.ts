@@ -52,7 +52,8 @@ const cap = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n - 
 export interface ReadThread {
   id: string
   subject: string
-  messages: { from: string; to: string[]; cc: string[]; sentAt: string; text: string }[]
+  /** `id` is the message's own id (for a forward). */
+  messages: { id: string; from: string; to: string[]; cc: string[]; sentAt: string; text: string }[]
 }
 
 export interface SendDraft {
@@ -134,6 +135,7 @@ export async function gmailRead(ctx: MainContext, token: string, id: string): Pr
     str(t.body['id']),
     header(arr(t.body['messages'])[0] ?? {}, 'Subject'),
     arr(t.body['messages']).map((m) => ({
+      id: str(m['id']),
       from: header(m, 'From'),
       to: header(m, 'To').split(',').map((x) => x.trim()).filter(Boolean),
       cc: header(m, 'Cc').split(',').map((x) => x.trim()).filter(Boolean),
@@ -171,6 +173,15 @@ async function gmailReplyHeaders(ctx: MainContext, token: string, threadId: stri
   const mid = header(last, 'Message-ID')
   const refs = header(last, 'References')
   return { inReplyTo: mid || null, references: [refs, mid].filter(Boolean).join(' ') || null }
+}
+
+/** One message's subject (for the forward card), or null when it can't be read. */
+export async function gmailSubject(ctx: MainContext, token: string, id: string): Promise<string | null> {
+  const http = providerHttp(ctx, 'integration', 'mail')
+  const x = await exchange(() =>
+    http.fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/{id}', { params: { id }, query: new URLSearchParams([['format', 'metadata'], ['metadataHeaders', 'Subject']]), headers: auth(token) })
+  )
+  return x.ok ? header(x.body, 'Subject') : null
 }
 
 /** A forward of one message as a raw message: the original is read whole (`mail-read`). */
@@ -274,6 +285,7 @@ export async function graphRead(ctx: MainContext, token: string, conversationId:
     conversationId,
     str(ms[0]?.['subject']),
     ms.map((m) => ({
+      id: str(m['id']),
       from: address(m['from']),
       to: arr(m['toRecipients']).map(address),
       cc: arr(m['ccRecipients']).map(address),
@@ -321,6 +333,12 @@ async function graphForwardDraft(ctx: MainContext, token: string, m: SendDraft, 
     }
   }
   return { draftId, webUrl: str(x.body['webLink']) || null }
+}
+
+export async function graphSubject(ctx: MainContext, token: string, id: string): Promise<string | null> {
+  const http = providerHttp(ctx, 'integration', 'mail')
+  const x = await exchange(() => http.fetch('https://graph.microsoft.com/v1.0/me/messages/{id}', { params: { id }, query: { $select: 'subject' }, headers: auth(token) }))
+  return x.ok ? str(x.body['subject']) : null
 }
 
 export async function graphCreateDraft(ctx: MainContext, token: string, m: SendDraft): Promise<{ draftId: string; webUrl: string | null }> {

@@ -36,6 +36,8 @@ export interface SystemPromptInput {
   skills?: { slug: string; description: string }[]
   /** The answer may ask the user questions and propose changes that wait for approval. */
   approvals?: boolean
+  /** checkAvailability is offered, so the scheduling rules apply. */
+  scheduling?: boolean
 }
 
 export function momentNow(userName: string): PromptMoment {
@@ -82,6 +84,21 @@ export function systemPrompt(p: SystemPromptInput): string {
         "Tools that change the user's data (folders, filing notes, event notes) wait for the user's approval, so call them with your best proposal rather than asking for permission in text first. " +
         'When a request is ambiguous in a way that changes the result, ask with askUser and a few short options instead of guessing. ' +
         "Never say a change was made until the tool result confirms it; when the user declines, accept that and do not retry it."
+    )
+  }
+  if (p.tools && p.scheduling) {
+    out.push(
+      'Scheduling:\n' +
+        [
+          "Before you offer meeting times that involve anyone besides the user, look up everyone's free time with checkAvailability.",
+          'Offer only slots that the check shows as open for every person whose calendar it could see.',
+          "When someone's calendar can't be seen, say so, offer times that suit the user, and don't suggest that the other person is free then.",
+          'Never propose a time that no tool result supports.',
+          "Open one person's calendar with readPersonCalendar only when the user wants detail about that person's day.",
+          "Answer an invitation or cancel an event only when the user asked for it. Call the tool straight away: its approval card is where the user confirms, so don't ask in text first."
+        ]
+          .map((r) => `- ${r}`)
+          .join('\n')
     )
   }
   if (p.tools && p.skills?.length) {

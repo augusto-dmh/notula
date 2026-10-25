@@ -655,7 +655,7 @@ export class ChatEngine {
       const providerTools = knownNoTools ? [] : await this.registry.providerTools({ place: plan.place, noteId })
       const widest = this.registry.build(avail, providerTools)
       const fixed =
-        systemPrompt({ moment: momentNow(settings['profile.name']), tools: true, detailed: true, note: null, context: '', approvals: true }).length +
+        systemPrompt({ moment: momentNow(settings['profile.name']), tools: true, detailed: true, note: null, context: '', approvals: true, scheduling: true }).length +
         1_200 +
         JSON.stringify(widest.defs).length
       const budget = charsOf(window - maxTokens) - fixed - userContent.length
@@ -682,6 +682,7 @@ export class ChatEngine {
             .map((r) => ({ slug: r.slug, description: r.config.description ?? '' }))
         : []
       const approvals = [...answerTools.entries.values()].some((e) => e.spec.needsApproval)
+      const scheduling = answerTools.entries.has('checkAvailability')
       const target: NoteTarget | null =
         asm.note && plan.target
           ? {
@@ -703,7 +704,7 @@ export class ChatEngine {
           context: extras ? `${asm.context}
 
 ${extras}` : asm.context,
-          ...(tools ? { skills, approvals } : {})
+          ...(tools ? { skills, approvals, scheduling } : {})
         }),
         tools: tools ? answerTools.defs : [],
         entries: tools ? answerTools.entries : new Map(),
@@ -775,7 +776,11 @@ ${extras}` : asm.context,
       for (const c of r.calls) {
         const entry = loop.entries.get(c.name)
         if (entry?.spec.needsApproval) {
-          const problem = entry.local ? validateLocal(entry.local, c.args) : c.args === null ? 'The tool input was not valid JSON.' : null
+          const problem = entry.local
+            ? validateLocal(entry.local, c.args)
+            : c.args === null
+              ? 'The tool input was not valid JSON.'
+              : ((await entry.provider?.check?.(c.name, c.args).catch(() => null)) ?? null)
           // An invalid call goes back as a tool error; a second ✱ call waits for the first.
           const early: ToolOutcome | null = problem ? fail(problem) : pending ? fail(WAITING_EARLIER) : null
           if (early) {
@@ -784,12 +789,15 @@ ${extras}` : asm.context,
             continue
           }
           pending = c.id
+          const previewFailed = (err: unknown): null => {
+            log('warn', 'chat:approval-preview-failed', { tool: c.name, err })
+            return null
+          }
           const preview: ApprovalPreview | null = entry.local?.preview
-            ? await entry.local.preview(c.args ?? {}, loop.env).catch((err: unknown) => {
-                log('warn', 'chat:approval-preview-failed', { tool: c.name, err })
-                return null
-              })
-            : null
+            ? await entry.local.preview(c.args ?? {}, loop.env).catch(previewFailed)
+            : entry.provider?.preview
+              ? await entry.provider.preview(c.name, c.args ?? {}).catch(previewFailed)
+              : null
           this.setCall(a, c.id, (tc) => ({
             ...tc,
             confirmationRequired: true,

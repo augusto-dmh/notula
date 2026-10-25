@@ -33,10 +33,12 @@ import {
   gmailRead,
   gmailSearch,
   gmailSendDraft,
+  gmailSubject,
   graphCreateDraft,
   graphRead,
   graphSearch,
   graphSend,
+  graphSubject,
   MAIL_COPY,
   MailError,
   type ReadThread,
@@ -369,6 +371,18 @@ export function registerMail(ctx: MainContext): EmailContextApi {
 
   // ---------- chat tools ----------
 
+  /** A forward's original subject, for its card; checked before the draft exists. */
+  async function withForwardSubject(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+    if (args['inReplyToThread']) throw bad(MAIL_COPY.replyAndForward)
+    const f = obj(args['forward'])
+    const id = typeof f['messageId'] === 'string' ? f['messageId'] : ''
+    if (!id) return args
+    const s = await pick('mail-read')
+    if (!s.grants.includes('mail-send')) throw new MailError('missing_scopes', MAIL_COPY.needSend)
+    const subject = await (s.kind === 'google' ? gmailSubject : graphSubject)(ctx, await token(s, 'mail-read'), id).catch(() => null)
+    return { ...args, forward: { ...f, ...(subject ? { subject } : {}) } }
+  }
+
   ctx.chat.registerToolProvider({
     id: 'mail',
     async tools(): Promise<ChatToolSpec[]> {
@@ -409,7 +423,7 @@ export function registerMail(ctx: MainContext): EmailContextApi {
           {
             def: {
               name: TOOLS.read,
-              description: 'Reads one email thread by id (from a search). Quoted replies are removed; long threads are shortened.',
+              description: 'Reads one email thread by id (from a search). Each message has its own id, which a forward uses. Quoted replies are removed; long threads are shortened.',
               inputSchema: { type: 'object', properties: { threadId: { type: 'string' } }, required: ['threadId'], additionalProperties: false }
             },
             category: 'email',
@@ -420,10 +434,24 @@ export function registerMail(ctx: MainContext): EmailContextApi {
         )
       }
       if (canSend) {
+        // A forward reads the original, so it is offered only with both grants.
+        const forward = canRead
+          ? {
+              forward: {
+                type: 'object',
+                description: 'Forwards one message instead of replying: its id from readEmail. Attachments go along unless includeAttachments is false.',
+                properties: { messageId: { type: 'string' }, includeAttachments: { type: 'boolean' } },
+                required: ['messageId'],
+                additionalProperties: false
+              }
+            }
+          : {}
         out.push({
           def: {
             name: TOOLS.write,
-            description: 'Drafts an email for the user to review and send from a card. Nothing is sent by this tool; write the body as plain text.',
+            description:
+              'Drafts an email for the user to review and send from a card. Nothing is sent by this tool; write the body as plain text.' +
+              (canRead ? ' For a forward, the body is only a short introduction: the original message follows it.' : ''),
             inputSchema: {
               type: 'object',
               properties: {
@@ -432,7 +460,8 @@ export function registerMail(ctx: MainContext): EmailContextApi {
                 bcc: { type: 'array', items: { type: 'string' } },
                 subject: { type: 'string' },
                 body: { type: 'string', description: 'Plain text.' },
-                inReplyToThread: { type: 'string', description: 'A thread id to reply in (Gmail).' }
+                inReplyToThread: { type: 'string', description: 'A thread id to reply in (Gmail).' },
+                ...forward
               },
               required: ['to', 'subject', 'body'],
               additionalProperties: false
@@ -463,7 +492,8 @@ export function registerMail(ctx: MainContext): EmailContextApi {
           return { content: JSON.stringify(r), data: { messages: r.messages.length }, isError: false }
         }
         if (name === TOOLS.write) {
-          const block = await blockStore().create({ type: 'email', threadId: opts.threadId, content: args })
+          const content = args['forward'] !== undefined ? await withForwardSubject(args) : args
+          const block = await blockStore().create({ type: 'email', threadId: opts.threadId, content })
           return {
             content: JSON.stringify({ draft: block.content, blockId: block.id, sent: false, note: 'The user reviews this draft on a card and sends it themselves.' }),
             data: { blockId: block.id },

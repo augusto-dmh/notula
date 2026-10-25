@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Small chat helpers for the renderer: date groups, tool status phrases, text cleanup.
 
-import type { ChatMessage, ChatOutput, ChatThread, ChatToolCall, DocRef } from '@shared/types/chat'
+import { SCHEDULING_TOOLS, type ChatMessage, type ChatOutput, type ChatThread, type ChatToolCall, type DocRef } from '@shared/types/chat'
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 const KEY_BRACKET = new RegExp(`\\s?\\[\\s*${UUID}(?:-\\d+)?(?:\\s*[,;]\\s*${UUID}(?:-\\d+)?)*\\s*\\]`, 'gi')
@@ -106,7 +106,9 @@ const PHRASES: Record<string, [running: string, done: string, failed: string]> =
   organizeNote: ['Filing note...', 'Filed note', 'Couldn’t file note'],
   listFolderAttachments: ['Listing files', 'Listed files', 'Couldn’t list files'],
   readFile: ['Reading file', 'Read file', 'Couldn’t read the file'],
-  loadRecipe: ['Loading skill instructions...', 'Loaded skill instructions', 'Couldn’t load the skill instructions']
+  loadRecipe: ['Loading skill instructions...', 'Loaded skill instructions', 'Couldn’t load the skill instructions'],
+  replyToInvite: ['Sending your reply…', 'Reply sent', 'Couldn’t send your reply'],
+  cancelEvent: ['Cancelling…', 'Cancelled', 'Couldn’t cancel']
 }
 
 const GENERIC: [string, string, string] = ['Working...', 'Completed', 'Couldn’t complete this step']
@@ -147,6 +149,31 @@ function calendarLine(c: ChatToolCall, phase: ToolPhase): string {
   return line
 }
 
+/** "Looked at free time · Mon, Nov 23 (+4) · 2 people". */
+function availabilityLine(c: ChatToolCall, phase: ToolPhase): string {
+  if (phase === 'running') return 'Looking at free time…'
+  if (phase === 'failed') return 'Couldn’t look at free time'
+  const from = str(c.args['from']).slice(0, 10)
+  const to = str(c.args['to']).slice(0, 10)
+  const n = Array.isArray(c.args['people']) ? (c.args['people'] as unknown[]).length : 0
+  const parts = ['Looked at free time']
+  if (/^\d{4}-\d{2}-\d{2}$/.test(from)) {
+    const label = new Date(`${from}T12:00:00Z`).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' })
+    const more = /^\d{4}-\d{2}-\d{2}$/.test(to) ? Math.round((Date.parse(`${to}T12:00:00Z`) - Date.parse(`${from}T12:00:00Z`)) / DAY_MS) : 0
+    parts.push(more > 0 ? `${label} (+${more})` : label)
+  }
+  if (n) parts.push(`${n} ${n === 1 ? 'person' : 'people'}`)
+  return parts.join(' · ')
+}
+
+/** "Opened ana@example.com’s calendar". */
+function personCalendarLine(c: ChatToolCall, phase: ToolPhase): string {
+  const who = str(c.args['email']) || 'their'
+  if (phase === 'running') return `Opening ${who}’s calendar…`
+  if (phase === 'failed') return 'Couldn’t open that calendar'
+  return `Opened ${who}’s calendar`
+}
+
 /** The people tools share `resolvePerson`'s card copy. */
 function peopleLine(c: ChatToolCall, phase: ToolPhase): string {
   const q = str(c.args['query'])
@@ -178,6 +205,8 @@ export function toolLine(c: ChatToolCall, phase: ToolPhase): string {
   if (CALENDAR_SEARCH.has(c.name)) return calendarLine(c, phase)
   if (PEOPLE_TOOLS.has(c.name)) return peopleLine(c, phase)
   if (c.name === 'list_todos') return actionItemsLine(c, phase)
+  if (c.name === 'checkAvailability') return availabilityLine(c, phase)
+  if (c.name === 'readPersonCalendar') return personCalendarLine(c, phase)
   if (c.mcpToolLabel || c.name.startsWith('mcp__')) {
     const title = c.mcpToolLabel || c.name.split('__').slice(2).join('__') || c.name
     return phase === 'running' ? `Running ${title}...` : phase === 'failed' ? `Couldn’t run ${title}` : `Ran ${title}`
@@ -200,7 +229,7 @@ export function toolLine(c: ChatToolCall, phase: ToolPhase): string {
 export function toolGroup(name: string): 'notes' | 'search' | 'calendar' | 'generic' {
   if (name === 'editNote' || name === 'rewriteNote' || name === 'readMeetings' || name === 'readTranscript') return 'notes'
   if (name.startsWith('search') || name === 'listMeetings' || name === 'gatherMeetingContext' || name === 'getMeetings') return 'search'
-  if (name === 'getCurrentTime') return 'calendar'
+  if (name === 'getCurrentTime' || (SCHEDULING_TOOLS as readonly string[]).includes(name)) return 'calendar'
   return 'generic'
 }
 

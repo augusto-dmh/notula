@@ -33,6 +33,10 @@ export interface ChatToolProvider {
     args: Record<string, unknown>,
     opts: { signal: AbortSignal; threadId: string; onProgress?(message: string): void }
   ): Promise<ChatToolResult>
+  /** Tools that need approval: a problem that goes back to the model before any card waits. */
+  check?(name: string, args: Record<string, unknown>): Promise<string | null>
+  /** Tools that need approval: what their approval card shows. */
+  preview?(name: string, args: Record<string, unknown>): Promise<{ title: string; lines: string[] } | null>
 }
 
 /** The read-only tools the local MCP server offers. */
