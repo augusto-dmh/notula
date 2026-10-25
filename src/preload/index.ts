@@ -573,6 +573,7 @@ const api: NotulaApi = {
       }
     },
     applyRegenerated: (req) => ipcRenderer.invoke('action-items:apply-regenerated' satisfies InvokeChannel, req),
+    startDraft: (req) => ipcRenderer.invoke('action-items:start-draft' satisfies InvokeChannel, req),
     onChanged: (cb) => {
       const listener = (_e: IpcRendererEvent, p: PushPayload<'action-items:changed'>): void => cb(p)
       ipcRenderer.on('action-items:changed' satisfies PushChannel, listener)

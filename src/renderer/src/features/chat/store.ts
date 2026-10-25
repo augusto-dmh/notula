@@ -435,6 +435,12 @@ export function openFloating(place: ChatPlace, text?: string): void {
   })
 }
 
+/** The floating chat on a given thread of the place; `text`, if any, is then sent in that thread. */
+export function openFloatingThread(place: ChatPlace, threadId: string, text?: string): void {
+  selectThread(groupingKeyFor(place), threadId)
+  openFloating(place, text)
+}
+
 export function closeFloating(): void {
   set({ floating: { ...state.floating, open: false, pending: null } })
 }

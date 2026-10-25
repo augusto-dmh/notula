@@ -209,9 +209,9 @@ export async function runKHarness(ctx: MainContext, phase: 1 | 2): Promise<void>
     // ---------- the dispatcher ----------
     const n8 = notes[8]!
     await ctx.storage.replaceNoteActionItems(n8.id, n8.panelId, [
-      { intent: 'Email Sam the launch deck', detail: null, attribution: [], summaryLine: null },
-      { intent: 'Schedule the review with Priya', detail: null, attribution: [{ name: 'Alex Doe', identifiers: ['alex@example.com'] }], summaryLine: null },
-      { intent: 'Fix the login bug', detail: null, attribution: [{ name: 'Priya', identifiers: [] }], summaryLine: null }
+      { intent: 'Email Sam the launch deck', detail: null, attribution: [], summaryLine: null, channel: null },
+      { intent: 'Schedule the review with Priya', detail: null, attribution: [{ name: 'Alex Doe', identifiers: ['alex@example.com'] }], summaryLine: null, channel: null },
+      { intent: 'Fix the login bug', detail: null, attribution: [{ name: 'Priya', identifiers: [] }], summaryLine: null, channel: null }
     ])
     await sleep(8_000)
     const todos = JSON.parse(await js<string>(`return JSON.stringify(await window.notula.dispatch.list({ view: 'todos' }))`)) as { todos: { title: string; type: string }[] }

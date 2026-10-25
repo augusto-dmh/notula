@@ -13,6 +13,7 @@ export { EditorScopeContext, type EditorScope } from './scope'
 export { readRoomHtml } from './room'
 // Thumbs on summary lines that state action items.
 export { normalizeHeading, setActionItemThumbs, type ThumbClick, type ThumbDirection, type ThumbsSource } from './action-item-thumbs'
+export { setActionItemDrafts, type DraftLine, type DraftsSource } from './action-item-drafts'
 
 /** `'<contentType>:<version>:<contentId>'`, e.g. `notes:1:<noteId>`. */
 export function roomIdFor(type: YdocContentType, id: string): string {

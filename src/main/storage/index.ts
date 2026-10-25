@@ -486,6 +486,7 @@ export function createStorage(opts: StorageOptions): StorageApi {
     reviewActionItem: data('reviewActionItem'),
     archiveActionItem: data('archiveActionItem'),
     addActionItemFeedback: data('addActionItemFeedback'),
+    setActionItemDraftThread: data('setActionItemDraftThread'),
     applyRegeneratedActionItems: data('applyRegeneratedActionItems'),
     setClassifierTags: data('setClassifierTags'),
     setManualMeetingType: data('setManualMeetingType'),

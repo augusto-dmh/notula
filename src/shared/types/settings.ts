@@ -156,6 +156,8 @@ export interface Settings {
   'captions.alwaysOn': boolean
   /** Also gates the action-item chat tools and the Labs row. */
   'actionItems.enabled': boolean
+  /** A button on email and Slack action items that starts the draft in chat. */
+  'actionItems.lineDrafts': boolean
   /** Meeting classification after a summary. */
   'tags.classify': boolean
   /** Links from invites. */
@@ -442,6 +444,7 @@ export const DEFAULT_SETTINGS: Settings = {
   'audio.retention': '7d',
   'captions.alwaysOn': false,
   'actionItems.enabled': false,
+  'actionItems.lineDrafts': false,
   'tags.classify': false,
   'attachedLinks.enabled': false,
   'followUpEmail.enabled': false,

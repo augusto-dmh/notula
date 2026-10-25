@@ -1312,10 +1312,22 @@ ALTER TABLE dictation_sessions ADD speech_duration_ms INTEGER;
 ALTER TABLE dictation_sessions ADD word_count INTEGER;
 `
 
+/**
+ * Version 11: next-step drafts. All three stay null on older rows, which get no draft button
+ * until they are extracted again. A draft thread that is deleted later just means the next
+ * click starts a new one, so `draft_thread_id` has no foreign key.
+ */
+const ACTION_ITEM_DRAFTS = `
+ALTER TABLE action_items ADD next_step_channel TEXT CHECK (next_step_channel IN ('email', 'slack'));
+ALTER TABLE action_items ADD line_fingerprint TEXT;
+ALTER TABLE action_items ADD draft_thread_id TEXT;
+`
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: BASELINE_VERSION, name: 'baseline', sql: BASELINE },
   { version: 9, name: 'sources-and-imports', sql: SOURCES_AND_IMPORTS },
-  { version: 10, name: 'dictation-usage', sql: DICTATION_USAGE }
+  { version: 10, name: 'dictation-usage', sql: DICTATION_USAGE },
+  { version: 11, name: 'action-item-drafts', sql: ACTION_ITEM_DRAFTS }
 ]
 
 /**

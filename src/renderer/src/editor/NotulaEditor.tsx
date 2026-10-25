@@ -10,6 +10,7 @@ import { EditorContent, useEditor } from '@tiptap/react'
 import type { NotePerson } from '@shared/types/notes'
 import { IconCheckbox, IconHeading, IconList, IconSparkle } from '../app/icons'
 import { isMac, isMod } from '../app/platform'
+import { ActionItemDrafts } from './action-item-drafts'
 import { ActionItemThumbs } from './action-item-thumbs'
 import { copyFlavors, type CopyHeader } from './copy'
 import { FindBar } from './FindBar'
@@ -294,8 +295,8 @@ function EditorCore({
         FindExtension,
         Passages,
         SlashMenu.configure({ store: kind === 'notes' ? slashStore : null }),
-        // Thumbs on summary lines that state action items.
-        ...(kind === 'panel' ? [ActionItemThumbs.configure({ roomId: room.id })] : [])
+        // Thumbs and draft buttons on summary lines that state action items.
+        ...(kind === 'panel' ? [ActionItemThumbs.configure({ roomId: room.id }), ActionItemDrafts] : [])
       ],
       editable,
       autofocus: autofocus && editable ? 'end' : false,

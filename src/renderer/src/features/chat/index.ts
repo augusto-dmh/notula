@@ -82,4 +82,4 @@ export function ImageInputRows(): JSX.Element {
   return createElement(ImageInputRowsView)
 }
 
-export { askPage, selectThread } from './store'
+export { askPage, openFloatingThread, selectThread } from './store'

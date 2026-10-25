@@ -340,6 +340,7 @@ export class StorageEngine {
     reviewActionItem: (id, review, reason) => actionItems.reviewActionItem(this.need(), id, review, reason),
     archiveActionItem: (id) => actionItems.archiveActionItem(this.need(), id),
     addActionItemFeedback: (f) => actionItems.addActionItemFeedback(this.need(), f),
+    setActionItemDraftThread: (id, threadId) => actionItems.setActionItemDraftThread(this.need(), id, threadId),
     applyRegeneratedActionItems: (noteIds, items) => actionItems.applyRegeneratedActionItems(this.need(), noteIds, items),
     setClassifierTags: (noteId, t) => tags.setClassifierTags(this.need(), noteId, t),
     setManualMeetingType: (noteIds, value) => tags.setManualMeetingType(this.need(), noteIds, value),

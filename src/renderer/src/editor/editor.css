@@ -513,3 +513,40 @@
   color: var(--danger);
   background: var(--danger-soft);
 }
+
+/* ---------- draft buttons on summary lines ---------- */
+
+.ne-content .ai-draft {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin-left: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-3);
+  vertical-align: -4px;
+  cursor: pointer;
+  opacity: 0;
+  user-select: none;
+  transition: opacity var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.ne-content .ai-draft-line:hover .ai-draft,
+.ne-content.ProseMirror-focused .ai-draft-line.is-caret .ai-draft,
+.ne-content .ai-draft:focus-visible {
+  opacity: 1;
+}
+
+.ne-content .ai-draft:hover {
+  background: var(--surface-2);
+  color: var(--fg);
+}
+
+.ne-content .ai-draft:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  color: var(--fg);
+}

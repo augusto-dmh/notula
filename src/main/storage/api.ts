@@ -11,6 +11,7 @@
 import type {
   ActionItem,
   ActionItemAttribution,
+  ActionItemChannel,
   ActionItemFeedback,
   ActionItemFeedbackInput,
   ActionItemReview,
@@ -258,6 +259,17 @@ export interface NewActionItem {
   intent: string
   detail: string | null
   attribution: ActionItemAttribution[]
+  summaryLine: string | null
+  channel: ActionItemChannel | null
+  /** Set by main from `summaryLine` (stamp.ts). */
+  lineFingerprint?: string | null
+}
+
+/** One row written by "Keep regenerated", with the line main stamps its id onto. */
+export interface AppliedActionItem {
+  id: string
+  noteId: string
+  panelId: string | null
   summaryLine: string | null
 }
 
@@ -946,8 +958,9 @@ export interface StorageApi {
   reviewActionItem(id: string, review: ActionItemReview, reason?: string): Promise<ActionItem>
   archiveActionItem(id: string): Promise<void>
   addActionItemFeedback(f: ActionItemFeedbackInput): Promise<ActionItemFeedback>
+  setActionItemDraftThread(id: string, threadId: string): Promise<void>
   /** One transaction. */
-  applyRegeneratedActionItems(noteIds: string[], items: RegeneratedActionItem[]): Promise<{ insertedCount: number }>
+  applyRegeneratedActionItems(noteIds: string[], items: RegeneratedActionItem[]): Promise<{ insertedCount: number; inserted: AppliedActionItem[] }>
 
   // tags
   /** Keeps a `manual` meeting type. */

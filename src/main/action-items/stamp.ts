@@ -9,8 +9,10 @@
 // A room that does not exist yet (the summary was never opened) is stamped when it first
 // appears; until then the stamps wait here (this app session).
 
+import { createHash } from 'node:crypto'
 import * as Y from 'yjs'
 import type { PushChannel } from '@shared/ipc'
+import { LINE_FINGERPRINT_LENGTH, lineKey } from '@shared/lib/action-line'
 import { YDOC_FRAGMENT, YDOC_ROOM_VERSION, type YdocUpdated } from '@shared/types/ydoc'
 import type { MainContext } from '../context'
 import { log } from '../log'
@@ -29,15 +31,10 @@ export function summaryRoomId(panelId: string): string {
   return `summary:${YDOC_ROOM_VERSION}:${panelId}`
 }
 
-/** Comparable text: markdown emphasis, code ticks and link syntax dropped, spaces collapsed. */
-export function lineKey(text: string): string {
-  return text
-    .replace(/^\s*(?:[-*+]|\d+[.)])\s+/, '')
-    .replace(/^\s*\[[ xX]\]\s+/, '')
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
-    .replace(/(\*\*|__|~~|`)/g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
+/** The stored fingerprint of a summary line, or null when nothing of it is comparable. */
+export function lineFingerprint(line: string): string | null {
+  const key = lineKey(line)
+  return key ? createHash('sha256').update(key).digest('hex').slice(0, LINE_FINGERPRINT_LENGTH) : null
 }
 
 function textOf(el: Y.XmlElement): string {

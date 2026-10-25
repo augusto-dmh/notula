@@ -13,6 +13,7 @@
 
 import type {
   ActionItem,
+  ActionItemDraftStart,
   ActionItemFeedback,
   ActionItemFeedbackInput,
   ActionItemReview,
@@ -464,6 +465,7 @@ export interface InvokeChannels {
   'action-items:feedback': [ActionItemFeedbackInput, ActionItemFeedback]
   'action-items:regenerate-preview': [void, { runId: string }]
   'action-items:apply-regenerated': [{ runId: string }, { insertedCount: number }]
+  'action-items:start-draft': [{ actionItemId: string }, ActionItemDraftStart]
   'tags:classify': [{ noteId: string }, { tags: DocumentTag[] }]
   'follow-up:get': [{ noteId: string }, FollowUpDraft | null]
   'follow-up:generate': [{ noteId: string }, { runId: string; draftId: string }]
@@ -1424,6 +1426,7 @@ export interface NotulaApi {
     regeneratePreview: InvokeMember<'action-items:regenerate-preview'>
     onRegenerateProgress: PushMember<'action-items:regenerate-progress'>
     applyRegenerated: InvokeMember<'action-items:apply-regenerated'>
+    startDraft: InvokeMember<'action-items:start-draft'>
     onChanged: PushMember<'action-items:changed'>
   }
   tags: {

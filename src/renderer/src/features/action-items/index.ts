@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Action items: the `/action-items` page, its sidebar
-// link (null while `actionItems.enabled` is off), and the summary-line thumbs host.
+// link (null while `actionItems.enabled` is off), and the summary-line thumbs and draft hosts.
 
 import { createElement, type JSX } from 'react'
 import { navigate, useRoute } from '../../app/navigation'
@@ -8,6 +8,7 @@ import { closeSidebarOverlay } from '../../app/sidebar-state'
 import { usePrefs } from '../settings/prefs-store'
 
 export { ActionItemsPage } from './ActionItemsPage'
+export { ActionItemDrafts } from './Drafts'
 export { ActionItemThumbs } from './Thumbs'
 
 function IconChecklist({ size = 16 }: { size?: number }): JSX.Element {

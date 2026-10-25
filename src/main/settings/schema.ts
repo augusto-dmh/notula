@@ -259,6 +259,7 @@ const VALIDATORS: { [K in SettingKey]: Validator } = {
   'audio.retention': oneOf('1d', '7d', '30d', '90d', '365d', 'note'),
   'captions.alwaysOn': bool,
   'actionItems.enabled': bool,
+  'actionItems.lineDrafts': bool,
   'tags.classify': bool,
   'attachedLinks.enabled': bool,
   'followUpEmail.enabled': bool,

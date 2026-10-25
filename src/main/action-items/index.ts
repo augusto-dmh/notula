@@ -10,6 +10,9 @@
 // - Regenerate all: every source note of the open items, at most 2 in flight, 60 s
 //   each; nothing is written until "Keep regenerated".
 // - Local-only mode with a cloud provider skips extraction with `local-only mode`.
+// - Next-step drafts (`actionItems.lineDrafts`): an email or Slack item starts a chat thread
+//   on its note, or reopens the one it started before. Without the account it needs, nothing
+//   is created and the renderer points to the settings.
 
 import { randomUUID } from 'node:crypto'
 import { ipcMain } from 'electron'
@@ -27,8 +30,9 @@ import { JsonTaskError, latestSummary, readyProvider } from '../enhance/note-con
 import { expected } from '../ipc-expected'
 import { log } from '../log'
 import { LOCAL_ONLY_REASON } from '../privacy'
+import { draftConnected, draftSeed } from './draft'
 import { extractActionItems } from './extract'
-import { SummaryStamper } from './stamp'
+import { lineFingerprint, SummaryStamper, type Stamp } from './stamp'
 
 const HEARTBEAT_MS = 5_000
 /** A preview not applied within this time is dropped. */
@@ -130,7 +134,11 @@ export function registerActionItems(ctx: MainContext): void {
     const started = Date.now()
     try {
       const items = await extractActionItems(ctx, provider, { note, panel })
-      const stored = await ctx.storage.replaceNoteActionItems(noteId, panelId, items)
+      const stored = await ctx.storage.replaceNoteActionItems(
+        noteId,
+        panelId,
+        items.map((i) => ({ ...i, lineFingerprint: i.summaryLine ? lineFingerprint(i.summaryLine) : null }))
+      )
       const stamps = stored.flatMap((s, i) => {
         const line = items[i]?.summaryLine
         return line ? [{ id: s.id, line }] : []
@@ -177,7 +185,15 @@ export function registerActionItems(ctx: MainContext): void {
               const items = await extractActionItems(ctx, provider, { note, panel }, abort.signal)
               results.set(
                 noteId,
-                items.map((i) => ({ sourceNoteId: noteId, intent: i.intent, detail: i.detail, attribution: i.attribution }))
+                items.map((i) => ({
+                  sourceNoteId: noteId,
+                  intent: i.intent,
+                  detail: i.detail,
+                  attribution: i.attribution,
+                  channel: i.channel,
+                  summaryLine: i.summaryLine,
+                  lineFingerprint: i.summaryLine ? lineFingerprint(i.summaryLine) : null
+                }))
               )
             } catch (err) {
               abort.abort()
@@ -255,13 +271,57 @@ export function registerActionItems(ctx: MainContext): void {
       const run = runs.get(runId)
       if (!run || !run.items) throw expected(notulaError('not-found', 'That preview is no longer available.'))
       try {
-        const result = await ctx.storage.applyRegeneratedActionItems(run.noteIds, run.items)
+        const { insertedCount, inserted } = await ctx.storage.applyRegeneratedActionItems(run.noteIds, run.items)
         runs.delete(runId)
-        return result
+        // The kept items' lines carry their new ids, as after an extraction.
+        const byPanel = new Map<string, Stamp[]>()
+        for (const i of inserted) {
+          if (!i.panelId || !i.summaryLine) continue
+          byPanel.set(i.panelId, [...(byPanel.get(i.panelId) ?? []), { id: i.id, line: i.summaryLine }])
+        }
+        for (const [panelId, stamps] of byPanel) void stamper.stamp(panelId, stamps)
+        return { insertedCount }
       } catch (err) {
         log('warn', 'action-items:apply-failed', { runId, code: parseError(err).code })
         throw err
       }
+    }
+  )
+
+  // ---------- next-step drafts ----------
+
+  ipcMain.handle(
+    'action-items:start-draft' satisfies InvokeChannel,
+    async (_e, req: InvokeReq<'action-items:start-draft'>): Promise<InvokeRes<'action-items:start-draft'>> => {
+      const actionItemId = id(isObject(req) ? req['actionItemId'] : null, 'actionItemId')
+      if (!(await ctx.settings.get('actionItems.enabled')) || !(await ctx.settings.get('actionItems.lineDrafts'))) {
+        throw expected(notulaError('invalid-input', 'Drafting from action items is turned off.'))
+      }
+      const [item] = await ctx.storage.listActionItems({ ids: [actionItemId] })
+      if (!item || !item.sourceNoteId) throw expected(notulaError('not-found', 'This action item no longer exists.'))
+      const channel = item.nextStepChannel
+      if (!channel || item.status !== 'todo') throw bad('This action item has no message to draft.')
+      if (item.draftThreadId) {
+        const existing = await ctx.storage.getChatThread(item.draftThreadId).catch(() => null)
+        if (existing && !existing.deleted_at) {
+          log('info', 'action-items:draft-reopened', { actionItemId, threadId: existing.id })
+          return { status: 'reused', threadId: existing.id }
+        }
+      }
+      if (!(await draftConnected(ctx, channel))) {
+        log('info', 'action-items:draft-not-connected', { actionItemId, channel })
+        return { status: 'not-connected', channel }
+      }
+      const threadId = randomUUID()
+      try {
+        await ctx.storage.upsertChatThread({ id: threadId, title: item.intent, grouping_key: `meeting:${item.sourceNoteId}`, initiated_by: 'user' })
+        await ctx.storage.setActionItemDraftThread(actionItemId, threadId)
+      } catch (err) {
+        log('warn', 'action-items:draft-failed', { actionItemId, code: parseError(err).code })
+        throw expected(notulaError('internal', 'Couldn’t start the draft in chat. Try again.'))
+      }
+      log('info', 'action-items:draft-started', { actionItemId, threadId, channel })
+      return { status: 'started', threadId, message: draftSeed(item, channel) }
     }
   )
 }

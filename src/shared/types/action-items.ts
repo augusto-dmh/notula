@@ -5,6 +5,8 @@ import type { IsoTime } from './common'
 
 export type ActionItemStatus = 'todo' | 'done'
 export type ActionItemReview = 'kept' | 'dismissed'
+/** How the owner delivers the result when it is a message to someone. */
+export type ActionItemChannel = 'email' | 'slack'
 
 export interface ActionItemAttribution {
   name: string
@@ -37,6 +39,12 @@ export interface ActionItem {
   reviewedAt: IsoTime | null
   /** Newest first. */
   feedback: ActionItemFeedback[]
+  /** Set when the task's main result is a message to write and send; null on rows from before. */
+  nextStepChannel: ActionItemChannel | null
+  /** The first hex characters of the SHA-256 of the stamped summary line's key (`lineKey`). */
+  lineFingerprint: string | null
+  /** The chat thread its draft was started in; it may have been deleted since. */
+  draftThreadId: string | null
 }
 
 export interface ActionItemsQuery {
@@ -59,7 +67,16 @@ export interface RegeneratedActionItem {
   intent: string
   detail: string | null
   attribution: ActionItemAttribution[]
+  channel: ActionItemChannel | null
+  summaryLine: string | null
+  lineFingerprint: string | null
 }
+
+/** `action-items:start-draft`: the reopened thread, a new one with its seed message, or the missing account. */
+export type ActionItemDraftStart =
+  | { status: 'reused'; threadId: string }
+  | { status: 'started'; threadId: string; message: string }
+  | { status: 'not-connected'; channel: ActionItemChannel }
 
 /** `action-items:regenerate-progress`. */
 export type ActionItemsRegenerateEvent = { runId: string } & (

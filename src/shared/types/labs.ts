@@ -35,6 +35,7 @@ export const LABS_SECTIONS: readonly { id: LabsSection; title: string }[] = [
 export type LabsSettingKey =
   | 'scratchpad.enabled'
   | 'actionItems.enabled'
+  | 'actionItems.lineDrafts'
   | 'followUpEmail.enabled'
   | 'tags.classify'
   | 'attachedLinks.enabled'
@@ -100,6 +101,14 @@ export const LABS_FEATURES: readonly LabsFeature[] = [
     section: 'notes',
     kind: 'switch',
     alsoIn: 'ai'
+  },
+  {
+    key: 'actionItems.lineDrafts',
+    label: 'Draft messages from action items',
+    description: 'Adds a button to email and Slack action items in your summaries that starts the draft in chat.',
+    parent: 'actionItems.enabled',
+    section: 'notes',
+    kind: 'switch'
   },
   {
     key: 'dispatcher.enabled',

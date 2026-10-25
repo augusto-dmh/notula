@@ -20,7 +20,7 @@ import { debugLog, isMod, isOwnNote, isTextTarget } from '../../app/platform'
 import { showToast } from '../../app/toast'
 import { BackButton, SettingsButton, TopBar } from '../../app/TopBar'
 import { copyHeaderFor, EditorScopeContext, NotulaEditor, roomIdFor, type EditorHandle } from '../../editor'
-import { ActionItemThumbs } from '../action-items'
+import { ActionItemDrafts, ActionItemThumbs } from '../action-items'
 import { addNoteImages, AttachedLinks, ImageDropOverlay, isImageFile, NoteImages, useImageDrop } from '../attachments'
 import { PrepBriefCard } from '../briefs'
 import { NoteAttendees } from '../calendar'
@@ -619,8 +619,9 @@ function NoteView({ note, reveal: revealQuery }: { note: Note; reveal: string | 
                 </section>
               ) : view === 'enhanced' && selected && !trashed ? (
                 <section className="note-section" role="tabpanel" aria-label="Enhanced notes">
-                  {/* Thumbs on summary lines that state action items. */}
+                  {/* Thumbs and draft buttons on summary lines that state action items. */}
                   <ActionItemThumbs noteId={note.id} />
+                  <ActionItemDrafts noteId={note.id} />
                   <EnhancedView
                     noteId={note.id}
                     panelId={selected}

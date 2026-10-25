@@ -13,13 +13,14 @@ import {
   ACTION_ITEMS_LIMITS,
   type ActionItem,
   type ActionItemAttribution,
+  type ActionItemChannel,
   type ActionItemFeedback,
   type ActionItemFeedbackInput,
   type ActionItemReview,
   type ActionItemsQuery,
   type RegeneratedActionItem
 } from '@shared/types/action-items'
-import type { NewActionItem } from './api'
+import type { AppliedActionItem, NewActionItem } from './api'
 import { nowIso, parseJson } from './rows'
 import { inTransaction, invalid, notFound, type StoreCtx } from './store'
 
@@ -31,8 +32,10 @@ const MAX_FEEDBACK = 4_000
 const MAX_LINE = 2_000
 const MAX_LIST = 1_000
 const REVIEWS: readonly ActionItemReview[] = ['kept', 'dismissed']
+const FINGERPRINT = /^[0-9a-f]{16}$/
 
 const str = (v: unknown): string | null => (typeof v === 'string' ? v : null)
+const channelOf = (v: unknown): ActionItemChannel | null => (v === 'email' || v === 'slack' ? v : null)
 
 function toFeedback(r: Row): ActionItemFeedback {
   return {
@@ -61,7 +64,10 @@ function toItem(r: Row, feedback: ActionItemFeedback[]): ActionItem {
     reviewStatus: r['review_status'] === 'kept' || r['review_status'] === 'dismissed' ? r['review_status'] : null,
     reviewReason: str(r['review_reason']),
     reviewedAt: str(r['reviewed_at']),
-    feedback
+    feedback,
+    nextStepChannel: channelOf(r['next_step_channel']),
+    lineFingerprint: str(r['line_fingerprint']),
+    draftThreadId: str(r['draft_thread_id'])
   }
 }
 
@@ -174,22 +180,40 @@ interface CleanItem {
   intent: string
   detail: string | null
   attribution: ActionItemAttribution[]
+  channel: ActionItemChannel | null
+  lineFingerprint: string | null
+  summaryLine: string | null
 }
 
-function cleanItem(v: { intent?: unknown; detail?: unknown; attribution?: unknown }): CleanItem | null {
+function cleanItem(v: {
+  intent?: unknown
+  detail?: unknown
+  attribution?: unknown
+  channel?: unknown
+  lineFingerprint?: unknown
+  summaryLine?: unknown
+}): CleanItem | null {
   if (typeof v !== 'object' || v === null) return null
   const intent = typeof v.intent === 'string' ? v.intent.trim() : ''
   if (!intent) return null
   const detail = typeof v.detail === 'string' && v.detail.trim() ? v.detail.trim().slice(0, MAX_DETAIL) : null
-  return { intent: intent.slice(0, MAX_INTENT), detail, attribution: attributionOf(v.attribution) }
+  return {
+    intent: intent.slice(0, MAX_INTENT),
+    detail,
+    attribution: attributionOf(v.attribution),
+    channel: channelOf(v.channel),
+    lineFingerprint: typeof v.lineFingerprint === 'string' && FINGERPRINT.test(v.lineFingerprint) ? v.lineFingerprint : null,
+    summaryLine: typeof v.summaryLine === 'string' && v.summaryLine.trim() ? v.summaryLine.slice(0, MAX_LINE) : null
+  }
 }
 
 /** Inserts in the given order; one shared timestamp keeps them together, `rid` keeps their order. */
 function insertItems(s: StoreCtx, noteId: string, panelId: string | null, items: CleanItem[], now: string): string[] {
   const insert = s.db.prepare(
     `INSERT INTO action_items (id, workspace_id, owner_id, source_document_id, source_panel_id, intent, detail,
-       attribution, status, created_at, updated_at)
-     VALUES (@id, @workspace, @owner, @noteId, @panelId, @intent, @detail, @attribution, 'todo', @now, @now)`
+       attribution, status, next_step_channel, line_fingerprint, created_at, updated_at)
+     VALUES (@id, @workspace, @owner, @noteId, @panelId, @intent, @detail, @attribution, 'todo', @channel,
+       @fingerprint, @now, @now)`
   )
   const ids: string[] = []
   for (const item of items) {
@@ -203,6 +227,8 @@ function insertItems(s: StoreCtx, noteId: string, panelId: string | null, items:
       intent: item.intent,
       detail: item.detail,
       attribution: JSON.stringify(item.attribution),
+      channel: item.channel,
+      fingerprint: item.lineFingerprint,
       now
     })
     ids.push(id)
@@ -272,6 +298,17 @@ export function archiveActionItem(s: StoreCtx, id: string): void {
       const now = nowIso()
       s.db.prepare(`UPDATE action_items SET archived_at = ?, updated_at = ? WHERE id = ?`).run(now, now, id)
     }
+    return str(row['source_document_id'])
+  })
+  s.touch('action_items', ...(noteId ? [noteId] : []))
+}
+
+/** The chat thread a draft was started in, kept for the next click. */
+export function setActionItemDraftThread(s: StoreCtx, id: string, threadId: string): void {
+  if (typeof threadId !== 'string' || !threadId || threadId.length > 200) throw invalid('threadId is invalid')
+  const noteId = inTransaction(s.db, () => {
+    const row = requireItem(s, id)
+    s.db.prepare(`UPDATE action_items SET draft_thread_id = ?, updated_at = ? WHERE id = ?`).run(threadId, nowIso(), id)
     return str(row['source_document_id'])
   })
   s.touch('action_items', ...(noteId ? [noteId] : []))
@@ -350,15 +387,15 @@ export function applyRegeneratedActionItems(
   s: StoreCtx,
   noteIds: string[],
   items: RegeneratedActionItem[]
-): { insertedCount: number } {
+): { insertedCount: number; inserted: AppliedActionItem[] } {
   if (!Array.isArray(noteIds) || noteIds.length > MAX_LIST || noteIds.some((n) => typeof n !== 'string' || !n)) {
     throw invalid('noteIds are invalid')
   }
   if (!Array.isArray(items) || items.length > noteIds.length * ACTION_ITEMS_LIMITS.perNote) throw invalid('items are invalid')
   const notes = [...new Set(noteIds)]
-  const insertedCount = inTransaction(s.db, () => {
+  const inserted = inTransaction(s.db, () => {
     const now = nowIso()
-    let count = 0
+    const out: AppliedActionItem[] = []
     for (const noteId of notes) {
       const live = s.db.prepare(`SELECT 1 FROM documents WHERE id = ? AND deleted_at IS NULL`).get(noteId)
       if (!live) continue
@@ -373,11 +410,12 @@ export function applyRegeneratedActionItems(
         .map((i) => cleanItem(i))
         .filter((i): i is CleanItem => i !== null)
         .slice(0, ACTION_ITEMS_LIMITS.perNote)
-      count += insertItems(s, noteId, panel?.id ?? null, clean, now).length
+      const ids = insertItems(s, noteId, panel?.id ?? null, clean, now)
+      ids.forEach((id, i) => out.push({ id, noteId, panelId: panel?.id ?? null, summaryLine: clean[i]?.summaryLine ?? null }))
     }
-    return count
+    return out
   })
   s.touch('action_items', ...notes)
-  s.log('info', 'action-items-regenerated-applied', { notes: notes.length, insertedCount })
-  return { insertedCount }
+  s.log('info', 'action-items-regenerated-applied', { notes: notes.length, insertedCount: inserted.length })
+  return { insertedCount: inserted.length, inserted }
 }
