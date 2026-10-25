@@ -37,7 +37,7 @@ import { ConnectorsSettings } from '../connectors'
 import { ConsentPreferencesRow, MeetingNoticeSettings } from '../consent'
 import { DataExportCard } from '../data-export'
 import { NotesImportCard } from '../imports-md'
-import { VoiceTypingSettings } from '../dictation'
+import { VoiceTypingHistory, VoiceTypingSettings } from '../dictation'
 import { FeedbackSettings } from '../feedback'
 import { FolderPreferencesRows } from '../folders'
 import { ChatEnterBehaviorRow, LabsMoreRow } from '../general-prefs'
@@ -168,6 +168,7 @@ function SectionBody({ meta }: { meta: SettingsSectionMeta }): JSX.Element {
   if (meta.id === 'keyboard-shortcuts') return <KeyboardShortcutsSettings />
   if (meta.id === 'speaker-tags') return <SpeakerTagsSettings />
   if (meta.id === 'voice-typing') return <VoiceTypingSettings />
+  if (meta.id === 'voice-typing-history') return <VoiceTypingHistory />
   if (meta.id === 'integrations') return <IntegrationsSettings />
   if (meta.id === 'connectors') return <ConnectorsSettings />
   if (meta.id === 'labs') return <LabsPage />
@@ -252,7 +253,7 @@ export function SettingsPage(): JSX.Element {
     if (
       found ||
       (requested === 'dev' && update === null) ||
-      ((requested === 'voice-typing' || requested === 'sources') && prefs === null)
+      ((requested === 'voice-typing' || requested === 'voice-typing-history' || requested === 'sources') && prefs === null)
     ) {
       return
     }

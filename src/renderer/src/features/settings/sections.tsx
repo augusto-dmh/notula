@@ -175,6 +175,14 @@ const ALL: readonly SettingsSectionMeta[] = [
     description: 'Ask, warn or block before Notula takes notes in meetings you choose.',
     icon: (s) => <IconMic size={s} />,
     hidden: true
+  },
+  {
+    id: 'voice-typing-history',
+    label: 'Voice typing history',
+    title: 'History',
+    description: 'Your recent dictations. Copy one, delete it or retry one that failed.',
+    icon: (s) => <IconMic size={s} />,
+    hidden: true
   }
 ]
 
@@ -186,7 +194,7 @@ export function settingsSections(packaged: boolean | null, prefs: Settings | nul
   return ALL.filter((s) => {
     if (s.id === 'calendar') return calendarEnabled()
     if (s.id === 'dev') return packaged === false
-    if (s.id === 'voice-typing') return prefs?.['voiceTyping.enabled'] === true
+    if (s.id === 'voice-typing' || s.id === 'voice-typing-history') return prefs?.['voiceTyping.enabled'] === true
     if (s.id === 'automations') return prefs?.['automations.enabled'] === true
     if (s.id === 'sources') return !isMac && prefs?.['sources.enabled'] === true
     return true

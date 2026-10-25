@@ -3,31 +3,33 @@
 // `voiceTyping.enabled` is on): the enable row, General (shortcut, language, microphone,
 // transcription), Dictation bar (the bar switch and its three shortcuts),
 // Personalization (dictionary, screen context), Data & Privacy (failed-audio retention), Styles
-// and History.
+// and the History row, which opens the `voice-typing-history` sub-page.
+//
+// Until the onboarding is done, and while no dictation has text or a word count, a "Try
+// voice typing" card takes the enable row's place; its Try now opens the overlay at Set up.
+// Turning voice typing on here before the onboarding is done opens it too.
 
-import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type JSX, type KeyboardEvent } from 'react'
 import {
   DICTATION_DEFAULT_SHORTCUT,
   DICTATION_LANGUAGE_LISTS,
   DICTATION_LIMITS,
   type DictationAsrChoice,
-  type DictationAttempt,
   type DictationCategory,
   type DictationMicrophone,
   type DictationRetention,
   type DictationStatus,
   type DictationTone
 } from '@shared/types/dictation'
-import { parseError } from '@shared/errors'
 import { navigateToSettings } from '../../app/navigation'
 import { isMac } from '../../app/platform'
-import { showToast } from '../../app/toast'
-import { Modal } from '../folders/Modal'
 import { KeyChips, StandaloneShortcut } from '../keyboard-shortcuts/KeyboardShortcutsSettings'
 import { readKey } from '../keyboard-shortcuts/keys'
 import { Select, Switch, type SelectOption } from '../settings/controls'
 import { SettingsCard, SettingsRow } from '../settings/primitives'
 import { setPrefs, usePrefs } from '../settings/prefs-store'
+import { useDictationHistory } from './VoiceTypingHistory'
+import { openVoiceTypingOnboarding } from './VoiceTypingOnboarding'
 import './voice-typing.css'
 
 // ---------- styles ----------
@@ -269,7 +271,7 @@ function ShortcutButton({ status, disabled }: { status: DictationStatus | null; 
           onKeyUp={onKeyUp}
           onBlur={() => recording && stop()}
         >
-          {recording ? 'Press keys' : <KeyChips accelerator={current} />}
+          {recording ? 'Press the keys you want' : <KeyChips accelerator={current} />}
         </button>
         {prefs?.['dictation.shortcut'] && !recording ? (
           <button type="button" className="n-btn n-btn--ghost n-btn--sm" disabled={disabled} onClick={() => apply(null)}>
@@ -308,7 +310,7 @@ function useInputs(): MediaDeviceInfo[] {
   return inputs
 }
 
-function MicrophoneSelect({ value, disabled }: { value: DictationMicrophone | null; disabled: boolean }): JSX.Element {
+export function MicrophoneSelect({ value, disabled }: { value: DictationMicrophone | null; disabled: boolean }): JSX.Element {
   const inputs = useInputs()
   const builtIn = inputs.find((d) => /built-?in|internal|integrated|array/i.test(d.label))
   const options: SelectOption<string>[] = [{ value: 'system-default', label: 'System default' }]
@@ -338,174 +340,12 @@ function MicrophoneSelect({ value, disabled }: { value: DictationMicrophone | nu
   )
 }
 
-// ---------- history ----------
-
-function dayLabel(iso: string): string {
-  const d = new Date(iso)
-  const today = new Date()
-  const y = new Date()
-  y.setDate(today.getDate() - 1)
-  if (d.toDateString() === today.toDateString()) return 'Today'
-  if (d.toDateString() === y.toDateString()) return 'Yesterday'
-  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
-}
-
-function HistoryRow({ a, interrupted }: { a: DictationAttempt; interrupted: boolean }): JSX.Element {
-  const [expanded, setExpanded] = useState(false)
-  const [copied, setCopied] = useState(false)
-  const [retry, setRetry] = useState<'idle' | 'busy' | 'failed'>('idle')
-  const time = new Date(a.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-  const remove = (): void => {
-    void window.notula.dictation.history.delete({ id: a.id }).catch(() => undefined)
-  }
-  if (!a.text) {
-    const label = retry === 'failed' ? 'Retry failed' : interrupted ? 'Dictation interrupted' : 'Dictation failed'
-    return (
-      <li className="vt-hist__row">
-        <span className="vt-hist__time">{time}</span>
-        <span className="vt-hist__text vt-hist__text--muted">{label}</span>
-        <span className="vt-hist__actions vt-hist__actions--shown">
-          {a.has_audio ? (
-            <button
-              type="button"
-              className="n-btn n-btn--sm"
-              disabled={retry === 'busy'}
-              onClick={() => {
-                setRetry('busy')
-                void window.notula.dictation.history.retry({ id: a.id }).then(
-                  () => setRetry('idle'),
-                  () => setRetry('failed')
-                )
-              }}
-            >
-              {retry === 'busy' ? 'Retrying…' : 'Retry'}
-            </button>
-          ) : null}
-          <button type="button" className="vt-icon-btn" aria-label="Delete dictation" title="Delete" onClick={remove}>
-            ×
-          </button>
-        </span>
-      </li>
-    )
-  }
-  return (
-    <li className="vt-hist__row">
-      <span className="vt-hist__time">{time}</span>
-      <button type="button" className={`vt-hist__text${expanded ? ' is-expanded' : ''}`} onClick={() => setExpanded(!expanded)}>
-        {a.text}
-      </button>
-      <span className="vt-hist__actions">
-        <button
-          type="button"
-          className="vt-icon-btn"
-          aria-label={copied ? 'Copied' : 'Copy dictation'}
-          title="Copy"
-          onClick={() => {
-            void navigator.clipboard.writeText(a.text ?? '').then(() => {
-              setCopied(true)
-              setTimeout(() => setCopied(false), 2_000)
-            })
-          }}
-        >
-          {copied ? '✓' : '⧉'}
-        </button>
-        <button type="button" className="vt-icon-btn" aria-label="Delete dictation" title="Delete" onClick={remove}>
-          ×
-        </button>
-      </span>
-    </li>
-  )
-}
-
-function History(): JSX.Element {
-  const [rows, setRows] = useState<DictationAttempt[] | null>(null)
-  const [confirm, setConfirm] = useState(false)
-  const opened = useRef(new Date().toISOString())
-  useEffect(() => {
-    let live = true
-    const read = (): void => {
-      void window.notula.dictation.history
-        .list()
-        .then((r) => live && setRows(r))
-        .catch(() => live && setRows([]))
-    }
-    read()
-    const off = window.notula.dictation.history.onChanged(read)
-    return () => {
-      live = false
-      off()
-    }
-  }, [])
-  const groups = useMemo(() => {
-    const out: { label: string; items: DictationAttempt[] }[] = []
-    for (const a of rows ?? []) {
-      const label = dayLabel(a.created_at)
-      const g = out[out.length - 1]
-      if (g && g.label === label) g.items.push(a)
-      else out.push({ label, items: [a] })
-    }
-    return out
-  }, [rows])
-  return (
-    <section className="settings-group">
-      <div className="vt-hist__head">
-        <h2 className="settings-group__title">History</h2>
-        {rows && rows.length ? (
-          <button type="button" className="n-btn n-btn--ghost n-btn--sm" onClick={() => setConfirm(true)}>
-            Clear all
-          </button>
-        ) : null}
-      </div>
-      <div className="settings-card vt-hist">
-        {rows === null ? null : rows.length === 0 ? (
-          <p className="vt-hist__empty">No dictations yet.</p>
-        ) : (
-          groups.map((g) => (
-            <div key={g.label} className="vt-hist__group">
-              <div className="vt-hist__day">{g.label}</div>
-              <ul>
-                {g.items.map((a) => (
-                  <HistoryRow key={a.id} a={a} interrupted={a.status === 'recording' && a.created_at < opened.current} />
-                ))}
-              </ul>
-            </div>
-          ))
-        )}
-      </div>
-      {confirm ? (
-        <Modal label="Clear history?" onClose={() => setConfirm(false)}>
-          <div className="h-modal__body">
-            <h2 className="h-modal__title">Clear history?</h2>
-            <p className="h-modal__text">This deletes every dictation in your history, including any saved audio. You can’t undo this.</p>
-            <div className="h-modal__footer">
-            <button type="button" className="n-btn" data-autofocus onClick={() => setConfirm(false)}>
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="n-btn n-btn--danger"
-              onClick={() => {
-                setConfirm(false)
-                void window.notula.dictation.history.clear({ confirmed: true }).catch((err: unknown) => {
-                  showToast({ kind: 'error', title: parseError(err).message || 'Couldn’t clear the history.' })
-                })
-              }}
-            >
-              Clear all
-            </button>
-            </div>
-          </div>
-        </Modal>
-      ) : null}
-    </section>
-  )
-}
-
 // ---------- the page ----------
 
 export function VoiceTypingSettingsView(): JSX.Element | null {
   const prefs = usePrefs()
   const [status, setStatus] = useState<DictationStatus | null>(null)
+  const history = useDictationHistory()
 
   useEffect(() => {
     let live = true
@@ -546,15 +386,39 @@ export function VoiceTypingSettingsView(): JSX.Element | null {
   if (!langOptions.some((o) => o.value === shownLang)) langOptions.push({ value: shownLang, label: languageName(shownLang) })
   const cloudLlm = prefs['llm.provider'] !== 'local'
   const styles = prefs['dictation.styles']
+  const onboarded = prefs['dictation.onboardingCompleted']
+  const used = history?.some((a) => !!a.text || a.word_count !== null) ?? true
+  const offerTry = !onboarded && !used && status?.platformSupported === true
 
   return (
     <div className="vt-page">
       <SettingsCard>
-        <SettingsRow
-          title="Voice typing"
-          description="Type with your voice in any app"
-          control={<Switch checked={enabled} label="Voice typing" onChange={(on) => setPrefs({ 'dictation.enabled': on })} />}
-        />
+        {offerTry ? (
+          <div className="vt-try">
+            <div>
+              <p className="vt-try__title">Try voice typing</p>
+              <p className="vt-try__text">Speak in any app and Notula types it for you. Setup takes a minute.</p>
+            </div>
+            <button type="button" className="n-btn n-btn--primary n-btn--sm" onClick={() => openVoiceTypingOnboarding('setup')}>
+              Try now
+            </button>
+          </div>
+        ) : (
+          <SettingsRow
+            title="Voice typing"
+            description="Type with your voice in any app"
+            control={
+              <Switch
+                checked={enabled}
+                label="Voice typing"
+                onChange={(on) => {
+                  setPrefs({ 'dictation.enabled': on })
+                  if (on && !onboarded) openVoiceTypingOnboarding('setup')
+                }}
+              />
+            }
+          />
+        )}
       </SettingsCard>
 
       {isMac && enabled && status?.accessibility === 'missing' ? (
@@ -662,7 +526,14 @@ export function VoiceTypingSettingsView(): JSX.Element | null {
         })}
       </SettingsCard>
 
-      <History />
+      <SettingsCard>
+        <SettingsRow
+          title="History"
+          description="Your recent dictations, to copy, delete or retry"
+          control={<span className="vt-chevron" aria-hidden="true">›</span>}
+          onClick={() => navigateToSettings('voice-typing-history')}
+        />
+      </SettingsCard>
     </div>
   )
 }

@@ -1,0 +1,264 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* The voice typing overlay: a dialog that fills the main window, with a CSS illustration
+   of the dictation bar beside the step. */
+
+.h-modal.vto {
+  width: 100vw;
+  max-width: 100vw;
+  height: 100vh;
+  max-height: 100vh;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--bg);
+  box-shadow: none;
+}
+
+.vto-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 48px;
+  width: min(880px, calc(100vw - 64px));
+  min-height: 100%;
+  margin: 0 auto;
+  padding: 48px 0;
+  box-sizing: border-box;
+}
+
+@media (max-width: 720px) {
+  .vto-panel {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px;
+  }
+}
+
+/* ---------- the illustration ---------- */
+
+.vto-visual {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 28px;
+  height: 280px;
+  padding: 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
+  box-sizing: border-box;
+}
+
+.vto-field {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-sizing: border-box;
+}
+
+.vto-field__line {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--surface-3);
+  transform-origin: left;
+  animation: vto-type 3.2s var(--ease) infinite;
+}
+
+.vto-field__line--short {
+  width: 55%;
+  animation-delay: 400ms;
+}
+
+.vto-field__caret {
+  width: 2px;
+  height: 14px;
+  background: var(--accent);
+  animation: vto-blink 1s steps(1) infinite;
+}
+
+.vto-pill {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+  padding: 0 16px;
+  border-radius: 20px;
+  background: rgba(24, 24, 22, 0.94);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 6px 20px rgba(0, 0, 0, 0.28);
+}
+
+.vto-pill__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--live);
+  box-shadow: 0 0 0 3px rgba(229, 72, 77, 0.22);
+}
+
+.vto-pill__wave {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 22px;
+}
+
+.vto-pill__wave span {
+  width: 3px;
+  height: 22px;
+  border-radius: 2px;
+  background: #f4f4f2;
+  animation: vto-wave 900ms ease-in-out infinite;
+}
+
+@keyframes vto-wave {
+  0%,
+  100% {
+    transform: scaleY(0.2);
+  }
+  50% {
+    transform: scaleY(0.9);
+  }
+}
+
+@keyframes vto-type {
+  0% {
+    transform: scaleX(0);
+  }
+  45%,
+  100% {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes vto-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* ---------- the step ---------- */
+
+.vto-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.vto-title {
+  margin: 0;
+  color: var(--fg);
+  font-size: var(--text-xl);
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.vto-text {
+  margin: 0;
+  color: var(--fg-2);
+  font-size: var(--text-md);
+  line-height: 1.5;
+}
+
+.vto-rows {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.vto-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 16px;
+}
+
+/* Device names can be long: the picker takes the row's full width under its label. */
+.vto-row--stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.vto-row--stack .settings-select {
+  display: flex;
+}
+
+.vto-row--stack .settings-select select {
+  width: 100%;
+  min-width: 0;
+}
+
+.vto-row + .vto-row {
+  border-top: 1px solid var(--border);
+}
+
+.vto-row__label {
+  color: var(--fg);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.vto-row__hint {
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+}
+
+.vto-ok {
+  flex: none;
+  color: var(--success);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.vto-keys {
+  display: flex;
+}
+
+.vto-practice {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--fg);
+  font: var(--text-md) / 1.5 var(--font-sans);
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+.vto-practice:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.vto-change {
+  align-self: flex-start;
+  font-size: var(--text-sm);
+}
+
+.vto-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vto-field__line,
+  .vto-field__caret,
+  .vto-pill__wave span {
+    animation: none;
+  }
+}

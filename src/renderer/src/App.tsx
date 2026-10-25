@@ -18,6 +18,7 @@ import { CustomerCallsPage } from './features/crm'
 import { DeviceLockGate } from './features/device-lock'
 import { DispatchesPage } from './features/dispatch'
 import { DemoHost } from './features/demo'
+import { VoiceTypingOnboardingHost } from './features/dictation'
 import { FolderPage } from './features/folders'
 import { FollowUpComposerHost } from './features/follow-up'
 import { HomePage } from './features/home'
@@ -62,6 +63,7 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'automations',
   'meeting-notice',
   'transcription-rules',
+  'voice-typing-history',
   'sources'
 ]
 
@@ -242,6 +244,7 @@ export function App(): JSX.Element {
             <IntegrationsDialogsHost />
             <NuxHost />
             <TranscriptionRulesDialogHost />
+            <VoiceTypingOnboardingHost />
           </OnboardingGate>
         </DeviceLockGate>
         <CaptureEngineHost />

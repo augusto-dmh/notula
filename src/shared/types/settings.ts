@@ -216,6 +216,8 @@ export interface Settings {
   'dictation.dictionaryRemoved': string[]
   /** null = `24h`. */
   'dictation.failedAudioRetention': DictationRetention | null
+  /** Set by the voice typing overlay's Done; until then the page offers "Try voice typing". */
+  'dictation.onboardingCompleted': boolean
   /** The dictation bar; effective only inside the Voice typing gate. */
   'dictationBar.enabled': boolean
   /** Epoch ms the bar stays hidden until (Hide for 1 hour), or null. Main-only. */
@@ -478,6 +480,7 @@ export const DEFAULT_SETTINGS: Settings = {
   'dictation.dictionary': [],
   'dictation.dictionaryRemoved': [],
   'dictation.failedAudioRetention': null,
+  'dictation.onboardingCompleted': false,
   'dictationBar.enabled': true,
   'dictationBar.snoozeUntil': null,
   'shortcuts.dictationHold': null,
@@ -653,11 +656,13 @@ export type SettingsSection =
   // The last item of "Get help": version, licence and the bundled notices.
   | 'about'
   // `feedback` in Get help; `automations` after Integrations (while
-  // `automations.enabled`); `meeting-notice` and `transcription-rules` are hidden sub-pages.
+  // `automations.enabled`); `meeting-notice`, `transcription-rules` and
+  // `voice-typing-history` are hidden sub-pages.
   | 'feedback'
   | 'automations'
   | 'meeting-notice'
   | 'transcription-rules'
+  | 'voice-typing-history'
   // Content sources: listed while `sources.enabled` is on (Windows only).
   | 'sources'
 

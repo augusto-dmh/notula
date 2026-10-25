@@ -43,7 +43,8 @@ const SECTIONS: readonly SettingsSection[] = [
   'feedback',
   'automations',
   'meeting-notice',
-  'transcription-rules'
+  'transcription-rules',
+  'voice-typing-history'
 ]
 
 type Resolved = keyof typeof WINDOW_BACKGROUND

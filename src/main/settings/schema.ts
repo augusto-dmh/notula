@@ -322,6 +322,7 @@ const VALIDATORS: { [K in SettingKey]: Validator } = {
   'dictation.dictionaryRemoved': (v) =>
     Array.isArray(v) && v.length <= 500 && v.every((x) => typeof x === 'string' && x.length <= 50),
   'dictation.failedAudioRetention': nullOr(oneOf('off', '24h', '7d', '14d')),
+  'dictation.onboardingCompleted': bool,
   'privacy.localOnly': bool,
   'window.repositionForMeetings': bool,
   'screenCorner.enabled': bool,

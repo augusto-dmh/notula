@@ -15,6 +15,7 @@ import {
   type ReactNode
 } from 'react'
 import type { DeepLinkEvent } from '@shared/types/app'
+import { tryVoiceTyping } from '../features/dictation'
 import { startNewNote } from '../features/new-note'
 import { IconAlert, IconDownload } from './icons'
 import { isKnownRoute, isSettingsPath, navigate, navigateToSettings, useRoute } from './navigation'
@@ -211,6 +212,9 @@ function handleDeepLink(event: DeepLinkEvent): void {
     }
     case 'show-settings':
       navigateToSettings(event.data.page)
+      return
+    case 'try-voice-typing':
+      tryVoiceTyping()
   }
 }
 

@@ -46,6 +46,7 @@ export function shippedSettingsSections(packaged: boolean): SettingsSection[] {
     'keyboard-shortcuts',
     'speaker-tags',
     'voice-typing',
+    'voice-typing-history',
     'integrations',
     'connectors',
     'labs',
@@ -113,6 +114,9 @@ function parseHost(host: Host, q: Map<string, QueryValue>, packaged: boolean): P
       }
       return { ok: true, event: { type: 'show-settings', data: { page: page as SettingsSection } } }
     }
+    case 'try-voice-typing':
+      // No parameters; any given are ignored.
+      return { ok: true, event: { type: 'try-voice-typing', data: {} } }
   }
 }
 

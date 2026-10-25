@@ -917,6 +917,7 @@ export function registerDictation(ctx: MainContext): void {
     }
     const stored = accelerator === DICTATION_DEFAULT_SHORTCUT ? null : accelerator
     await ctx.settings.set('dictation.shortcut', stored)
+    log('debug', 'dictation:shortcut-changed', { customized: stored !== null })
     return { ok: true, error: null }
   })
 
@@ -997,7 +998,7 @@ export function registerDictation(ctx: MainContext): void {
         return
       case 'open-history':
         if (state.kind === 'saved') setState({ kind: 'idle' })
-        openSettingsSection('voice-typing', 'dictation-pill')
+        openSettingsSection('voice-typing-history', 'dictation-pill')
         return
       case 'dismiss':
         if (state.kind === 'saved') setState({ kind: 'idle' })

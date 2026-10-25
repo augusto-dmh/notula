@@ -281,6 +281,86 @@
   color: var(--fg);
 }
 
+/* The history sub-page: column labels, day counts and the row menu. */
+.vt-hist__cols {
+  display: flex;
+  gap: 12px;
+  padding: 8px 16px 4px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.vt-hist__count {
+  margin-left: 8px;
+  font-weight: 400;
+}
+
+.vt-menu {
+  position: relative;
+}
+
+.vt-menu__list {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  min-width: 120px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.vt-menu__list button {
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--fg);
+  font: var(--text-sm) var(--font-sans);
+  text-align: left;
+  cursor: pointer;
+}
+
+.vt-menu__list button:hover {
+  background: var(--surface-2);
+}
+
+.vt-menu__list button.is-danger {
+  color: var(--danger);
+}
+
+/* The page's "Try voice typing" card, in place of the enable row. */
+.vt-try {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px;
+}
+
+.vt-try__title {
+  margin: 0 0 2px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.vt-try__text {
+  margin: 0;
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+}
+
+.vt-chevron {
+  color: var(--fg-3);
+  font-size: 18px;
+}
+
 /* The chat composer's voice button. */
 .chat-voice {
   display: inline-flex;

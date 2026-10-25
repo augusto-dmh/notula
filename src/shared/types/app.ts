@@ -48,6 +48,8 @@ export type DeepLinkEvent =
       data: { documentId: string; openSource?: 'deep_link' | 'bubble_open_document' | 'notification' }
     }
   | { type: 'show-settings'; data: { page: SettingsSection } }
+  /** Opens the voice typing overlay at its intro; the renderer checks the Labs gate. */
+  | { type: 'try-voice-typing'; data: Record<string, never> }
 
 /** A link Notula could not act on (the shell's "can't open this link" toast). */
 export interface DeepLinkUnsupported {
@@ -67,4 +69,4 @@ export const DEEP_LINK_SCHEME = 'notula'
 export const DEEP_LINK_SCHEME_DEV = 'notula-dev'
 export const APP_TASK_ARG_PREFIX = '--notula-task='
 /** The host allow-list. */
-export const DEEP_LINK_HOSTS = ['open', 'new-note', 'show-note', 'show-settings'] as const
+export const DEEP_LINK_HOSTS = ['open', 'new-note', 'show-note', 'show-settings', 'try-voice-typing'] as const
