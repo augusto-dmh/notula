@@ -295,8 +295,8 @@ export interface CalendarApi {
    * Rejects `invalid-input` for an ICS source.
    */
   setGrant(sourceId: string, grant: CalendarGrant, enabled: boolean): Promise<CalendarSource>
-  /** Refreshes as needed; throws `provider-error: <CalendarGrantError>`. */
-  accessToken(sourceId: string, grant: CalendarGrant): Promise<string>
+  /** Refreshes as needed; null asks only for the read scope. Throws `provider-error: <CalendarGrantError>`. */
+  accessToken(sourceId: string, grant: CalendarGrant | null): Promise<string>
   refreshSource(sourceId: string): void
 }
 

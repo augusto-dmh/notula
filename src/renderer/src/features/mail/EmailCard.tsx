@@ -163,6 +163,7 @@ export function EmailDraftCard({ toolCall }: ToolCardProps): JSX.Element {
         <span className="ml-line__label">Subject</span>
         <input className="ml-line__input" value={c.subject} disabled={locked} aria-label="Subject" onChange={(e) => set({ subject: e.target.value })} />
       </label>
+      {c.forward ? <p className="ml-forward">Forwarding: {c.forward.subject || c.subject.replace(/^fwd:\s*/i, '') || '(no subject)'}</p> : null}
       <textarea className="ml-body" value={c.body} disabled={locked} aria-label="Message" rows={Math.min(14, Math.max(5, c.body.split('\n').length + 1))} onChange={(e) => set({ body: e.target.value })} />
       <div className="ml-foot">
         <button type="button" className="n-btn n-btn--sm n-btn--ghost" disabled={locked} onClick={() => void h.dismiss()}>

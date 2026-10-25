@@ -3,7 +3,7 @@
 // proposed, editable in place (autosaved after 750 ms), and written to the calendar only when the
 // user clicks Create event. A missing write permission opens the permission modal first.
 
-import { useMemo, useState, type JSX } from 'react'
+import { useEffect, useMemo, useState, type JSX } from 'react'
 import type { CalendarSource } from '@shared/types/calendar'
 import type { CalendarEventDraft } from '@shared/types/workflow-blocks'
 import { navigateToSettings } from '../../app/navigation'
@@ -14,7 +14,26 @@ import { blockIdOf, useBlock, useThreadBlocks } from '../blocks/useBlock'
 import { openExternal } from '../integrations/store'
 import { usePrefs } from '../settings/prefs-store'
 import { PermissionModal, useOAuthSources } from './grants'
-import { buildRepeat, cardReason, isTimed, localDate, localTime, optionLabel, parseRepeat, repeatChoices, repeatLabel, validLink, zonedIso, zoneLabel, type TimeOption } from './rules'
+import {
+  buildRepeat,
+  cardReason,
+  COLOR_CHOICES,
+  isTimed,
+  localDate,
+  localTime,
+  optionLabel,
+  parseRepeat,
+  repeatChoices,
+  repeatLabel,
+  startLabel,
+  submitLabel,
+  validLink,
+  VISIBILITY_CHOICES,
+  withRepeat,
+  zonedIso,
+  zoneLabel,
+  type TimeOption
+} from './rules'
 
 const LOCAL_ONLY = 'Calendar changes are off while Local-only mode is on.'
 const SAVE_FAILED = 'Couldn’t save your changes. Try again.'
@@ -35,6 +54,13 @@ function writeLastTarget(id: string): void {
   } catch {
     // A convenience only.
   }
+}
+
+/** What main found when an update moves the time: guests busy then, and calendars it couldn't read. */
+interface MoveAvailability {
+  checked: number
+  unknown: string[]
+  conflicts: { email: string; name: string }[]
 }
 
 const sameOption = (a: TimeOption | undefined | null, b: TimeOption | undefined | null): boolean => !!a && !!b && JSON.stringify(a) === JSON.stringify(b)
@@ -141,6 +167,7 @@ export function CalendarDraftCard({ threadId, toolCall }: ToolCardProps): JSX.El
   const [modalFor, setModalFor] = useState<string | null>(null)
   const [target, setTarget] = useState<string | null>(null)
   const [expanded, setExpanded] = useState(false)
+  const [palette, setPalette] = useState<Record<string, string>>({})
 
   const defaultTarget = useMemo((): CalendarSource | null => {
     const writable = sources.filter((s) => s.grants.includes('calendar-write'))
@@ -149,6 +176,24 @@ export function CalendarDraftCard({ threadId, toolCall }: ToolCardProps): JSX.El
     const profile = prefs?.['profile.email']?.toLowerCase() ?? ''
     return pool.find((s) => s.id === last) ?? pool.find((s) => !!profile && s.accountEmail?.toLowerCase() === profile) ?? pool[0] ?? null
   }, [sources, prefs])
+
+  // The swatches follow the account the event is written to (an edit's own, else "Add to").
+  const editCalendar = h.content?.existingEvent?.calendarId ?? null
+  const writeSource = editCalendar ? (editCalendar.split(':')[1] ?? null) : (target ?? defaultTarget?.id ?? null)
+  const writesToGoogle = editCalendar ? editCalendar.startsWith('google:') : sources.find((s) => s.id === writeSource)?.kind === 'google'
+  useEffect(() => {
+    if (!writeSource || !writesToGoogle) return
+    let live = true
+    window.notula.calendar
+      .eventColors({ sourceId: writeSource })
+      .then((p) => {
+        if (live) setPalette(p)
+      })
+      .catch(() => undefined)
+    return () => {
+      live = false
+    }
+  }, [writeSource, writesToGoogle])
 
   if (toolCall.error) {
     return (
@@ -184,8 +229,10 @@ export function CalendarDraftCard({ threadId, toolCall }: ToolCardProps): JSX.El
   const superseded = !!newest && newest.id !== block.id && !done && !dismissed
   const localOnly = !!prefs?.['privacy.localOnly']
   const targetSource = (target ? sources.find((s) => s.id === target) : null) ?? defaultTarget
-  const microsoft = targetSource?.kind === 'microsoft'
+  const microsoft = d.existingEvent ? d.existingEvent.calendarId.startsWith('microsoft:') : targetSource?.kind === 'microsoft'
   const conflicts = (toolCall.result as { conflicts?: string[][] } | null)?.conflicts ?? []
+  const moved = (toolCall.result as { availability?: MoveAvailability } | null)?.availability ?? null
+  const scope = d.existingEvent?.scope ?? null
   const first = d.timeOptions[0]
   const repeat = parseRepeat(d.recurrenceRules)
   const tz = first && isTimed(first.start) ? first.start.timeZone : null
@@ -302,19 +349,33 @@ export function CalendarDraftCard({ threadId, toolCall }: ToolCardProps): JSX.El
             </div>
           )
         })()}
+        {moved && !locked ? (
+          <div className="cw-availability">
+            {moved.conflicts.slice(0, 5).map((c) => (
+              <span key={c.email} className="cw-conflict">
+                Busy then: {c.name}
+              </span>
+            ))}
+            {moved.unknown.length ? (
+              <span className="cw-muted">
+                Couldn’t see {moved.unknown.length} {moved.unknown.length === 1 ? 'guest’s calendar' : 'guests’ calendars'}.
+              </span>
+            ) : null}
+          </div>
+        ) : null}
       </Field>
 
-      {!isEdit && first && d.timeOptions.length === 1 ? (
+      {(!isEdit || scope === 'series' || scope === 'following') && first && d.timeOptions.length === 1 ? (
         <Field label="Repeat">
           <select
             className="n-input cw-in"
             aria-label="Repeat"
-            disabled={locked || !isTimed(first.start)}
+            disabled={locked}
             value={repeatChoices(first.start).some((c) => c.value === repeat.base) ? repeat.base : repeat.base ? '__custom' : ''}
             onChange={(e) => {
               const base = e.target.value
               if (base === '__custom') return
-              const rules = buildRepeat(base, repeat.count, repeat.until, tz)
+              const rules = withRepeat(d, buildRepeat(base, repeat.count, repeat.until, tz))
               const { recurrenceRules: _r, ...rest } = d
               h.edit(rules ? { ...rest, recurrenceRules: rules } : rest)
             }}
@@ -334,7 +395,7 @@ export function CalendarDraftCard({ threadId, toolCall }: ToolCardProps): JSX.El
               value={repeat.count ? 'count' : repeat.until ? 'until' : 'never'}
               onChange={(e) => {
                 const v = e.target.value
-                const rules = buildRepeat(repeat.base, v === 'count' ? (repeat.count ?? 5) : null, v === 'until' ? (repeat.until ?? localDate(first.start)) : null, tz)
+                const rules = withRepeat(d, buildRepeat(repeat.base, v === 'count' ? (repeat.count ?? 5) : null, v === 'until' ? (repeat.until ?? localDate(first.start)) : null, tz))
                 if (rules) set({ recurrenceRules: rules })
               }}
             >
@@ -355,7 +416,7 @@ export function CalendarDraftCard({ threadId, toolCall }: ToolCardProps): JSX.El
               disabled={locked}
               value={repeat.count}
               onChange={(e) => {
-                const rules = buildRepeat(repeat.base, Number(e.target.value) || 1, null, tz)
+                const rules = withRepeat(d, buildRepeat(repeat.base, Number(e.target.value) || 1, null, tz))
                 if (rules) set({ recurrenceRules: rules })
               }}
             />
@@ -370,7 +431,7 @@ export function CalendarDraftCard({ threadId, toolCall }: ToolCardProps): JSX.El
               disabled={locked}
               value={repeat.until}
               onChange={(e) => {
-                const rules = buildRepeat(repeat.base, null, e.target.value || null, tz)
+                const rules = withRepeat(d, buildRepeat(repeat.base, null, e.target.value || null, tz))
                 if (rules) set({ recurrenceRules: rules })
               }}
             />
@@ -383,7 +444,13 @@ export function CalendarDraftCard({ threadId, toolCall }: ToolCardProps): JSX.El
           <span className="cw-muted">{repeatLabel(d.recurrenceRules)}</span>
         </Field>
       ) : null}
-      {isEdit && d.existingEvent?.scope === 'series' ? <p className="cw-note">Changes apply to every event in this series.</p> : null}
+      {scope === 'series' ? <p className="cw-note">Changes apply to every event in this series.</p> : null}
+      {scope === 'following' && first ? (
+        <p className="cw-note">
+          Starts with the {startLabel(d.existingEvent?.occurrenceStart ?? first.start)} occurrence; earlier ones keep their details. Guests get the new invitation. Notula hasn’t checked
+          anyone’s availability for the later dates.
+        </p>
+      ) : null}
 
       <Field label="Conferencing">
         <select
@@ -412,6 +479,39 @@ export function CalendarDraftCard({ threadId, toolCall }: ToolCardProps): JSX.El
         ) : (
           <></>
         )}
+      </Field>
+
+      {microsoft ? null : (
+        <Field label="Color">
+          <span
+            className={`cw-swatch${(d.colorId ?? 'default') === 'default' ? ' cw-swatch--calendar' : ''}`}
+            style={(d.colorId ?? 'default') !== 'default' && palette[d.colorId ?? ''] ? { background: palette[d.colorId ?? ''] } : undefined}
+            aria-hidden="true"
+          />
+          <select className="n-input cw-in" aria-label="Color" disabled={locked} value={d.colorId ?? 'default'} onChange={(e) => set({ colorId: e.target.value as NonNullable<CalendarEventDraft['colorId']> })}>
+            {COLOR_CHOICES.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
+
+      <Field label="Who can see it">
+        <select
+          className="n-input cw-in"
+          aria-label="Who can see it"
+          disabled={locked}
+          value={d.visibility ?? 'default'}
+          onChange={(e) => set({ visibility: e.target.value as NonNullable<CalendarEventDraft['visibility']> })}
+        >
+          {VISIBILITY_CHOICES.map((v) => (
+            <option key={v.id} value={v.id}>
+              {v.label}
+            </option>
+          ))}
+        </select>
       </Field>
 
       <Field label="Guests">
@@ -460,7 +560,7 @@ export function CalendarDraftCard({ threadId, toolCall }: ToolCardProps): JSX.El
         ) : (
           <span className={reason ? 'n-tooltip n-tooltip--end' : undefined} data-tooltip={reason ?? undefined}>
             <button type="button" className="n-btn n-btn--sm n-btn--primary" disabled={!!reason || h.busy || status === 'creating'} onClick={() => void create()}>
-              {h.busy || status === 'creating' ? (isEdit ? 'Updating…' : 'Creating…') : status === 'failed' || status === 'unknown' ? 'Try again' : isEdit ? 'Update event' : 'Create event'}
+              {h.busy || status === 'creating' ? (isEdit ? 'Saving…' : 'Creating…') : status === 'failed' || status === 'unknown' ? 'Try again' : submitLabel(d)}
             </button>
           </span>
         )}

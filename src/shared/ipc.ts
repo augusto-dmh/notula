@@ -713,6 +713,8 @@ export interface InvokeChannels {
   'transcription-rules:resolve': [{ noteId: string; decisionKey: string; choice: 'confirm' | 'decline' }, void]
   /** Runs the account's re-consent for the grant. */
   'calendar:set-grant': [{ sourceId: string; grant: CalendarGrant; enabled: boolean }, CalendarSource]
+  /** Google's event palette for an account (color id → hex); a built-in copy when it can't be read. */
+  'calendar:event-colors': [{ sourceId: string }, Record<string, string>]
   'blocks:get': [{ blockId: string }, WorkflowBlock]
   'blocks:list': [{ sourceType: 'chat_thread'; sourceId: string }, WorkflowBlock[]]
   'blocks:update': [BlockUpdate, WorkflowBlock | { stale: true }]
@@ -1347,6 +1349,7 @@ export interface NotulaApi {
     setViewingEvent: SendMember<'calendar:viewing-event'>
     onChanged: PushMember<'calendar:changed'>
     setGrant: InvokeMember<'calendar:set-grant'>
+    eventColors: InvokeMember<'calendar:event-colors'>
   }
   people: {
     participants: InvokeMember<'people:participants'>

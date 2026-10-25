@@ -91,6 +91,12 @@
   padding: 3px 0;
 }
 
+.ml-forward {
+  margin: 8px 0 0;
+  font-size: var(--text-xs);
+  color: var(--fg-3);
+}
+
 .ml-body {
   margin-top: 8px;
   width: 100%;

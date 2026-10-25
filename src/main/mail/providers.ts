@@ -7,7 +7,7 @@ import { randomBytes } from 'node:crypto'
 import { MAIL_LIMITS, type MailThread } from '@shared/types/mail'
 import type { MainContext } from '../context'
 import { exchange, insufficientScope, providerHttp, type Exchange } from '../calendar-write/http'
-import { buildRaw, stripQuoted } from './mime'
+import { buildForwardRaw, buildRaw, forwardSubject, parseForwardSource, stripQuoted } from './mime'
 
 type Obj = Record<string, unknown>
 const obj = (v: unknown): Obj => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Obj) : {})
@@ -21,7 +21,9 @@ export const MAIL_COPY = {
   needSend: 'Notula needs permission to send mail. Turn it on in Settings.',
   maySent: 'Notula can’t tell whether this email went out. Check your Sent folder before you send it again.',
   network: 'Couldn’t reach your mail account. Check your connection and try again.',
-  other: 'Couldn’t reach your mailbox. Try again.'
+  other: 'Couldn’t reach your mailbox. Try again.',
+  replyAndForward: 'Choose either a reply or a forward, not both.',
+  forwardTooLarge: 'This email is too large to forward with its attachments. Forward it without them.'
 } as const
 
 export class MailError extends Error {
@@ -62,6 +64,8 @@ export interface SendDraft {
   html: string
   text: string
   inReplyToThread?: string | null
+  /** Forwards this message (Gmail or Graph message id); `text` is the introduction above it. */
+  forward?: { messageId: string; includeAttachments: boolean } | null
 }
 
 // ---------- Gmail ----------
@@ -169,10 +173,21 @@ async function gmailReplyHeaders(ctx: MainContext, token: string, threadId: stri
   return { inReplyTo: mid || null, references: [refs, mid].filter(Boolean).join(' ') || null }
 }
 
+/** A forward of one message as a raw message: the original is read whole (`mail-read`). */
+async function gmailForwardRaw(ctx: MainContext, token: string, m: SendDraft, forward: NonNullable<SendDraft['forward']>): Promise<string> {
+  const http = providerHttp(ctx, 'integration', 'mail')
+  const x = await exchange(() => http.fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/{id}', { params: { id: forward.messageId }, query: { format: 'raw' }, headers: auth(token) }))
+  if (!x.ok) raise(x, 'read')
+  const original = parseForwardSource(Buffer.from(str(x.body['raw']), 'base64url').toString('latin1'))
+  const raw = buildForwardRaw({ ...m, subject: forwardSubject(m.subject || original.subject) }, original, forward.includeAttachments, `notula-${randomBytes(12).toString('hex')}`)
+  if (!raw) throw new MailError('provider', MAIL_COPY.forwardTooLarge)
+  return raw
+}
+
 export async function gmailCreateDraft(ctx: MainContext, token: string, m: SendDraft): Promise<{ draftId: string; messageId: string | null }> {
   const http = providerHttp(ctx, 'integration', 'mail')
   const reply = m.inReplyToThread ? await gmailReplyHeaders(ctx, token, m.inReplyToThread) : { inReplyTo: null, references: null }
-  const raw = buildRaw({ ...m, ...reply }, `notula-${randomBytes(12).toString('hex')}`)
+  const raw = m.forward ? await gmailForwardRaw(ctx, token, m, m.forward) : buildRaw({ ...m, ...reply }, `notula-${randomBytes(12).toString('hex')}`)
   const x = await exchange(() =>
     http.fetch('https://gmail.googleapis.com/gmail/v1/users/me/drafts', {
       method: 'POST',
@@ -270,7 +285,46 @@ export async function graphRead(ctx: MainContext, token: string, conversationId:
 
 const recipients = (list: string[]): Obj[] => list.map((address) => ({ emailAddress: { address } }))
 
+/** A forward draft: Graph copies the original (with its attachments) and puts the comment above it. */
+async function graphForwardDraft(ctx: MainContext, token: string, m: SendDraft, forward: NonNullable<SendDraft['forward']>): Promise<{ draftId: string; webUrl: string | null }> {
+  const http = providerHttp(ctx, 'integration', 'mail')
+  const json = auth(token, { 'content-type': 'application/json' })
+  const x = await exchange(() =>
+    http.fetch('https://graph.microsoft.com/v1.0/me/messages/{id}/createForward', {
+      method: 'POST',
+      params: { id: forward.messageId },
+      headers: json,
+      body: JSON.stringify({ comment: m.text, toRecipients: recipients(m.to) })
+    })
+  )
+  if (!x.ok) raise(x, 'send')
+  const draftId = str(x.body['id'])
+  if (m.cc.length || m.bcc.length) {
+    const p = await exchange(() =>
+      http.fetch('https://graph.microsoft.com/v1.0/me/messages/{id}', {
+        method: 'PATCH',
+        params: { id: draftId },
+        headers: json,
+        body: JSON.stringify({ ccRecipients: recipients(m.cc), bccRecipients: recipients(m.bcc) })
+      })
+    )
+    if (!p.ok) raise(p, 'send')
+  }
+  if (!forward.includeAttachments) {
+    const list = await exchange(() => http.fetch('https://graph.microsoft.com/v1.0/me/messages/{id}/attachments', { params: { id: draftId }, query: { $select: 'id' }, headers: auth(token) }))
+    if (!list.ok) raise(list, 'send')
+    for (const a of arr(list.body['value'])) {
+      const del = await exchange(() =>
+        http.fetch('https://graph.microsoft.com/v1.0/me/messages/{id}/attachments/{attachmentId}', { method: 'DELETE', params: { id: draftId, attachmentId: str(a['id']) }, headers: auth(token) })
+      )
+      if (!del.ok) raise(del, 'send')
+    }
+  }
+  return { draftId, webUrl: str(x.body['webLink']) || null }
+}
+
 export async function graphCreateDraft(ctx: MainContext, token: string, m: SendDraft): Promise<{ draftId: string; webUrl: string | null }> {
+  if (m.forward) return graphForwardDraft(ctx, token, m, m.forward)
   const http = providerHttp(ctx, 'integration', 'mail')
   const x = await exchange(() =>
     http.fetch('https://graph.microsoft.com/v1.0/me/messages', {

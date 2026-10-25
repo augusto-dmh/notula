@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Calendar writes: `calendar:set-grant`, the
+// Calendar writes: `calendar:set-grant`, `calendar:event-colors`, the
 // `calendar_event` block executor and the `proposeEvent` chat tool.
 //
 // - Gate: `calendarWrite.enabled` (Labs, off). The tool is offered only with an OAuth account
@@ -19,8 +19,10 @@ import { log } from '../log'
 import { egressBlocked } from '../privacy'
 import { blockStore, registerBlockType, type ExecResult } from '../blocks'
 import type { ChatToolSpec } from '../chat/tool-api'
-import { chosenTime, draftFromEvent, NOT_AVAILABLE, normalizeDraft, validateDraft } from './draft'
-import { COPY, googleCreate, googleUpdate, graphCreate, graphUpdate, type WriteTarget } from './providers'
+import { availabilitySource, busyTimes, overlaps, without } from './availability'
+import { eventColors } from './colors'
+import { chosenTime, diffDraft, draftFromEvent, eventTime, NO_CHANGE, NOT_AVAILABLE, normalizeDraft, validateDraft } from './draft'
+import { COPY, eventRef, googleCreate, googleSplit, googleUpdate, graphCreate, graphSplit, graphUpdate, seriesMaster, writeToken, type WriteTarget } from './providers'
 
 export const DRAFT_TOOL = 'proposeEvent'
 const GRANTS: readonly CalendarGrant[] = ['calendar-write', 'mail-read', 'mail-send', 'files-read']
@@ -63,31 +65,33 @@ async function executeDraft(ctx: MainContext, block: WorkflowBlock, targetSource
   if (!chosenTime(d)) return { status: 'failed', errorCode: 'invalid', error: 'Choose a time' }
   // An update writes to the account the event belongs to.
   const fromSource = d.existingEvent ? d.existingEvent.calendarId.split(':')[1] : undefined
-  const t = await resolveTarget(ctx, fromSource ?? targetSourceId)
-  if ('error' in t) return t.error
-  let token: string
-  try {
-    token = await ctx.calendar.accessToken(t.sourceId, 'calendar-write')
-  } catch (err) {
-    const code = err instanceof Error && /missing_scopes/.test(err.message) ? 'missing_scopes' : 'missing_token'
-    return { status: 'failed', errorCode: code, error: code === 'missing_scopes' ? COPY.missingScopes : COPY.reconnect }
-  }
+  const resolved = await resolveTarget(ctx, fromSource ?? targetSourceId)
+  if ('error' in resolved) return resolved.error
+  const token = await writeToken(ctx, resolved.sourceId)
+  if (typeof token !== 'string') return token
   const edit = d.existingEvent ? { ...d.existingEvent, eventId: d.existingEvent.eventId.split(':').slice(2).join(':') || d.existingEvent.eventId } : undefined
   const draft = edit ? { ...d, existingEvent: edit } : d
+  // An edit writes to the event's own calendar.
+  const eventCalendar = edit ? edit.calendarId.split(':').slice(2).join(':') : ''
+  const t = eventCalendar ? { ...resolved, calendarNativeId: eventCalendar } : resolved
   const out =
     t.provider === 'google'
       ? edit
-        ? await googleUpdate(ctx, token, t, draft)
+        ? edit.scope === 'following'
+          ? await googleSplit(ctx, token, t, draft, block.id)
+          : await googleUpdate(ctx, token, t, draft)
         : await googleCreate(ctx, token, t, draft, block.id)
       : edit
-        ? await graphUpdate(ctx, token, t, draft)
+        ? edit.scope === 'following'
+          ? await graphSplit(ctx, token, t, draft, block.id)
+          : await graphUpdate(ctx, token, t, draft)
         : await graphCreate(ctx, token, t, draft, block.id)
   if (out.status === 'created' || out.status === 'updated') {
     lastTarget = t.sourceId
     ctx.calendar.refreshSource(t.sourceId)
     out.fields = { ...out.fields, sourceId: t.sourceId, provider: t.provider }
   }
-  log('info', 'calendar-write:result', { provider: t.provider, update: !!edit, status: out.status, code: out.errorCode ?? null })
+  log('info', 'calendar-write:result', { provider: t.provider, update: !!edit, scope: edit?.scope ?? null, status: out.status, code: out.errorCode ?? null })
   return out
 }
 
@@ -172,19 +176,82 @@ async function conflicts(ctx: MainContext, d: CalendarEventDraft): Promise<strin
   )
 }
 
-/** `fromEvent` → the update's `existingEvent`, from the synced copy of the event. */
+/** `fromEvent` → the update's `existingEvent`, from the synced copy of the event (and its series, for series edits). */
 async function withExisting(ctx: MainContext, d: CalendarEventDraft): Promise<CalendarEventDraft | string> {
   if (!d.fromEvent) return d
   const ev = await ctx.calendar.getEvent(d.fromEvent.eventId)
   if (!ev) return 'That event isn’t in your synced calendar. Search the calendar again and use its id.'
   const calendarId = typeof ev['calendarId'] === 'string' ? ev['calendarId'] : d.fromEvent.calendarId
   if (!/^(google|microsoft):/.test(calendarId)) return 'Calendar feeds are read-only, so this event can’t be changed from Notula.'
-  if (d.recurrenceRules?.length) return 'Repeat settings can’t be changed from Notula.'
+  const scope = d.fromEvent.scope
   const original = draftFromEvent(ev, await ctx.calendar.myEmails())
+  const ref = eventRef(ev)
+  const occurrenceStart = ref?.seriesId ? (eventTime(ev['originalStartTime']) ?? eventTime(ev.start)) : null
+  let seriesEtag: string | null = null
+  if (ref?.seriesId && scope !== 'occurrence') {
+    const master = await seriesMaster(ctx, ref)
+    if (master) {
+      seriesEtag = master.etag || null
+      if (master.rules.length) original.recurrenceRules = master.rules
+    }
+  }
+  // A series edit that leaves out the rule keeps the series' own.
+  const rules = scope !== 'occurrence' && !d.recurrenceRules?.length && original.recurrenceRules?.length ? { recurrenceRules: original.recurrenceRules } : {}
   return {
     ...d,
-    existingEvent: { calendarId, eventId: ev.id, scope: d.fromEvent.scope, etag: typeof ev['etag'] === 'string' ? ev['etag'] : '', original }
+    ...rules,
+    existingEvent: {
+      calendarId,
+      eventId: ev.id,
+      scope,
+      etag: typeof ev['etag'] === 'string' ? ev['etag'] : '',
+      ...(seriesEtag ? { seriesEtag } : {}),
+      ...(occurrenceStart ? { occurrenceStart } : {}),
+      original
+    }
   }
+}
+
+export interface MoveAvailability {
+  /** Guests whose calendars were read. */
+  checked: number
+  unknown: string[]
+  conflicts: { email: string; name: string }[]
+}
+
+/** An update that moves the time: who among the guests is busy then. It never blocks the update. */
+async function moveAvailability(ctx: MainContext, d: CalendarEventDraft): Promise<MoveAvailability | null> {
+  const ex = d.existingEvent
+  if (!ex) return null
+  const r = diffDraft(d)
+  if ('refusal' in r || !r.diff.time || !('dateTime' in r.diff.time.start) || !('dateTime' in r.diff.time.end)) return null
+  const mine = new Set((await ctx.calendar.myEmails()).map((e) => e.toLowerCase()))
+  const guests = d.attendees.filter((a) => !a.resource && !mine.has(a.email.toLowerCase())).slice(0, 50)
+  if (!guests.length) return null
+  const sourceId = ex.calendarId.split(':')[1]
+  const src = (await oauthSources(ctx)).find((s) => s.id === sourceId) ?? (await availabilitySource(ctx))
+  if (!src) return null
+  const from = Date.parse(r.diff.time.start.dateTime)
+  const to = Date.parse(r.diff.time.end.dateTime)
+  const busy = await busyTimes(ctx, src, guests.map((g) => g.email), new Date(from), new Date(to), r.diff.time.start.timeZone)
+  if (typeof busy === 'string') return null
+  // The event's current slot is the event itself, not a conflict.
+  const before = ex.original.timeOptions[0]
+  const ignore = before && 'dateTime' in before.start && 'dateTime' in before.end ? { startMs: Date.parse(before.start.dateTime), endMs: Date.parse(before.end.dateTime) } : null
+  const ev = await ctx.calendar.getEvent(ex.eventId).catch(() => null)
+  const nameOf = (email: string): string => ev?.attendees?.find((a) => a.email?.toLowerCase() === email.toLowerCase())?.displayName || email
+  return {
+    checked: busy.filter((b) => b.known).length,
+    unknown: busy.filter((b) => !b.known).map((b) => b.email),
+    conflicts: busy.filter((b) => b.known && overlaps(without(b.busy, ignore), from, to)).map((b) => ({ email: b.email, name: nameOf(b.email) }))
+  }
+}
+
+/** Whether a draft writes to a Microsoft calendar: an edit's own account, else the default "Add to". */
+async function writesToMicrosoft(ctx: MainContext, d: CalendarEventDraft): Promise<boolean> {
+  if (d.existingEvent) return d.existingEvent.calendarId.startsWith('microsoft:')
+  const t = await resolveTarget(ctx, undefined).catch(() => null)
+  return !!t && !('error' in t) && t.provider === 'microsoft'
 }
 
 export function registerCalendarWrite(ctx: MainContext): void {
@@ -194,6 +261,12 @@ export function registerCalendarWrite(ctx: MainContext): void {
     inProgress: 'creating',
     idempotent: true,
     execute: (block, options) => executeDraft(ctx, block, options.targetSourceId)
+  })
+
+  ipcMain.handle('calendar:event-colors' satisfies InvokeChannel, async (_e, req: InvokeReq<'calendar:event-colors'>): Promise<InvokeRes<'calendar:event-colors'>> => {
+    const id = obj(req)['sourceId']
+    if (typeof id !== 'string' || !id) throw notulaError('invalid-input', 'sourceId is required')
+    return eventColors(ctx, id)
   })
 
   ipcMain.handle('calendar:set-grant' satisfies InvokeChannel, async (_e, req: InvokeReq<'calendar:set-grant'>): Promise<InvokeRes<'calendar:set-grant'>> => {
@@ -237,17 +310,27 @@ export function registerCalendarWrite(ctx: MainContext): void {
       if (draft.eventType !== 'default') return { content: NOT_AVAILABLE, isError: true }
       const full = await withExisting(ctx, draft)
       if (typeof full === 'string') return { content: full, isError: true }
+      // Microsoft calendars have no event colors: the draft drops it, and the result says so.
+      const noColor = full.colorId !== undefined && (await writesToMicrosoft(ctx, full))
+      if (noColor) delete full.colorId
       const invalid = validateDraft(full)
       if (invalid) return { content: invalid, isError: true }
+      if (full.existingEvent) {
+        const r = diffDraft(full)
+        if ('refusal' in r && r.refusal !== NO_CHANGE) return { content: r.refusal, isError: true }
+      }
       const block = await blockStore().create({ type: 'calendar_event', threadId: opts.threadId, content: full })
       const busy = await conflicts(ctx, full).catch(() => [] as string[][])
+      const availability = await moveAvailability(ctx, full).catch(() => null)
       return {
         content: JSON.stringify({
           draft: { ...full, blockId: block.id },
           conflicts: busy,
+          ...(availability ? { guestAvailability: availability } : {}),
+          ...(noColor ? { colorNote: 'Color isn’t available for Microsoft calendars, so the event keeps its calendar’s color.' } : {}),
           note: 'The draft is shown to the user as a card, where they can adjust it and create the event. It has not been created: do not say it was. Mention any conflicts briefly.'
         }),
-        data: { blockId: block.id, conflicts: busy },
+        data: { blockId: block.id, conflicts: busy, ...(availability ? { availability } : {}) },
         isError: false
       }
     }

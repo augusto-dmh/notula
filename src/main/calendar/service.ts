@@ -488,11 +488,11 @@ export class CalendarService {
     }
   }
 
-  /** A token for a held grant, refreshed as needed. Throws `provider-error: <CalendarGrantError>`. */
-  async grantToken(sourceId: string, grant: CalendarGrant): Promise<string> {
+  /** A token for a held grant (null: the read scope only), refreshed as needed. Throws `provider-error: <CalendarGrantError>`. */
+  async grantToken(sourceId: string, grant: CalendarGrant | null): Promise<string> {
     const src = (await this.liveSources()).find((s) => s.id === sourceId)
     if (!src || src.kind === 'ics') throw notulaError('provider-error', 'missing_token')
-    if (!src.grants.includes(grant)) throw notulaError('provider-error', 'missing_scopes')
+    if (grant && !src.grants.includes(grant)) throw notulaError('provider-error', 'missing_scopes')
     const client = await readClient(this.ctx, src.kind as OAuthCalendarProvider)
     if (!client) throw notulaError('provider-error', 'missing_token')
     try {

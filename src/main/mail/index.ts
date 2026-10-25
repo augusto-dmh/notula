@@ -67,13 +67,22 @@ function addresses(v: unknown, what: string): string[] {
   return out
 }
 
-/** The `email` block shape; attachments stay off. */
+const MESSAGE_ID = /^[A-Za-z0-9_=+/-]{1,512}$/
+
+/** The `email` block shape; attachments stay off. A forward and a reply in thread exclude each other. */
 function normalizeEmail(raw: unknown): EmailDraftBlock {
   const c = obj(raw)
   const subject = typeof c['subject'] === 'string' ? c['subject'].replace(/[\r\n]+/g, ' ').slice(0, 998) : ''
   const body = typeof c['body'] === 'string' ? c['body'].slice(0, 100_000) : ''
   const out: EmailDraftBlock = { to: addresses(c['to'], 'To'), cc: addresses(c['cc'], 'Cc'), bcc: addresses(c['bcc'], 'Bcc'), subject, body }
-  if (typeof c['inReplyToThread'] === 'string' && /^[A-Za-z0-9_=+/-]{1,512}$/.test(c['inReplyToThread'])) out.inReplyToThread = c['inReplyToThread']
+  if (typeof c['inReplyToThread'] === 'string' && MESSAGE_ID.test(c['inReplyToThread'])) out.inReplyToThread = c['inReplyToThread']
+  if (c['forward'] !== undefined && c['forward'] !== null) {
+    const f = obj(c['forward'])
+    if (typeof f['messageId'] !== 'string' || !MESSAGE_ID.test(f['messageId'])) throw bad('That isn’t a message id from an email you read.')
+    if (out.inReplyToThread || c['inReplyToThread']) throw bad(MAIL_COPY.replyAndForward)
+    out.forward = { messageId: f['messageId'], includeAttachments: f['includeAttachments'] !== false }
+    if (typeof f['subject'] === 'string' && f['subject'].trim()) out.forward.subject = f['subject'].replace(/[\r\n]+/g, ' ').slice(0, 998)
+  }
   return out
 }
 
@@ -151,7 +160,7 @@ export function registerMail(ctx: MainContext): EmailContextApi {
   // ---------- drafts and sends ----------
 
   /** The message for a send: the follow-up draft's current text when one is named, else the input. */
-  async function message(s: CalendarSource, input: Partial<MailDraftInput>): Promise<SendDraft> {
+  async function message(s: CalendarSource, input: Partial<MailDraftInput> & Pick<SendDraft, 'forward'>): Promise<SendDraft> {
     const from = s.accountEmail ?? ''
     if (input.followUpDraftId) {
       const d = await ctx.storage.getFollowUpDraft({ id: input.followUpDraftId })
@@ -175,13 +184,20 @@ export function registerMail(ctx: MainContext): EmailContextApi {
       subject: typeof input.subject === 'string' ? input.subject.replace(/[\r\n]+/g, ' ').slice(0, 998) : '',
       html,
       text,
-      ...(input.inReplyToThread ? { inReplyToThread: input.inReplyToThread } : {})
+      ...(input.inReplyToThread ? { inReplyToThread: input.inReplyToThread } : {}),
+      ...(input.forward ? { forward: input.forward } : {})
     }
+  }
+
+  /** A forward reads the original, so it needs `mail-read` as well as `mail-send`. */
+  async function sendToken(s: CalendarSource, m: SendDraft): Promise<string> {
+    if (m.forward) await token(s, 'mail-read')
+    return token(s, 'mail-send')
   }
 
   async function saveDraft(s: CalendarSource, m: SendDraft): Promise<{ draftId: string; webUrl: string | null }> {
     if (await blocked()) throw new MailError('local_only', MAIL_COPY.localOnly)
-    const t = await token(s, 'mail-send')
+    const t = await sendToken(s, m)
     const r = s.kind === 'google' ? { ...(await gmailCreateDraft(ctx, t, m)), webUrl: DRAFTS_URL } : await graphCreateDraft(ctx, t, m)
     log('info', 'mail:draft-saved', { provider: s.kind })
     return { draftId: r.draftId, webUrl: r.webUrl }
@@ -190,7 +206,7 @@ export function registerMail(ctx: MainContext): EmailContextApi {
   /** Creates the provider draft and sends it (one delivery or one card click). */
   async function sendNow(s: CalendarSource, m: SendDraft): Promise<{ messageId: string | null }> {
     if (await blocked()) throw new MailError('local_only', MAIL_COPY.localOnly)
-    const t = await token(s, 'mail-send')
+    const t = await sendToken(s, m)
     if (s.kind === 'google') {
       const d = await gmailCreateDraft(ctx, t, m)
       const r = await gmailSendDraft(ctx, t, d.draftId)
@@ -264,7 +280,16 @@ export function registerMail(ctx: MainContext): EmailContextApi {
       const c = block.content as EmailDraftBlock
       try {
         const s = await pick('mail-send')
-        const m = await message(s, { to: c.to, cc: c.cc, bcc: c.bcc, subject: c.subject, text: c.body, html: textToHtml(c.body), ...(c.inReplyToThread ? { inReplyToThread: c.inReplyToThread } : {}) })
+        const m = await message(s, {
+          to: c.to,
+          cc: c.cc,
+          bcc: c.bcc,
+          subject: c.subject,
+          text: c.body,
+          html: textToHtml(c.body),
+          ...(c.inReplyToThread ? { inReplyToThread: c.inReplyToThread } : {}),
+          ...(c.forward ? { forward: { messageId: c.forward.messageId, includeAttachments: c.forward.includeAttachments } } : {})
+        })
         if (options.mode === 'draft') {
           const r = await saveDraft(s, m)
           return { status: 'created', fields: { draftId: r.draftId, webUrl: r.webUrl, provider: s.kind, drafted: true } }

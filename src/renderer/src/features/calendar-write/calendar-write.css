@@ -159,6 +159,31 @@
   white-space: nowrap;
 }
 
+.cw-availability {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin-top: 2px;
+  font-size: var(--text-xs);
+}
+
+.cw-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  flex: none;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+/* "Same as calendar": no color of its own. */
+.cw-swatch--calendar {
+  background: transparent;
+  border-style: dashed;
+}
+
 .cw-time-edit {
   display: flex;
   align-items: center;
