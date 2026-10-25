@@ -142,7 +142,7 @@ export async function forgetAgent(ctx: MainContext, tokenId: string): Promise<vo
   }
 }
 
-const DRAFT_SYSTEM = `You keep a private "About me" page for the user of a meeting notes app. Other AI features read it so that their summaries and answers fit the user: their role, their work, the people around them and how they like things done.
+const DRAFT_SYSTEM = `You keep a private "About me" page for the user of a meeting notes app. Other AI features read it to tailor their summaries and answers to the user. Its sections are Who you are, What you’re working on, People you work with, How you like to work, Communication, Your meetings and calendar, and Words you use and where notes are sent.
 
 From the user's recent meeting notes, draft the sections whose ids are requested. What each section holds:
 - identity: the user's role, team, company and responsibilities.

@@ -61,7 +61,7 @@ const ABOUT_ME_TOOL = {
   name: 'readAboutMe',
   title: 'About me',
   description:
-    'Returns the profile the user wrote about themselves in Notula, as Markdown: their role, current work, the people they work with and how they like things done. Read it to fit your answers to the user.',
+    'Returns, as Markdown, the profile the user keeps on the About me page in Notula. Its sections are Who you are, What you’re working on, People you work with, How you like to work, Communication, Your meetings and calendar, Words you use and where notes are sent, and How Notula should help you. Read it to tailor your answers to this user.',
   inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   annotations: { title: 'About me', readOnlyHint: true, destructiveHint: false, openWorldHint: false }
 } as const

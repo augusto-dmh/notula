@@ -144,7 +144,7 @@ const DRAFT_SCHEMA = {
       type: 'array',
       items: { type: 'string' },
       description:
-        'One RRULE line, e.g. "RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=TU;COUNT=5", for a new event or to change how a series repeats (scope series or following). Leave it out on an edit to keep the series’ own rule.'
+        'One RRULE line, e.g. "RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=WE;COUNT=5", for a new event or to change how a series repeats (scope series or following). Leave it out on an edit to keep the series’ own rule.'
     },
     colorId: { type: 'string', enum: ['default', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11'], description: 'Google event color 1–11; default is the calendar’s color. Not available on Microsoft calendars.' },
     visibility: { type: 'string', enum: ['default', 'public', 'private'], description: 'Who can see the event: the calendar’s setting, anyone who can see the calendar, or only the user and the guests.' },
