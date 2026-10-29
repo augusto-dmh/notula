@@ -349,7 +349,7 @@ function ownDomains(myEmails: string[], generic: string[]): Set<string> {
 
 export function listCompanies(s: StoreCtx, q: CompaniesQuery & { myEmails: string[]; genericDomains: string[] }): CompanyRow[] {
   // `voice` is a people filter; companies read it as all.
-  if (q?.filter !== 'all' && q?.filter !== 'met' && q?.filter !== 'voice') throw invalid('filter must be all or met')
+  if (q?.filter !== 'all' && q?.filter !== 'met' && q?.filter !== 'voice') throw invalid('filter must be all, met or voice')
   const m = maps(s)
   const folderId = folderIdOf(q.folderId)
   const scope = scoped(s, m, folderId)

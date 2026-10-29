@@ -54,6 +54,11 @@ const GAP_FILL_MIN_MS = 200
 const GAP_FILL_MAX_MS = 10 * 60_000
 /** The pass's compute cap (diarization only; embedding has its own). */
 export const PASS_CAP_MS = 10 * 60_000
+/**
+ * How long a wait for a note's speaker labels lasts (enhance at stop, and the post-meeting
+ * job's own wait): the pass cap, the embedding cap and the LLM step.
+ */
+export const SPEAKER_LABELS_WAIT_MS = PASS_CAP_MS + SPEAKER_PROFILE_LIMITS.embeddingCapMs + SPEAKER_PROFILE_LIMITS.llmTimeoutMs
 const EMBED_CAP_MS = SPEAKER_PROFILE_LIMITS.embeddingCapMs
 /** A word maps to the nearest turn within 0.5 s (8,000 samples). */
 const NEAREST_TURN_S = 0.5

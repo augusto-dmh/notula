@@ -421,6 +421,7 @@ function SpeakerTagsVoiceSlot({ prefs }: { prefs: Settings | null }): JSX.Elemen
           ]}
         >
           <p>{S.settingsAlsoForgetMineBody()}</p>
+          <p>{S.forgetOldBackups()}</p>
         </SpDialog>
       ) : null}
       {ask?.kind === 'forget-all' ? (
@@ -433,6 +434,7 @@ function SpeakerTagsVoiceSlot({ prefs }: { prefs: Settings | null }): JSX.Elemen
           ]}
         >
           <p>{S.forgetAllBody()}</p>
+          <p>{S.forgetOldBackups()}</p>
         </SpDialog>
       ) : null}
     </SettingsCard>

@@ -831,7 +831,8 @@ export class StorageEngine {
     // A retried migration (Try again) meets the same file again: the failed attempt was
     // rolled back. Reuse that backup rather than writing another full copy.
     // Older backups are never pruned or rewritten here: one an earlier build made as a byte copy
-    // keeps whatever voice data it held (the user docs say so).
+    // keeps whatever voice data it held, and the dialogs that forget your own voice say where
+    // those backups are (`forgetOldBackups` in the speaker-profile strings).
     const previous = readdirSync(dir)
       .filter((n) => n.startsWith(`notula-v${from}-`) && n.endsWith('.db'))
       .sort()

@@ -4,9 +4,9 @@
 //
 //   node scripts/dev/speaker-storage-check.mjs [--prev <git rev>] [--keep]
 //
-// 1. Builds the storage engine of the previous build (`--prev`, default ffb7094, the last tree
-//    before speaker profiles, schema 11) and of this tree for Node, with Vite (dependencies stay
-//    external), and drives each through its RPC dispatch, as the storage worker does.
+// 1. Builds the storage engine of the previous build (`--prev`, a schema-11 tree; default the
+//    merge base of HEAD and main, else main) and of this tree for Node, with Vite (dependencies
+//    stay external), and drives each through its RPC dispatch, as the storage worker does.
 // 2. The previous build writes a schema-11 database with a few notes and transcripts, the Labs
 //    voiceprint keys and a self voiceprint. This tree upgrades it to 12: every row kept, the two
 //    keys moved (`speakers.voices` never written), the Labs marker, the eight new tables empty,
@@ -38,12 +38,21 @@ const require = createRequire(join(ROOT, 'package.json'))
 const Database = require('better-sqlite3-multiple-ciphers')
 
 const args = process.argv.slice(2)
-const PREV_REV = args.includes('--prev') ? args[args.indexOf('--prev') + 1] : 'ffb7094'
+const PREV_REV = args.includes('--prev') ? args[args.indexOf('--prev') + 1] : mergeBase()
 const KEEP = args.includes('--keep')
 const OUT = join(tmpdir(), 'notula-speaker-storage-check')
 /** The schema version this tree migrates to, and the one before it. */
 const TARGET = 12
 const PREV = 11
+
+/** Where this branch left main, so the default needs no commit id; main when git can't tell. */
+function mergeBase() {
+  try {
+    return execFileSync('git', ['merge-base', 'HEAD', 'main'], { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+  } catch {
+    return 'main'
+  }
+}
 
 // ---------- a tiny runner ----------
 

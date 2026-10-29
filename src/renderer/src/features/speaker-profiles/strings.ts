@@ -49,6 +49,12 @@ export const forgetAllTitle = (): string => 'Forget every remembered voice?'
 export const forgetAllBody = (): string =>
   'Notula deletes every voice sample, yours included. Names already in your notes stay. This can’t be undone.'
 export const forgetAllConfirm = (): string => 'Forget all'
+/**
+ * Under every dialog that forgets your own voice. Before this version, the backup Notula made
+ * before a database update was a full copy, so one may still hold a Labs voice sample.
+ */
+export const forgetOldBackups = (): string =>
+  'Backups from earlier versions of Notula may still hold your voice. Delete them from data ▸ backups, in the folder that Settings ▸ Profile shows.'
 export const cancel = (): string => 'Cancel'
 
 // ---------- the speaker pill and its popover ----------
@@ -141,7 +147,7 @@ export const mergeConfirm = (): string => 'Merge'
 export const forgetVoiceTitle = (name: string): string => `Forget ${name}’s voice?`
 export const forgetVoiceWhy = (): string => 'Why?'
 export const forgetVoiceRemoving = (): string => 'I’m removing it'
-export const forgetVoiceWithdrew = (name: string): string => `${name} withdrew consent`
+export const forgetVoiceWithdrew = (name: string): string => `${name} withdrew the agreement`
 /** The same action while the person has an agreement but no sample yet. */
 export const voiceWithdraw = (): string => 'Withdraw agreement…'
 export const withdrawTitle = (name: string): string => `Withdraw ${name}’s agreement?`
@@ -296,7 +302,7 @@ export const agreementEnded = (date: string, why: string): string => `Ended ${da
 export const agreementEndedVia: Record<string, (name: string) => string> = {
   forget: () => 'the voice was forgotten',
   forget_all: () => 'all voices were forgotten',
-  withdrawn: (name) => `${name} withdrew consent`,
+  withdrawn: (name) => `${name} withdrew the agreement`,
   expired: () => 'not recognized in a meeting for 12 months'
 }
 export const agreementKeptAsProof = (): string => 'Kept as your proof that earlier use was agreed. It holds no voice.'

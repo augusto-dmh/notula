@@ -109,7 +109,10 @@ function offsetIso(iso: string): string {
   return `${local}${sign}${pad(off / 60)}:${pad(off % 60)}`
 }
 
-/** The POST body. Exported for the speaker bench's output check, which greps its transcript's speakers. */
+/**
+ * The POST body. Exported only for the dev speaker bench, which checks its transcript's
+ * speakers; it isn't an API.
+ */
 export async function buildBody(ctx: MainContext, p: PayloadInput): Promise<string> {
   const base: Record<string, unknown> = {
     event_id: p.eventId,
@@ -156,7 +159,8 @@ export async function buildBody(ctx: MainContext, p: PayloadInput): Promise<stri
       const chunks = await readerTranscript(ctx, n.id, await ctx.storage.getTranscript(n.id))
       const wordLevel = await ctx.settings.get('transcription.diarization').catch(() => false)
       const finals = chunks.filter((c) => c.is_final && c.text.trim())
-      // One entry per chunk, as before speaker profiles. The speaker comes from the shared label rules: once the job has written, a suggest, tie or none speaker goes out as its letter.
+      // One entry per chunk, its speaker from the shared label rules, so a suggest, tie or none
+      // speaker goes out as its letter.
       const labels = chunkSpeakerLabels(finals, { wordLevel })
       note['transcript'] = finals.map((c) => ({ speaker: labels.get(c.id) ?? (c.source === 'microphone' ? 'Me' : 'Them'), start: c.start_timestamp, text: c.text }))
     }

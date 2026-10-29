@@ -95,7 +95,7 @@ export function RecordDialog({ onClose }: { onClose(): void }): JSX.Element {
       })
       .catch(() => {
         window.notula.voiceprint.cancelSample({ sessionId })
-        setError("Notula couldn't use your microphone. Check it in Settings ▸ Preferences.")
+        setError('Notula couldn’t use your microphone. Check it in Settings ▸ Preferences.')
         setPhase('ready')
       })
     pending

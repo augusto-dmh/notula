@@ -10,14 +10,13 @@ import { ipcMain } from 'electron'
 import { notulaError } from '@shared/errors'
 import type { InvokeChannel, InvokeReq } from '@shared/ipc'
 import type { ProviderTestResult } from '@shared/types/common'
-import { SPEAKER_PROFILE_LIMITS } from '@shared/types/speakers'
 import type { SecretId } from '@shared/types/settings'
 import type { AsrProviderId, CloudAsrProviderId, TranscriptChunk } from '@shared/types/transcript'
 import type { MainContext, TranscriptionService } from '../context'
 import { expected } from '../ipc-expected'
 import { log } from '../log'
 import { apiKeyProblem } from '../secrets'
-import { PASS_CAP_MS } from '../asr/diarize'
+import { SPEAKER_LABELS_WAIT_MS } from '../asr/diarize'
 import { getLocalModels } from '../asr/instance'
 import type { SpeechApi, TranscriptionControl } from './api'
 import { getTranscriptionManager } from './manager'
@@ -36,13 +35,6 @@ export type {
   TranscriptionControl
 } from './api'
 export { RecognizerError } from './api'
-
-/**
- * How long `awaitSpeakerLabels` waits for the note's pass and post-meeting job (speaker
- * profiles): the pass's cap, the embedding cap and the LLM step. Past it,
- * enhancing goes ahead with the labels as they are.
- */
-const SPEAKER_LABELS_WAIT_MS = PASS_CAP_MS + SPEAKER_PROFILE_LIMITS.embeddingCapMs + SPEAKER_PROFILE_LIMITS.llmTimeoutMs
 
 /** The capture → transcription seam. */
 export function transcriptionControl(ctx: MainContext): TranscriptionControl {
@@ -63,7 +55,7 @@ export function transcriptionControl(ctx: MainContext): TranscriptionControl {
       if (!timedOut) await m.awaitStops(noteId)
       await m.flush(noteId)
       // The job runs inside the pass, so this resolves once its write is committed, or when
-      // it ended abandoned or failed. Bounded.
+      // it ended abandoned or failed. Past the bound, enhancing goes ahead with the labels as they are.
       let timer: NodeJS.Timeout | null = null
       const bound = new Promise<void>((resolve) => {
         timer = setTimeout(() => {

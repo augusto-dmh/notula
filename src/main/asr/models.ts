@@ -123,9 +123,9 @@ async function reuse(from: string, to: string): Promise<void> {
 }
 
 /**
- * The identification model's state for `speakers:get-status`: the
- * manager's state, or `mismatch` when it is ready but the calibration file's `modelSha`
- * names another extractor. `calibrationSha` null: no calibration file to compare.
+ * The identification model's state for `speakers:get-status`: the manager's state, or
+ * `mismatch` when it is ready but the calibration file's `modelSha` names another extractor.
+ * `calibrationSha` null: no calibration file to compare.
  */
 export function speakerModelState(s: LocalModelState, calibrationSha: string | null): SpeakerModelState {
   if (s.state === 'ready' && calibrationSha !== null && calibrationSha !== speakerIdModelId()) return 'mismatch'
@@ -209,8 +209,8 @@ export class LocalModelManager {
   }
 
   /**
-   * The `speaker-id` extractor when it is ready: its file for the
-   * diarize worker, and its model id, the file's SHA-256. Null otherwise.
+   * The `speaker-id` extractor when it is ready: its file for the diarize worker, and its
+   * model id, the file's SHA-256. Null otherwise.
    */
   speakerId(): { file: VerifiedFile; modelId: string } | null {
     if (!this.isReady('speaker-id')) return null

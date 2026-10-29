@@ -541,6 +541,7 @@ function clearTables(db: Db, schema: string, tables: readonly string[]): void {
  * The rollback journal stays in memory, so no page image of a vector lands in a `-journal` file
  * next to the copy (an export may go to removable media); a failed copy is discarded anyway.
  * Used by the encrypted export and the pre-migration backup. The live database is never touched.
+ * A restored pre-migration backup has no voice either, the Labs one included, so Forget leaves no copy.
  */
 export function writeCopyWithoutVoices(db: Db, dest: string): void {
   db.exec(`VACUUM INTO '${sqlPath(dest)}'`)

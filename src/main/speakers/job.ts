@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-// The post-meeting job: one per note, after the note's diarization
-// pass at stop and after a local import with Separate speakers on. It computes outside the
-// note's label-write queue (diarize and embed, evidence, the LLM step, `decide`) and queues
-// only its writes. A note without a pass has no job.
+// The post-meeting job: one per note, after the note's diarization pass at stop and after a
+// local import with Separate speakers on. It computes outside the note's label-write queue
+// (diarize and embed, evidence, the LLM step, `decide`) and queues only its writes. A note
+// without a pass has no job.
 //
 // Steps:
 //   1. the pass (`asr/diarize.ts`), with the embed mode picked here: `all` with Recognize
@@ -45,7 +45,7 @@ import {
   type SpeakerNameSuggestion,
   type TranscriptChunk
 } from '@shared/types/transcript'
-import { PASS_CAP_MS, type DiarizeEmbedPlan, type DiarizePass } from '../asr/diarize'
+import { SPEAKER_LABELS_WAIT_MS, type DiarizeEmbedPlan, type DiarizePass } from '../asr/diarize'
 import type { MainContext } from '../context'
 import { log } from '../log'
 import type { SpeakerClusterVectorRow } from '../storage/api'
@@ -69,8 +69,6 @@ import { suggestForJob } from './names'
 import { clusterForSpan } from './pending-span'
 import { voiceGeneration } from './voice-gen'
 
-/** The `awaitSpeakerLabels` bound: the pass cap, the embedding cap and the LLM step. */
-export const SPEAKER_LABELS_WAIT_MS = PASS_CAP_MS + SPEAKER_PROFILE_LIMITS.embeddingCapMs + SPEAKER_PROFILE_LIMITS.llmTimeoutMs
 /** A guard over `suggestForJob`'s own 60 s timeout. */
 const LLM_GUARD_MS = SPEAKER_PROFILE_LIMITS.llmTimeoutMs + 5_000
 const PLACEHOLDER = /^Speaker( [A-Z]+| \d+)?$/

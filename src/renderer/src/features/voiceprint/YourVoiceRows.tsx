@@ -74,6 +74,7 @@ function ForgetDialog({ onClose }: { onClose(): void }): JSX.Element {
       <div className="h-modal__body vp-record">
         <h2 className="h-modal__title">{S.yourVoiceForgetTitle()}</h2>
         <p className="h-modal__subtitle">{S.yourVoiceForgetBody()}</p>
+        <p className="h-modal__subtitle">{S.forgetOldBackups()}</p>
         <footer className="vp-record__actions">
           <button type="button" className="n-btn n-btn--ghost" data-autofocus disabled={busy} onClick={onClose}>
             {S.cancel()}

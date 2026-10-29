@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-// registerSpeakerProfiles(): speaker profiles, wired once from
-// src/main/index.ts. Each part registers itself; their order here is fixed.
+// registerSpeakerProfiles(): speaker profiles, wired once from src/main/index.ts. Each part
+// registers itself; their order here is fixed.
 
 import { app } from 'electron'
 import type { MainContext } from '../context'
