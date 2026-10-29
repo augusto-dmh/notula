@@ -4,7 +4,7 @@
 // real clusters only); the calibration fit; FAR @ FRR 5 %; DER; CPU; the T2 and T3 summaries.
 // Reports hold aggregates only: nothing here returns a person id, a name or a per-cluster row.
 
-import { truthOf } from './manifest.mjs'
+import { isOutsider, labelOf } from './manifest.mjs'
 import { clopperPearsonUpper, der, farAtFrr, fitLogistic, peopleBootstrap, round } from './stats.mjs'
 
 export const GATE_MAX = 0.01
@@ -33,7 +33,8 @@ export function clusterRows(evaluation, ctx) {
     const m = ctx.meetingOfTag(n.tag)
     if (!m) continue
     for (const c of n.clusters ?? []) {
-      const truth = truthOf(c.segments ?? [], c.channel, m.labels)
+      const label = labelOf(c.segments ?? [], c.channel, m.labels)
+      const truth = isOutsider(label) ? null : label
       const enrolled = !!truth && !!ctx.enrolledIn[truth]
       const isSelf = !!truth && ctx.selfId === truth
       rows.push({
@@ -45,6 +46,7 @@ export function clusterRows(evaluation, ctx) {
         bucket: bucketOf(c.cleanMs),
         cleanMs: c.cleanMs,
         truth,
+        label,
         heldOut: !!truth && ctx.heldOut.includes(truth),
         known: enrolled && (isSelf ? c.channel === 'mic' : m.attendees.includes(truth)),
         knownAll: enrolled,
@@ -56,9 +58,19 @@ export function clusterRows(evaluation, ctx) {
   return rows
 }
 
+/**
+ * An auto name against the cluster's label. A guest outside the manifest, named from their tile,
+ * comes back as `other` on an `unknown` or `other` label: that is no wrong name. An auto on an
+ * unlabelled cluster can't be checked, so it counts as wrong, as the gate counts it.
+ */
+function autoOutcome(person, label) {
+  if (isOutsider(label)) return person === 'other' ? 'outsider' : 'wrong'
+  return label && person === label ? 'correct' : 'wrong'
+}
+
 /** Outcome counts of one decision variant over rows. */
 function tally(rows, variant, scope) {
-  const t = { clusters: 0, auto: 0, correct: 0, wrong: 0, suggest: 0, suggestRight: 0, missed: 0, correctUnknown: 0, known: 0 }
+  const t = { clusters: 0, auto: 0, correct: 0, wrong: 0, outsider: 0, suggest: 0, suggestRight: 0, missed: 0, correctUnknown: 0, known: 0 }
   for (const r of rows) {
     const d = r.decisions[variant]
     if (!d) continue
@@ -67,8 +79,7 @@ function tally(rows, variant, scope) {
     if (known) t.known++
     if (d.band === 'auto') {
       t.auto++
-      if (r.truth && d.person === r.truth) t.correct++
-      else t.wrong++
+      t[autoOutcome(d.person, r.label)]++
     } else if (d.band === 'suggest' || d.band === 'tie') {
       t.suggest++
       if (r.truth && d.candidates.includes(r.truth)) t.suggestRight++
@@ -357,7 +368,7 @@ export function cpuSummary(feeds) {
   }
   const hours = audioMs / 3_600_000
   const perHour = {}
-  for (const [k, v] of Object.entries(cpu)) if (/diarize|asr|speech|storage/i.test(k)) perHour[k] = hours ? round(v / hours, 1) : null
+  for (const [k, v] of Object.entries(cpu)) if (/^notula-(asr|diarize|storage)$/.test(k)) perHour[k] = hours ? round(v / hours, 1) : null
   return { audioHours: round(hours, 3), passes, passWallSecondsPerAudioHour: hours && passes ? round(passMs / 1000 / hours, 1) : null, cpuSecondsPerAudioHour: perHour }
 }
 
@@ -369,22 +380,24 @@ export function t2Summary(feeds, ctx) {
     if (!m) continue
     const meeting = ctx.meetingOfTag(f.tag)
     if (!meeting) continue
-    const v = (out[m[2]] ??= { replays: 0, systemClusters: 0, appAuto: 0, appCorrect: 0, appWrong: 0, labelled: 0 })
+    const v = (out[m[2]] ??= { replays: 0, systemClusters: 0, appAuto: 0, appCorrect: 0, appWrong: 0, appOutsider: 0, labelled: 0 })
     v.replays++
     for (const c of f.clusters) {
       if (c.channel !== 'system') continue
       v.systemClusters++
-      const truth = truthOf(c.segments, c.channel, meeting.labels)
-      if (truth) v.labelled++
+      const label = labelOf(c.segments, c.channel, meeting.labels)
+      if (label && !isOutsider(label)) v.labelled++
       if (c.band === 'auto' && c.auto?.src?.includes('app')) {
         v.appAuto++
-        if (truth && c.auto.person === truth) v.appCorrect++
+        const o = autoOutcome(c.auto.person, label)
+        if (o === 'correct') v.appCorrect++
+        else if (o === 'outsider') v.appOutsider++
         else v.appWrong++
       }
     }
   }
   for (const v of Object.values(out)) {
-    v.precision = v.appAuto ? round(v.appCorrect / v.appAuto) : null
+    v.precision = v.appAuto ? round((v.appCorrect + v.appOutsider) / v.appAuto) : null
     v.coverage = v.labelled ? round(v.appCorrect / v.labelled) : null
   }
   return out

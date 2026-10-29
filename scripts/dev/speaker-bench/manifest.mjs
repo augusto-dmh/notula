@@ -84,8 +84,8 @@ export function loadManifest(path, { allowRepo = false } = {}) {
   return m
 }
 
-/** The cluster's labelled person: the one holding ≥ 50 % of its word time on that channel, else null. */
-export function truthOf(segments, channel, labels) {
+/** The cluster's label: the person (or `unknown`, `other`) holding ≥ 50 % of its word time on that channel, else null. */
+export function labelOf(segments, channel, labels) {
   const held = new Map()
   let total = 0
   for (const [s, e] of segments) {
@@ -97,6 +97,8 @@ export function truthOf(segments, channel, labels) {
     }
   }
   const best = [...held].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))[0]
-  const person = best && total > 0 && best[1] * 2 >= total ? best[0] : null
-  return person === 'unknown' || person === 'other' ? null : person
+  return best && total > 0 && best[1] * 2 >= total ? best[0] : null
 }
+
+/** A label for someone outside the manifest's people. */
+export const isOutsider = (label) => label === 'unknown' || label === 'other'

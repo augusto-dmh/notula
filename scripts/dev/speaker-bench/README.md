@@ -12,6 +12,7 @@ The feed exists only in an unpackaged build started with `NOTULA_DEV_SPEAKER_BEN
   - composed stress fixtures and T2 streams go to the git-ignored `.speaker-bench/runs/<run>/fixtures`;
   - reports (aggregates only) go to `.speaker-bench/reports/`.
 - **The LLM step uses your configured provider for every set**, through `--provider`. The colleagues' benchmark consent must name that provider. The in-app mock replaces it only where a scenario injects a reply (A7's contradicting reply) and while A6 counts LLM calls during relabel.
+- **`--provider none` skips the LLM step.** It configures no provider, so the step abstains without a request. Use it for public-data runs, where nobody says a name. The llm and fused sets then carry no conversation evidence. The scenarios above still inject the mock.
 - **`calibration.json` is written only by `run --write-calibration`,** never by `--dry`. `autoEnabled` is set only on `≥30s` conditions whose two bounds pass.
 - **No real voice in `--dry`:** generated tones only.
 
@@ -25,7 +26,7 @@ Run `npm run build` first. Every command starts Electron itself: tray only, no w
 | `… setup` | Opens the app's UI on the label profile (`<home>/label-profile`). Its `models` folder is a junction to `<home>/models`, which every run shares. Use it to download the speech, speaker and speaker-id models, and to name speakers after `label`. |
 | `… label --manifest <m> [--all]` | Feeds every meeting without labels (or all of them with `--all`) into the label profile, in real time. It writes `<home>/label-notes.json`. |
 | `… export-labels --manifest <m>` | Writes `labels/<meeting>.json` next to the manifest, from the speakers you named in the label profile. They are label spans; later runs map clusters to people by word overlap. |
-| `… run --manifest <m> --provider <p>` | The full protocol, metrics, report and fitted candidate calibration. Add `--write-calibration` to write `resources/speakers/calibration.json`. |
+| `… run --manifest <m> --provider <p\|none>` | The full protocol, metrics, report and fitted candidate calibration. Add `--write-calibration` to write `resources/speakers/calibration.json`. |
 | `… compare-models --manifest <m>` | Runs only the model comparison. `run --compare-models` includes it. |
 
 `run` options:
@@ -44,7 +45,7 @@ Run `npm run build` first. Every command starts Electron itself: tray only, no w
 2. Convert each meeting to two time-aligned 16 kHz mono 16-bit WAVs (mic, system) outside the repo, and write the manifest.
 3. `setup`: download the models in Settings. Quit the app.
 4. `label --manifest <m>`, then `setup`: name every speaker once in each note. Quit, then `export-labels --manifest <m>`.
-5. Write the provider file and set the key's environment variable (below).
+5. Write the provider file and set the key's environment variable (below). For public data, pass `--provider none` instead.
 6. `run --manifest <m> --provider <p> --compare-models`. A full run costs about 2× the audio length, plus one replay per T2 variant.
 7. Read `.speaker-bench/reports/<run>.md`. If the model comparison picks ResNet-34, switch `speaker-id` to the alias first (`src/main/asr/manifest.ts`) and run again.
 8. When the gate passes where you want it, run with `--write-calibration`. Commit the file and the report's JSON together. The bench prints any coverage drop over 5 points; the commit message says why each one is acceptable.
@@ -83,7 +84,7 @@ Run `npm run build` first. Every command starts Electron itself: tray only, no w
 - **Paths** are relative to the manifest's folder.
 - **People:** `id` is the pseudonym that results use. `name` and `email` stay inside the app, which needs them for attendees, the meeting-app names and the LLM step. Without an `email`, the bench uses `<id>@bench.invalid`.
 - **One audio entry** feeds a single-channel set (a lesson on one mic) as that one source.
-- **Labels** are spans `{channel, startMs, endMs, person}` on the meeting's timeline (ms from the feed's start; `offsetMs` places a file on it). A labels file holds `{spans: [...]}`. `labels/<id>.json` is picked up when `labels` is absent. `person: "unknown"` marks a speaker who is in no list.
+- **Labels** are spans `{channel, startMs, endMs, person}` on the meeting's timeline (ms from the feed's start; `offsetMs` places a file on it). A labels file holds `{spans: [...]}`. `labels/<id>.json` is picked up when `labels` is absent. `person: "unknown"` marks a speaker who is in no list. An auto that names someone outside the people there (a guest named from their tile) counts as no wrong name in the tallies; the voice gate is unchanged.
 - **The UIA stream** has one JSON line per record, with `tMs` from the meeting's start plus the reader's record fields (`event`, `participantName`, `participants[{name, active, isSelf}]`, `selfActive`, `hasMeetingWindow`). Names may be person ids, which the feed turns into the people's names. It is replayed into the attribution service as the UIA worker's records, at their time.
 - **Not usable:** public speech corpora whose terms don't allow identifying their speakers.
 
@@ -92,6 +93,8 @@ Run `npm run build` first. Every command starts Electron itself: tray only, no w
 ```json
 { "settings": { "llm.provider": "anthropic", "llm.anthropic.model": "<your model>" }, "secret": { "id": "llm.anthropic", "env": "NOTULA_BENCH_LLM_KEY" } }
 ```
+
+`--provider none` takes no file: the run profile gets a local provider with no model.
 
 The app reads the key from that environment variable and stores it in the run profile's keychain. The bench never writes it anywhere.
 
@@ -146,6 +149,6 @@ The app reads the key from that environment variable and stores it in the run pr
   - the log and IPC scans, the metrics, the model comparison (a spectral stand-in) and the report.
 
   No pass runs, so the cluster-level checks report `n/a`. With the models in the dry profile's `models` folder, the same dry run exercises the pass and the job as well.
-- **Embedding time** isn't reported apart from the pass. CPU is each utility process's cumulative CPU per audio hour, plus the pass's wall time.
+- **Embedding time** isn't reported apart from the pass. CPU is the CPU each utility process (`notula-asr`, `notula-diarize`, `notula-storage`) spends during the feeds, per audio hour, plus the pass's wall time.
 - **A re-pass during a job** isn't forced: the pass consumes the note's temp audio. A16 covers the Forget and relabel races.
 - **A5's model switch** is simulated with a foreign model id.

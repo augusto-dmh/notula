@@ -8,7 +8,7 @@
 //   node scripts/dev/speaker-bench.mjs setup                      the app's UI on the bench's label profile
 //   node scripts/dev/speaker-bench.mjs label --manifest <m>       feeds unlabelled meetings for naming in the UI
 //   node scripts/dev/speaker-bench.mjs export-labels --manifest <m>
-//   node scripts/dev/speaker-bench.mjs run --manifest <m> --provider <p> [options]
+//   node scripts/dev/speaker-bench.mjs run --manifest <m> --provider <p|none> [options]
 //   node scripts/dev/speaker-bench.mjs compare-models --manifest <m>
 //
 // Options: --k <1..3> enrollment meetings per person (learning curve), --seed <n>, --no-t2,
@@ -53,9 +53,14 @@ function benchHome(args) {
   return home
 }
 
-/** `--provider <file>`: `{settings: {"llm.provider": …, "llm.anthropic.model": …}, secret: {id: "llm.anthropic", env: "NOTULA_BENCH_LLM_KEY"}}`. */
+/**
+ * `--provider <file>`: `{settings: {"llm.provider": …, "llm.anthropic.model": …}, secret: {id: "llm.anthropic", env: "NOTULA_BENCH_LLM_KEY"}}`.
+ * `--provider none`: no provider configured (a local provider with no model), so the LLM step is
+ * skipped, with no request. Scenario injection still swaps the mock in and restores this.
+ */
 function providerConfig(args) {
-  if (!args.provider) throw new Error('The LLM step uses your configured provider for every set: pass --provider <file> (see the README).')
+  if (!args.provider) throw new Error('The LLM step uses your configured provider for every set: pass --provider <file>, or --provider none to skip it (see the README).')
+  if (args.provider === 'none') return { settings: { 'llm.provider': 'local', 'llm.local.model': '' }, secret: null, none: true }
   assertPrivatePath(args.provider, 'The provider file')
   const p = JSON.parse(readFileSync(args.provider, 'utf8'))
   if (p.secret && !process.env[p.secret.env]) throw new Error(`Set ${p.secret.env} to the provider key (it is read by the app, never stored by the bench).`)
@@ -90,6 +95,7 @@ async function run(args) {
   const ffmpeg = findFfmpeg(args.ffmpeg)
   const notes = []
   if (dry) notes.push('Synthetic tones, no voice: on a machine without the speech models the feed runs without a session (no download), so no pass and no cluster exist; the stages still run end to end.')
+  if (provider.none) notes.push('No LLM (--provider none): the LLM step is skipped, so the llm and fused sets hold no conversation evidence. The scenarios that inject a reply (A6, A7) still use the mock.')
 
   const labelled = manifest.meetings.filter((m) => m.labels.length)
   for (const m of manifest.meetings) if (!m.labels.length) notes.push(`Meeting ${m.id} has no labels and is skipped (label it first).`)

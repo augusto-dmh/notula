@@ -681,13 +681,20 @@ class Bench {
     await this.ctx.storage.updateNote(noteId, { linked_event: { ...event, attendees: [...self, ...others] } })
   }
 
-  private cpuSample(acc: Map<number, { service: string; cpu: number }>): void {
+  /**
+   * Keyed by `name`: a utility process's `serviceName` is the same Mojo service for every fork, and
+   * the fork's own name (`notula-asr`, …) is `name`. The first sample of a pid is its baseline, so
+   * a process alive before the feed counts only the CPU it spends during this feed.
+   */
+  private cpuSample(acc: Map<number, { service: string; base: number; cpu: number }>, baseline = false): void {
     for (const m of app.getAppMetrics()) {
-      const service = (m as { serviceName?: string }).serviceName ?? m.type
+      const service = m.name ?? m.type
       const cpu = (m.cpu as { cumulativeCPUUsage?: number }).cumulativeCPUUsage
       if (typeof cpu !== 'number') continue
       const had = acc.get(m.pid)
-      acc.set(m.pid, { service, cpu: Math.max(had?.cpu ?? 0, cpu) })
+      // A pid first seen after the baseline started during the feed: all of its CPU counts.
+      if (!had || had.service !== service) acc.set(m.pid, { service, base: baseline ? cpu : 0, cpu })
+      else had.cpu = Math.max(had.cpu, cpu)
     }
   }
 
@@ -725,8 +732,8 @@ class Bench {
       timeline: { clearAll(): void }
       onWorker(msg: unknown): void
     }
-    const cpu = new Map<number, { service: string; cpu: number }>()
-    this.cpuSample(cpu)
+    const cpu = new Map<number, { service: string; base: number; cpu: number }>()
+    this.cpuSample(cpu, true)
     const feedStartMs = Date.now()
     this.mockNote = { noteId, feedStartMs, labels: m.labels }
     let nextRecord = 0
@@ -780,7 +787,7 @@ class Bench {
     const session = await this.ctx.storage.latestSession(noteId).catch(() => null)
     const final = (await this.ctx.storage.getTranscript(noteId)).filter((c) => c.is_final)
     const cpuSeconds: Record<string, number> = {}
-    for (const { service, cpu: sec } of cpu.values()) cpuSeconds[service] = Math.round(((cpuSeconds[service] ?? 0) + sec) * 100) / 100
+    for (const { service, base, cpu: sec } of cpu.values()) cpuSeconds[service] = Math.round(((cpuSeconds[service] ?? 0) + sec - base) * 100) / 100
     const runState = this.jobTimes.get(noteId) ?? {}
     const dump: NoteDump = {
       tag: step.tag,

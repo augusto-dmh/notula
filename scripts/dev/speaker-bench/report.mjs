@@ -36,8 +36,8 @@ export function renderMarkdown(r) {
   out.push('## Overall, by signal set and scope', '')
   out.push(
     table(
-      ['variant', 'clusters', 'auto', 'correct', 'wrong', 'coverage', 'suggest precision', 'missed', 'correct unknown'],
-      Object.entries(r.overall).map(([k, t]) => [k, t.clusters, t.auto, t.correct, t.wrong, t.coverage, t.suggestPrecision, t.missed, t.correctUnknown])
+      ['variant', 'clusters', 'auto', 'correct', 'wrong', 'outsider named', 'coverage', 'suggest precision', 'missed', 'correct unknown'],
+      Object.entries(r.overall).map(([k, t]) => [k, t.clusters, t.auto, t.correct, t.wrong, t.outsider, t.coverage, t.suggestPrecision, t.missed, t.correctUnknown])
     )
   )
   out.push('## By condition (fused and voice, attendee-filtered)', '')
