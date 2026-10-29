@@ -3,3 +3,6 @@ out/
 dist/
 *.log
 .DS_Store
+
+# Speaker bench: composed fixtures, dry-run profiles and aggregate reports, never committed
+.speaker-bench/
