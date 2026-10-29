@@ -15,6 +15,7 @@ import { UpcomingMeetings } from '../calendar'
 import { useCaptureState } from '../capture'
 import { FollowUpSuggestedIcon, SuggestedFollowUps, useSuggestedNoteIds } from '../follow-up'
 import { NewNoteButton } from '../new-note'
+import { NoticeCard } from '../speaker-profiles'
 import { ActionMenu, type ActionMenuEntry } from '../note-page/ActionMenu'
 import { IconOpen, IconTrash, trashNotes } from '../trash'
 import { noteAttendeeLine } from './attendees'
@@ -217,6 +218,8 @@ export function HomePage(): JSX.Element {
       </TopBar>
       <div className="page__scroll home__scroll" ref={scrollRef} onScroll={onScroll}>
         <div className="home__column">
+          {/* Speaker profiles: the one-time notice card. */}
+          <NoticeCard />
           {/* The AI setup tip. */}
           <NuxTip id="ai-setup" />
           <UpcomingMeetings />

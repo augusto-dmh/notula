@@ -74,11 +74,24 @@ export type AsrToMain =
 
 // ---------- notula-diarize ----------
 
+/**
+ * Where a temp file sits in capture time (`diarize.ts`'s `RecordedFile`): its first write, its
+ * length and the capture gaps left out of it. The speaker-profile echo cut maps the system
+ * channel's turns onto the mic's timeline with it.
+ */
+export interface DiarizeFileTiming {
+  baseEpochMs: number
+  samples: number
+  cuts: { atEpochMs: number; lostMs: number }[]
+}
+
 /** One NAU1 temp file: its path, its id and its base64 key. */
 export interface DiarizeFile {
   path: string
   id: string
   key: string
+  /** Its place in capture time; without it the echo cut compares the raw timelines. */
+  timing?: DiarizeFileTiming
 }
 
 /** One source's audio: its session files in order, played back to back. */
@@ -93,8 +106,17 @@ export interface DiarizeStart {
   args: DiarizeWorkerArgs
 }
 
+/**
+ * Which clusters get an identification embedding after diarization:
+ * `all` with Recognize voices on, `mic` with only Recognize my voice, `none` otherwise.
+ */
+export type DiarizeEmbedMode = 'all' | 'mic' | 'none'
+
 export interface DiarizeWorkerArgs {
   files: { segmentation: VerifiedFile; embedding: VerifiedFile }
+  /** The `speaker-id` extractor; null when it isn't ready or `embedMode` is `none`. */
+  identification: VerifiedFile | null
+  embedMode: DiarizeEmbedMode
   numThreads: number
   /** Clustering distance threshold (sherpa-onnx fast clustering; -1 clusters = by threshold). */
   threshold: number
@@ -110,8 +132,24 @@ export interface DiarizeSegment {
   speaker: number
 }
 
+/**
+ * One cluster's identification result, worker → main only. `label` is the clustering's
+ * speaker number in that source (main maps it to `r<N>`). `vector` is L2-normalized, null
+ * under 3 s of clean speech. Never logged, never sent to the renderer.
+ */
+export interface DiarizeCluster {
+  source: string
+  label: number
+  speechMs: number
+  cleanMs: number
+  vector: Float32Array | null
+}
+
 export type DiarizeToMain =
   | { type: 'result'; key: string; segments: DiarizeSegment[]; audioMs: number; computeMs: number }
+  /** Diarization is done for every input; embedding runs under its own cap from here. */
+  | { type: 'embedding-started' }
+  | { type: 'cluster'; cluster: DiarizeCluster }
   | { type: 'done' }
   | { type: 'error'; message: string }
   | WorkerLog

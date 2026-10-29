@@ -439,7 +439,7 @@ export interface MainContext {
   windowModes: WindowModesApi
   /** Replaced by `registerShortcuts(ctx)` during wiring. */
   shortcuts: ShortcutsApi
-  /** Complete from the start; the voiceprint module registers its tap. */
+  /** Complete from the start; no module registers a tap since the voiceprint tap was retired. */
   audioTaps: AudioTapsApi
   /** Replaced by `registerDeviceLock(ctx)` during wiring. */
   deviceLock: DeviceLockApi

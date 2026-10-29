@@ -86,6 +86,15 @@ export type StoreTable =
   | 'series_catalog_items'
   | 'import_batches'
   | 'import_items'
+  // Speaker profiles (migration 12)
+  | 'speaker_people'
+  | 'speaker_exemplars'
+  | 'speaker_voice_spaces'
+  | 'speaker_negatives'
+  | 'speaker_cluster_vectors'
+  | 'speaker_agreements'
+  | 'speaker_matches'
+  | 'speaker_pending'
 
 /** Coalesced per microtask in the storage process. */
 export interface NotesChanged {

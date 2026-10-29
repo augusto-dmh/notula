@@ -4,7 +4,10 @@
 // the storage process never touches the network, and nothing executable is ever
 // downloaded: only the files the manifest pins.
 //
-// Layout: <userData>/models/<asr|diarization>/<modelId>/<member path>. A model is
+// Layout: <userData>/models/<asr|diarization>/<modelId>/<member path> (`speaker-id` sits
+// with diarization). An alias (manifest `alias`) has no folder of its own: it is one
+// file of its home model, shares that model's download and state, and can't be deleted
+// on its own. A model is
 // built in two staging folders next to it: `<dir>.download/` holds each download as
 // `<file>.partial` while its SHA-256 is streamed, and `<dir>.partial/` receives the
 // verified members (archives are extracted with the OS `tar`). Only when every
@@ -16,9 +19,10 @@ import { createHash } from 'node:crypto'
 import { createWriteStream, existsSync, statSync, type WriteStream } from 'node:fs'
 import { copyFile, link, mkdir, rename, rm, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import type { SpeakerModelState } from '@shared/types/speakers'
 import { DEFAULT_LOCAL_ASR_MODEL, type LocalModelId, type LocalModelState } from '@shared/types/transcript'
 import { log } from '../log'
-import { MODEL_MANIFEST, type ModelDownload, type ModelFile, type ModelManifestEntry } from './manifest'
+import { aliasesOf, MODEL_MANIFEST, modelFiles, modelHome, speakerIdModelId, type ModelDownload, type ModelFile, type ModelManifestEntry } from './manifest'
 import type { VerifiedFile } from './protocol'
 import { baseName, sha256File } from './verify'
 
@@ -118,6 +122,16 @@ async function reuse(from: string, to: string): Promise<void> {
   }
 }
 
+/**
+ * The identification model's state for `speakers:get-status`: the
+ * manager's state, or `mismatch` when it is ready but the calibration file's `modelSha`
+ * names another extractor. `calibrationSha` null: no calibration file to compare.
+ */
+export function speakerModelState(s: LocalModelState, calibrationSha: string | null): SpeakerModelState {
+  if (s.state === 'ready' && calibrationSha !== null && calibrationSha !== speakerIdModelId()) return 'mismatch'
+  return s.state
+}
+
 interface Throttle {
   last: number
   timer: NodeJS.Timeout | null
@@ -143,6 +157,7 @@ export class LocalModelManager {
   private async sweepStaging(): Promise<void> {
     let removed = 0
     for (const id of Object.keys(MODEL_MANIFEST) as LocalModelId[]) {
+      if (MODEL_MANIFEST[id].alias) continue
       const dir = this.dir(id)
       for (const stage of [`${dir}.download`, `${dir}.partial`]) {
         if (!existsSync(stage)) continue
@@ -157,8 +172,9 @@ export class LocalModelManager {
     if (removed) log('info', 'asr:model-staging-swept', { folders: removed })
   }
 
-  /** A worker holds the model's files until the returned release runs. */
-  use(id: LocalModelId): () => void {
+  /** A worker holds the model's files until the returned release runs (an alias holds its home's). */
+  use(model: LocalModelId): () => void {
+    const id = modelHome(model)
     this.users.set(id, (this.users.get(id) ?? 0) + 1)
     let released = false
     return () => {
@@ -171,7 +187,7 @@ export class LocalModelManager {
   }
 
   inUse(id: LocalModelId): boolean {
-    return (this.users.get(id) ?? 0) > 0
+    return (this.users.get(modelHome(id)) ?? 0) > 0
   }
 
   onState(cb: (s: LocalModelState) => void): () => void {
@@ -179,19 +195,31 @@ export class LocalModelManager {
     return () => this.listeners.delete(cb)
   }
 
-  dir(id: LocalModelId): string {
+  /** The model's folder; an alias's is its home's. */
+  dir(model: LocalModelId): string {
+    const id = modelHome(model)
     const entry = MODEL_MANIFEST[id]
     return join(this.opts.root, entry.kind === 'asr' ? 'asr' : 'diarization', id)
   }
 
-  /** Every member with its absolute path, for the workers' layer-3 check. */
+  /** Every member with its absolute path, for the workers' layer-3 check (an alias: its one file). */
   files(id: LocalModelId): VerifiedFile[] {
     const dir = this.dir(id)
-    return MODEL_MANIFEST[id].downloads.flatMap((d) => d.members.map((m) => ({ path: join(dir, m.path), bytes: m.bytes, sha256: m.sha256 })))
+    return modelFiles(id).map((m) => ({ path: join(dir, m.path), bytes: m.bytes, sha256: m.sha256 }))
   }
 
-  /** "Ready": every member exists with its exact size; no re-hash. */
-  isReady(id: LocalModelId): boolean {
+  /**
+   * The `speaker-id` extractor when it is ready: its file for the
+   * diarize worker, and its model id, the file's SHA-256. Null otherwise.
+   */
+  speakerId(): { file: VerifiedFile; modelId: string } | null {
+    if (!this.isReady('speaker-id')) return null
+    return { file: this.files('speaker-id')[0] as VerifiedFile, modelId: speakerIdModelId() }
+  }
+
+  /** "Ready": every member exists with its exact size; no re-hash. An alias is ready when its home is. */
+  isReady(model: LocalModelId): boolean {
+    const id = modelHome(model)
     if (this.jobs.has(id)) return false
     return this.files(id).every((f) => {
       try {
@@ -203,10 +231,13 @@ export class LocalModelManager {
   }
 
   isDownloading(id: LocalModelId): boolean {
-    return this.jobs.has(id)
+    return this.jobs.has(modelHome(id))
   }
 
-  stateNow(id: LocalModelId): LocalModelState {
+  /** An alias reports its home's state under its own id. */
+  stateNow(model: LocalModelId): LocalModelState {
+    const id = modelHome(model)
+    if (id !== model) return { ...this.stateNow(id), modelId: model }
     const totalBytes = MODEL_MANIFEST[id].totalBytes
     if (this.jobs.has(id)) return { modelId: id, state: 'downloading', receivedBytes: this.received.get(id) ?? 0, totalBytes }
     if (this.isReady(id)) return { modelId: id, state: 'ready', totalBytes }
@@ -224,17 +255,20 @@ export class LocalModelManager {
    * Returns the current state when the model is ready or a download is
    * running (the caller joins it); otherwise starts one and returns `downloading`.
    */
-  download(id: LocalModelId): Promise<LocalModelState> {
+  download(model: LocalModelId): Promise<LocalModelState> {
+    // An alias downloads its home: no second download, no second copy.
+    const id = modelHome(model)
     return this.enqueue(async () => {
-      if (this.jobs.has(id) || this.isReady(id)) return this.stateNow(id)
+      if (this.jobs.has(id) || this.isReady(id)) return this.stateNow(model)
       this.start(id)
-      return this.stateNow(id)
+      return this.stateNow(model)
     })
   }
 
-  /** Refused while downloading or while a meeting is transcribed. */
+  /** Refused while downloading or while a meeting is transcribed. An alias is never deleted on its own. */
   delete(id: LocalModelId): Promise<LocalModelState> {
     return this.enqueue(async () => {
+      if (MODEL_MANIFEST[id].alias) throw new ModelError('It shares a file with another model. Delete that model instead.')
       if (this.jobs.has(id)) throw new ModelError('Still downloading. Delete it when done.')
       const busy = this.opts.busyReason(id)
       if (busy) throw new ModelError(`busy: ${busy}`)
@@ -253,7 +287,7 @@ export class LocalModelManager {
   async ensureReady(id: LocalModelId): Promise<boolean> {
     if (this.isReady(id)) return true
     await this.download(id)
-    await this.jobs.get(id)
+    await this.jobs.get(modelHome(id))
     return this.isReady(id)
   }
 
@@ -304,8 +338,11 @@ export class LocalModelManager {
       if (th.timer) clearTimeout(th.timer)
       th.timer = null
       th.last = Date.now()
-      const s = this.stateNow(id)
-      for (const l of this.listeners) l(s)
+      // An alias's state moves with its home's.
+      for (const m of [id, ...aliasesOf(id)]) {
+        const s = this.stateNow(m)
+        for (const l of this.listeners) l(s)
+      }
     }
     if (final) {
       emit()

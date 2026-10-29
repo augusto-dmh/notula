@@ -4,38 +4,29 @@
 
 import type { VerifiedFile } from '../asr/protocol'
 
-export type VoiceprintAudio =
-  /** A guided sample, held in memory only. */
-  | { kind: 'pcm'; pcm: Uint8Array }
-  /** A session's NAU1 mic temp file; its key arrives here, never on the command line. */
-  | { kind: 'naud'; path: string; id: string; key: string }
-
 export interface VoiceprintJob {
   type: 'job'
   jobId: string
-  files: { segmentation: VerifiedFile; embedding: VerifiedFile }
+  /** `segmentation` and `embedding` separate the speakers (the `diarization-en` files); `identification` is the `speaker-id` extractor. */
+  files: { segmentation: VerifiedFile; embedding: VerifiedFile; identification: VerifiedFile }
   numThreads: number
   windowShiftRatio: number
   clusterThreshold: number
   minSegmentMs: number
-  audio: VoiceprintAudio
-}
-
-export interface VoiceprintSegment {
-  /** Seconds into the audio. */
-  start: number
-  end: number
-  speaker: number
+  /** The guided sample, 16 kHz s16le mono, held in memory only. */
+  pcm: Uint8Array
 }
 
 export interface VoiceprintSpeaker {
   speaker: number
   speechMs: number
-  /** L2-normalized; null when no segment was long enough to embed. */
-  vector: number[] | null
+  /** The clean spans' total. */
+  cleanMs: number
+  /** The identification vector, L2-normalized; null under 3 s of clean speech. */
+  vector: Float32Array | null
 }
 
 export type VoiceprintToMain =
-  | { type: 'result'; jobId: string; audioMs: number; computeMs: number; segments: VoiceprintSegment[]; speakers: VoiceprintSpeaker[] }
+  | { type: 'result'; jobId: string; audioMs: number; computeMs: number; speakers: VoiceprintSpeaker[] }
   | { type: 'error'; jobId: string | null; message: string }
   | { type: 'log'; level: 'debug' | 'info' | 'warn' | 'error'; event: string; data?: Record<string, unknown> }

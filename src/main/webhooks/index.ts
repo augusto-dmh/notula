@@ -20,6 +20,7 @@
 import { createHmac, randomBytes, randomUUID } from 'node:crypto'
 import { app, ipcMain } from 'electron'
 import { notulaError } from '@shared/errors'
+import { chunkSpeakerLabels } from '@shared/lib/speakers'
 import type { InvokeChannel, InvokeReq, InvokeRes, PushChannel } from '@shared/ipc'
 import type { IntegrationDelivery } from '@shared/types/integrations'
 import type { Note } from '@shared/types/notes'
@@ -88,7 +89,7 @@ function events(v: unknown): WebhookEvent[] {
 
 // ---------- payload ----------
 
-interface PayloadInput {
+export interface PayloadInput {
   eventId: string
   eventType: WebhookEvent
   occurredAt: string
@@ -108,7 +109,8 @@ function offsetIso(iso: string): string {
   return `${local}${sign}${pad(off / 60)}:${pad(off % 60)}`
 }
 
-async function buildBody(ctx: MainContext, p: PayloadInput): Promise<string> {
+/** The POST body. Exported for the speaker bench's output check, which greps its transcript's speakers. */
+export async function buildBody(ctx: MainContext, p: PayloadInput): Promise<string> {
   const base: Record<string, unknown> = {
     event_id: p.eventId,
     event_type: p.eventType,
@@ -152,9 +154,11 @@ async function buildBody(ctx: MainContext, p: PayloadInput): Promise<string> {
     }
     if (p.includeTranscript) {
       const chunks = await readerTranscript(ctx, n.id, await ctx.storage.getTranscript(n.id))
-      note['transcript'] = chunks
-        .filter((c) => c.is_final && c.text.trim())
-        .map((c) => ({ speaker: (c as { detected_speaker_name?: string | null }).detected_speaker_name || (c.source === 'microphone' ? 'Me' : 'Them'), start: c.start_timestamp, text: c.text }))
+      const wordLevel = await ctx.settings.get('transcription.diarization').catch(() => false)
+      const finals = chunks.filter((c) => c.is_final && c.text.trim())
+      // One entry per chunk, as before speaker profiles. The speaker comes from the shared label rules: once the job has written, a suggest, tie or none speaker goes out as its letter.
+      const labels = chunkSpeakerLabels(finals, { wordLevel })
+      note['transcript'] = finals.map((c) => ({ speaker: labels.get(c.id) ?? (c.source === 'microphone' ? 'Me' : 'Them'), start: c.start_timestamp, text: c.text }))
     }
   }
   const payload: Record<string, unknown> = { ...base, note }

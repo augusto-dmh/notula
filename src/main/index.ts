@@ -109,6 +109,7 @@ import { registerShortcuts } from './shortcuts'
 import { registerSnapshots } from './snapshots'
 import { registerSources } from './sources'
 import { registerSpeakerTags } from './speakers'
+import { registerSpeakerProfiles } from './speakers/profiles'
 import { registerSummaryFeedback } from './summary-feedback'
 import { createStorage } from './storage'
 import { registerTags } from './tags'
@@ -602,6 +603,7 @@ async function start(windows: Windows): Promise<void> {
   wire('search', () => registerSearch(ctx))
   //    5.8 transcript and audio
   wire('speaker-tags', () => registerSpeakerTags(ctx))
+  wire('speaker-profiles', () => registerSpeakerProfiles(ctx))
   wire('recordings', () => registerRecordings(ctx))
   wire('imports', () => {
     ctx.imports = registerImports(ctx)

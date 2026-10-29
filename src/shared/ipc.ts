@@ -254,11 +254,24 @@ import type {
   LocalModelId,
   LocalModelState,
   SpeakerNameAccept,
+  SpeakerNameAcceptResult,
   SpeakerNameSuggestion,
   TranscriptChanged,
   TranscriptChunk,
   TranscriptionSessionInfo
 } from './types/transcript'
+import type {
+  SpeakerAgreementMethod,
+  SpeakerForgetReason,
+  SpeakerJobStatus,
+  SpeakerMatchRow,
+  SpeakerMergePreview,
+  SpeakerNoticeLanguage,
+  SpeakerPersonView,
+  SpeakerRosterRow,
+  SpeakerSampleRow,
+  SpeakersStatus
+} from './types/speakers'
 import type { TranscriptReport, TranscriptReportInput } from './types/transcript-reports'
 import type { RuleDecision, TranscriptionRule } from './types/transcription-rules'
 import type {
@@ -268,7 +281,7 @@ import type {
   UserContextSectionId,
   UserContextState
 } from './types/user-context'
-import type { VoiceprintIdentifyResult, VoiceprintSampleResult, VoiceprintStatus } from './types/voiceprint'
+import type { VoiceprintSampleResult } from './types/voiceprint'
 import type { WebhookEndpoint, WebhookEndpointInput, WebhookTestResult } from './types/webhooks'
 import type { WindowMode, WindowModeReason } from './types/window-modes'
 import type { BlockExecuteOptions, BlockUpdate, WorkflowBlock, WorkflowBlockType } from './types/workflow-blocks'
@@ -435,8 +448,71 @@ export interface InvokeChannels {
   'attribution:get-status': [void, AttributionStatus]
   /** Named rows first, in `position` order. */
   'speaker-names:list': [{ noteId: string }, SpeakerNameSuggestion[]]
-  'speaker-names:accept': [SpeakerNameAccept, { chunksNamed: number }]
-  'speaker-names:reject': [{ noteId: string; identityKey: string }, void]
+  /**
+   * Speaker profiles: `accept`, `reject`, `not-person`, `ask-first` and `name-pending` are refused
+   * with `busy` while the note's job runs and with `stale` for an old pass; `undo` never is.
+   * An `undoToken` is null when there is nothing to undo.
+   */
+  'speaker-names:accept': [SpeakerNameAccept, SpeakerNameAcceptResult]
+  /** "Skip" (the who's-who sheet only): the cluster vector and the row go when the Undo window closes. */
+  'speaker-names:reject': [{ noteId: string; identityKey: string }, { undoToken: string | null }]
+  /** "Not <name>", and the card's close button: a negative for that pairing; the cluster stays open. */
+  'speaker-names:not-person': [{ noteId: string; identityKey: string; personId: string }, { undoToken: string | null }]
+  /** "Ask <name> first": a pending request on the person; the speaker stays unnamed. */
+  'speaker-names:ask-first': [{ noteId: string; identityKey: string; personId: string }, { ok: boolean }]
+  /** The "Name <name> in <meeting>" offer: names the speaker with Remember voice on. */
+  'speaker-names:name-pending': [
+    { noteId: string; identityKey: string; personId: string },
+    { chunksNamed: number; undoToken: string | null }
+  ]
+  'speaker-names:undo': [{ undoToken: string }, { ok: boolean }]
+  /** A WAV of up to 8 s for one speaker; played from memory, never stored. */
+  'speaker-names:clip': [{ noteId: string; identityKey: string }, { wav: Uint8Array | null; reason?: 'no-audio' }]
+  // Speaker profiles: status, notices and the post-meeting job (refused while locked)
+  'speakers:get-status': [void, SpeakersStatus]
+  /** Rejects `invalid-input` without `confirmed`. `keepSelf`: the user's own voice stays (Recognize voices off). */
+  'speakers:forget-all': [{ confirmed: true; keepSelf?: true }, { ok: boolean }]
+  'speakers:dismiss-notice': [void, { ok: boolean }]
+  /** The participant notice (`participants-1`); no record is kept. */
+  'speakers:participant-notice': [{ language: SpeakerNoticeLanguage }, { text: string }]
+  /** Appends the speaker-names sentence to `consent.message` once. */
+  'speakers:add-chat-notice-line': [{ language: SpeakerNoticeLanguage }, { ok: boolean }]
+  'speakers:job-state': [{ noteId: string }, SpeakerJobStatus]
+  // Speaker profiles: people, voices and agreement records (refused while locked)
+  'speaker-people:list': [{ query?: string; noteId?: string }, SpeakerRosterRow[]]
+  /** Rejects `not-found`. */
+  'speaker-people:get': [{ personId: string }, SpeakerPersonView]
+  'speaker-people:matches': [{ personId: string }, SpeakerMatchRow[]]
+  'speaker-people:samples': [{ personId: string }, SpeakerSampleRow[]]
+  'speaker-people:remove-sample': [{ sampleId: string }, { undoToken: string | null }]
+  'speaker-people:set-auto': [{ personId: string; enabled: boolean }, { ok: boolean }]
+  'speaker-people:forget-voice': [{ personId: string; reason: SpeakerForgetReason; confirmed: true }, { ok: boolean }]
+  'speaker-people:merge-preview': [{ fromId: string; intoId: string }, SpeakerMergePreview]
+  'speaker-people:merge': [{ fromId: string; intoId: string; confirmed: true }, { ok: boolean }]
+  /** `taken`: another person holds the email, offered as a merge instead. */
+  'speaker-people:link-email': [{ personId: string; email: string }, { ok: true } | { taken: { personId: string; name: string } }]
+  'speaker-people:delete': [{ personId: string; confirmed: true }, { ok: boolean }]
+  /** Main writes the clipboard; the text doesn't cross IPC. */
+  'speaker-people:copy-agreement-message': [{ personId: string; language: SpeakerNoticeLanguage }, { ok: boolean; noticeVersion: string }]
+  /** View message only: logged as an action, never with its content. */
+  'speaker-people:agreement-text': [{ personId: string }, { noticeText: string; evidenceText?: string }]
+  /** `evidenceText` up to 20,000 characters. A spoken excerpt is extracted by main from `evidenceNoteId` + `evidenceAtMs`. */
+  'speaker-people:record-agreement': [
+    {
+      personId: string
+      method: SpeakerAgreementMethod
+      language: SpeakerNoticeLanguage
+      noticeVersion: string
+      evidenceText?: string
+      evidenceNoteId?: string
+      evidenceAtMs?: number
+    },
+    { ok: boolean; pendingMeetings: number }
+  ]
+  /** Main opens the save dialog and writes the text file. */
+  'speaker-people:export-agreement': [{ personId: string }, { ok: true } | { cancelled: true }]
+  /** Revoked records only. */
+  'speaker-people:delete-agreement': [{ personId: string; confirmed: true }, { ok: boolean }]
   'recordings:list': [{ noteId: string }, RecordingInfo[]]
   /** Main shows the folder dialog; `[]` when cancelled. */
   'recordings:export': [{ noteId: string }, { paths: string[] }]
@@ -605,14 +681,12 @@ export interface InvokeChannels {
   /** Records `confirmed`. */
   'consent:mark-posted': [{ noteId: string }, ConsentStatus]
   'consent:resolve-pending': [{ noteId: string; action: 'start-now' | 'cancel' }, void]
-  'voiceprint:get-status': [void, VoiceprintStatus]
-  /** Resolves when `durationMs` of audio has arrived on `voiceprint:sample-audio`, or on cancel. */
+  /**
+   * Record my voice: resolves when `durationMs` of audio has arrived on
+   * `voiceprint:sample-audio`, or on cancel. A sample that passes adds a self exemplar and
+   * turns `speakers.selfVoice` on.
+   */
   'voiceprint:record-sample': [{ sessionId: string; durationMs: number }, VoiceprintSampleResult]
-  /** Refused while `voiceprint.enabled` is off. */
-  'voiceprint:set-passive': [{ enabled: boolean }, VoiceprintStatus]
-  /** "This was an in-person meeting". */
-  'voiceprint:identify-note': [{ noteId: string }, VoiceprintIdentifyResult]
-  'voiceprint:forget': [void, { ok: boolean }]
   'transcript-report:create': [TranscriptReportInput, { id: string }]
   'transcript-report:list': [{ noteId?: string }, TranscriptReport[]]
   'transcript-report:delete': [{ id: string }, { ok: boolean }]
@@ -1016,6 +1090,9 @@ export interface PushChannels {
   'attribution:status-changed': AttributionStatus
   'attribution:active-speaker': { noteId: string; participantName: string | null }
   'speaker-names:changed': { noteId: string }
+  'speakers:status-changed': SpeakersStatus
+  'speakers:job-changed': SpeakerJobStatus
+  'speaker-people:changed': { personId?: string }
   'imports:changed': ImportJob
   /**
    * The media-worker window only: a transferred MessagePort with no payload, sent with
@@ -1068,7 +1145,6 @@ export interface PushChannels {
   // ---------- privacy, workflows, Labs and the meeting windows ----------
   'consent:status-changed': ConsentStatus
   'voiceprint:sample-progress': { sessionId: string; elapsedMs: number; level: number }
-  'voiceprint:status-changed': VoiceprintStatus
   'retention:changed': RetentionState
   /** The meeting-dock window. */
   'meeting-dock:state': MeetingDockState
@@ -1391,7 +1467,41 @@ export interface NotulaApi {
     list: InvokeMember<'speaker-names:list'>
     accept: InvokeMember<'speaker-names:accept'>
     reject: InvokeMember<'speaker-names:reject'>
+    notPerson: InvokeMember<'speaker-names:not-person'>
+    askFirst: InvokeMember<'speaker-names:ask-first'>
+    namePending: InvokeMember<'speaker-names:name-pending'>
+    undo: InvokeMember<'speaker-names:undo'>
+    clip: InvokeMember<'speaker-names:clip'>
     onChanged: PushMember<'speaker-names:changed'>
+  }
+  speakers: {
+    getStatus: InvokeMember<'speakers:get-status'>
+    forgetAll: InvokeMember<'speakers:forget-all'>
+    dismissNotice: InvokeMember<'speakers:dismiss-notice'>
+    participantNotice: InvokeMember<'speakers:participant-notice'>
+    addChatNoticeLine: InvokeMember<'speakers:add-chat-notice-line'>
+    jobState: InvokeMember<'speakers:job-state'>
+    onStatusChanged: PushMember<'speakers:status-changed'>
+    onJobChanged: PushMember<'speakers:job-changed'>
+  }
+  speakerPeople: {
+    list: InvokeMember<'speaker-people:list'>
+    get: InvokeMember<'speaker-people:get'>
+    matches: InvokeMember<'speaker-people:matches'>
+    samples: InvokeMember<'speaker-people:samples'>
+    removeSample: InvokeMember<'speaker-people:remove-sample'>
+    setAuto: InvokeMember<'speaker-people:set-auto'>
+    forgetVoice: InvokeMember<'speaker-people:forget-voice'>
+    mergePreview: InvokeMember<'speaker-people:merge-preview'>
+    merge: InvokeMember<'speaker-people:merge'>
+    linkEmail: InvokeMember<'speaker-people:link-email'>
+    delete: InvokeMember<'speaker-people:delete'>
+    copyAgreementMessage: InvokeMember<'speaker-people:copy-agreement-message'>
+    agreementText: InvokeMember<'speaker-people:agreement-text'>
+    recordAgreement: InvokeMember<'speaker-people:record-agreement'>
+    exportAgreement: InvokeMember<'speaker-people:export-agreement'>
+    deleteAgreement: InvokeMember<'speaker-people:delete-agreement'>
+    onChanged: PushMember<'speaker-people:changed'>
   }
   recordings: {
     list: InvokeMember<'recordings:list'>
@@ -1640,15 +1750,10 @@ export interface NotulaApi {
     resolvePending: InvokeMember<'consent:resolve-pending'>
   }
   voiceprint: {
-    getStatus: InvokeMember<'voiceprint:get-status'>
     recordSample: InvokeMember<'voiceprint:record-sample'>
     sendSampleAudio: SendMember<'voiceprint:sample-audio'>
     onSampleProgress: PushMember<'voiceprint:sample-progress'>
     cancelSample: SendMember<'voiceprint:cancel-sample'>
-    setPassive: InvokeMember<'voiceprint:set-passive'>
-    identifyNote: InvokeMember<'voiceprint:identify-note'>
-    forget: InvokeMember<'voiceprint:forget'>
-    onStatusChanged: PushMember<'voiceprint:status-changed'>
   }
   transcriptReport: {
     create: InvokeMember<'transcript-report:create'>

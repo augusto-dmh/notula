@@ -100,7 +100,7 @@ export interface Settings {
   'capture.llmAutoStop': boolean
   /** Labs: "I'm still here" on the inactivity warning also restarts transcription and audio. */
   'capture.restartOnStillHere': boolean
-  /** Word-level speaker turns. */
+  /** Word-level speaker turns ("Separate speakers (on-device)"). On by default: speaker profiles need it. */
   'transcription.diarization': boolean
   'asr.deepgram.multilingualVersion': DeepgramMultilingualVersion
   'asr.assemblyai.multilingualModel': AssemblyAiMultilingualModel
@@ -147,8 +147,19 @@ export interface Settings {
   'attribution.meet': boolean
   /** The Meet reader's class names; null = DEFAULT_MEET_SELECTORS. */
   'attribution.meetSelectors': MeetSelectors | null
-  /** AI speaker-name suggestions. */
+  /** AI speaker-name suggestions ("Suggest names from the conversation"). */
   'speakerNames.suggestions': boolean
+  // Speaker profiles (Settings ▸ Speaker tags). Saved choices are kept: only a key never stored takes a new default.
+  /** Master over the meeting-app readers (with each app's own switch). Windows only. */
+  'speakers.appNames': boolean
+  /** Recognize voices: other people's voices, each with an agreement. Never turned on by a migration. */
+  'speakers.voices': boolean
+  /** Recognize my voice. Inherits a stored `voiceprint.enabled` (migration 12). */
+  'speakers.selfVoice': boolean
+  /** Keep improving from my online meetings. Inherits a stored `voiceprint.passive` (migration 12). */
+  'speakers.selfPassive': boolean
+  /** Main-only (`speakers:dismiss-notice`): the one-time notice card was dismissed. */
+  'speakers.noticeSeen': boolean
   /** Keep meeting audio, encrypted. */
   'audio.keepRecordings': boolean
   'audio.retention': AudioRetention
@@ -253,10 +264,6 @@ export interface Settings {
   'consent.message': string
   'consent.waitForOtherSpeaker': boolean
   'consent.deferTranscription': boolean
-  /** Labs. */
-  'voiceprint.enabled': boolean
-  /** Main-only (`voiceprint:set-passive`). */
-  'voiceprint.passive': boolean
   /** Labs. */
   'transcriptReport.enabled': boolean
   /** Main-only (`retention:set`, `retention:cancel-pending`). */
@@ -422,7 +429,7 @@ export const DEFAULT_SETTINGS: Settings = {
   'capture.autoStopWhenMeetingAppCloses': true,
   'capture.llmAutoStop': false,
   'capture.restartOnStillHere': false,
-  'transcription.diarization': false,
+  'transcription.diarization': true,
   'asr.deepgram.multilingualVersion': 'default',
   'asr.assemblyai.multilingualModel': 'universal-3-5-pro',
   'templates.favoriteIds': [],
@@ -441,11 +448,16 @@ export const DEFAULT_SETTINGS: Settings = {
   'folders.ignoredSeries': [],
   'folders.sidebar': { myNotesExpanded: false, favoritesOpen: true, collapsedFolderIds: [], showAll: false },
   'folders.aiSuggestions': false,
-  'attribution.zoom': false,
-  'attribution.teams': false,
-  'attribution.meet': false,
+  'attribution.zoom': true,
+  'attribution.teams': true,
+  'attribution.meet': true,
   'attribution.meetSelectors': null,
-  'speakerNames.suggestions': false,
+  'speakerNames.suggestions': true,
+  'speakers.appNames': true,
+  'speakers.voices': false,
+  'speakers.selfVoice': false,
+  'speakers.selfPassive': false,
+  'speakers.noticeSeen': false,
   'audio.keepRecordings': false,
   'audio.retention': '7d',
   'captions.alwaysOn': false,
@@ -509,8 +521,6 @@ export const DEFAULT_SETTINGS: Settings = {
   'consent.message': '',
   'consent.waitForOtherSpeaker': true,
   'consent.deferTranscription': false,
-  'voiceprint.enabled': false,
-  'voiceprint.passive': false,
   'transcriptReport.enabled': false,
   'retention.transcriptHours': null,
   'retention.pendingHours': null,
@@ -609,7 +619,7 @@ export const MAIN_ONLY_SETTING_KEYS = [
   'screenSnapshots.firstCaptureDone',
   'integrations.affinity.domain',
   // Each has its own invoke channel, or is written by main only
-  'voiceprint.passive',
+  'speakers.noticeSeen',
   'retention.transcriptHours',
   'retention.pendingHours',
   'retention.effectiveAt',

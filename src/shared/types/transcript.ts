@@ -2,6 +2,7 @@
 // Transcript chunks and ASR providers.
 
 import type { AudioSource, IsoTime } from './common'
+import type { SpeakerAutoSource, SpeakerBand, SpeakerCandidate } from './speakers'
 
 export type AsrProviderId = 'deepgram' | 'assemblyai' | 'local'
 export type CloudAsrProviderId = 'deepgram' | 'assemblyai'
@@ -24,8 +25,16 @@ export interface ProviderWord {
   merged_spk?: string
   /** The attribution participant id. */
   att?: string
-  /** A user-confirmed name. */
+  /** A user-confirmed name. Written by a user action only. */
   confirmed_spk?: string
+  /** The person behind `confirmed_spk`; absent for a free-text name with no person. User only. */
+  confirmed_pid?: string
+  /** The post-meeting job's name for an auto cluster (`Me` for self). Pipeline only. */
+  auto_spk?: string
+  /** The person behind `auto_spk`, when known. Pipeline only. */
+  auto_pid?: string
+  /** What named the cluster. Pipeline only. */
+  auto_src?: SpeakerAutoSource
 }
 
 export interface ProviderDetails {
@@ -36,6 +45,11 @@ export interface ProviderDetails {
   wallClockAnchorMs: number
   /** Diarization: the pass that assigned `ProviderWord.merged_spk`. */
   mergeScopeId?: string
+  /**
+   * The pass whose post-meeting decision was written on this chunk. While it equals
+   * `mergeScopeId`, `att` prints only on auto and confirmed clusters.
+   */
+  named_pass?: string
   /** A source note: the chunk's start as a video position, mapped through the watched spans. */
   sourcePositionMs?: number
 }
@@ -87,8 +101,8 @@ export const SPEAKER_UNATTRIBUTED = 'Unattributed'
 /** The local speech models: the English default and the two multilingual downloads. */
 export type LocalAsrModelId = 'parakeet-tdt-110m-en-int8' | 'parakeet-tdt-0.6b-v3-int8' | 'whisper-large-v3-turbo-int8'
 
-/** The manifest entries (src/main/asr/manifest.ts). */
-export type LocalModelId = LocalAsrModelId | 'diarization-en'
+/** The manifest entries (src/main/asr/manifest.ts). `speaker-id`: the speaker identification extractor. */
+export type LocalModelId = LocalAsrModelId | 'diarization-en' | 'speaker-id'
 
 /** `asr.local.model`: `auto` picks an installed model that covers the session language. */
 export type LocalAsrChoice = 'auto' | LocalAsrModelId
@@ -262,15 +276,50 @@ export interface SpeakerNameSuggestion {
   transcriptExcerpts: string[]
   position: number
   created_at: IsoTime
+  /** The speaker's band. A row of a note without a pass is `suggest` (a name) or `none`. */
+  band: SpeakerBand
+  /** At most 2, best first. No score. */
+  candidates: SpeakerCandidate[]
+  /** The pass the row was computed for; null for a note without a pass. */
+  passId: string | null
+  /** A request waits for the person's agreement. The person isn't stored on the row. */
+  pending: boolean
+  /**
+   * The cluster has a stored voice sample (a cluster vector of the installed model), so Ask first
+   * can work. Filled by `speaker-names:list` only, never stored; a boolean, never the vector.
+   */
+  hasVoiceSample?: boolean
 }
 
-/** `speaker-names:accept`. */
+/**
+ * `speaker-names:accept`. Who is named: `personId` (a person), `email` (a roster entry with
+ * no person yet), `newName` (a new person), `self` (Me), or none of them (a free-text
+ * `name` with no person). `name` is always the label written on the words.
+ */
 export interface SpeakerNameAccept {
   noteId: string
   identityKey: string
   name: string
   edited: boolean
   chosenFromList: boolean
+  personId?: string
+  email?: string
+  newName?: string
+  self?: boolean
+  /** Remember voice was on for this action. */
+  remember: boolean
+  /** `turn`: Only this turn, the chunks of `turnChunkIds`; it never teaches. */
+  scope: 'speaker' | 'turn'
+  turnChunkIds?: string[]
+  /** The pass the renderer saw; null for a note without a pass. Refused with `stale` when it isn't current. */
+  passId: string | null
+}
+
+/** `speaker-names:accept`. `undoToken` is null when nothing was written; `needsAgreement`: the person has none yet. */
+export interface SpeakerNameAcceptResult {
+  chunksNamed: number
+  undoToken: string | null
+  needsAgreement: boolean
 }
 
 export const SPEAKER_NAME_LIMITS = { excerpts: 4, excerptChars: 240, quoteMinWords: 3, timeoutMs: 60_000 } as const

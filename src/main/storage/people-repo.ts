@@ -27,6 +27,7 @@ import type {
 import { DEMO_MEETING_PREFIX } from '@shared/types/notes'
 import { companyName, displayName, isExcludedEmail, isGenericDomain, isResourceEmail } from '@shared/lib/people'
 import { parseJson } from './rows'
+import { speakerPeopleForList } from './speaker-people-repo'
 import { invalid, type StoreCtx } from './store'
 
 const MAX_QUERY = 200
@@ -267,12 +268,23 @@ function byRecent<T extends { lastSeenAt: string }>(a: T, b: T): number {
   return b.lastSeenAt.localeCompare(a.lastSeenAt)
 }
 
+/**
+ * The derived rows, joined with the persisted speaker people: a
+ * person with the row's email gives it `personId` and `hasVoice`, and the user's own rows take the
+ * self person. Outside a folder, a person no derived row holds (no email, or an email met nowhere)
+ * is listed too, opening `/person/p:<id>`. `voice` keeps the rows with a remembered voice.
+ */
 export function listPeople(s: StoreCtx, q: PeopleQuery & { myEmails: string[] }): PersonRow[] {
-  if (q?.filter !== 'all' && q?.filter !== 'met') throw invalid('filter must be all or met')
+  if (q?.filter !== 'all' && q?.filter !== 'met' && q?.filter !== 'voice') throw invalid('filter must be all, met or voice')
   const m = maps(s)
-  const scope = scoped(s, m, folderIdOf(q.folderId))
+  const folderId = folderIdOf(q.folderId)
+  const scope = scoped(s, m, folderId)
   const needle = query(q.query)
   const mine = lowerSet(q.myEmails)
+  const persisted = speakerPeopleForList(s)
+  const byEmail = new Map(persisted.filter((p) => p.email).map((p) => [p.email!, p]))
+  const self = persisted.find((p) => p.isSelf) ?? null
+  const joined = new Set<string>()
   const rows: PersonRow[] = []
   for (const [key, p] of scope.people) {
     const name = personName(p)
@@ -281,10 +293,41 @@ export function listPeople(s: StoreCtx, q: PeopleQuery & { myEmails: string[] })
       const hit = name.toLowerCase().includes(needle) || key.includes(needle) || (!!q.folderId && (company.includes(needle) || (p.domain ?? '').includes(needle)))
       if (!hit) continue
     }
+    const isSelf = mine.has(key)
+    const person = byEmail.get(key) ?? (isSelf ? self : null)
+    if (person) joined.add(person.personId)
     // Every note is the user's own while Notula has no server: "met" = "all", `isMine` always.
-    rows.push({ email: p.email, name, domain: p.domain, lastSeenAt: p.lastSeenAt, count: p.documents.length, isMine: true, isSelf: mine.has(key) })
+    rows.push({
+      email: p.email,
+      ...(person ? { personId: person.personId } : {}),
+      hasVoice: person?.hasVoice ?? false,
+      name,
+      domain: p.domain,
+      lastSeenAt: p.lastSeenAt,
+      count: p.documents.length,
+      isMine: true,
+      isSelf
+    })
   }
-  return rows.sort(byRecent)
+  if (!folderId) {
+    for (const p of persisted) {
+      // The user is listed through their own email rows, never as a second row.
+      if (p.isSelf || joined.has(p.personId) || (p.email && m.people.has(p.email))) continue
+      if (needle && !p.name.toLowerCase().includes(needle) && !(p.email ?? '').includes(needle)) continue
+      rows.push({
+        ...(p.email ? { email: p.email } : {}),
+        personId: p.personId,
+        hasVoice: p.hasVoice,
+        name: p.name,
+        domain: p.email ? domainOf(p.email) : null,
+        lastSeenAt: p.lastAt,
+        count: p.notes,
+        isMine: true,
+        isSelf: false
+      })
+    }
+  }
+  return (q.filter === 'voice' ? rows.filter((r) => r.hasVoice) : rows).sort(byRecent)
 }
 
 export function getPerson(s: StoreCtx, email: string, _myEmails: string[]): PersonDetail | null {
@@ -305,7 +348,8 @@ function ownDomains(myEmails: string[], generic: string[]): Set<string> {
 }
 
 export function listCompanies(s: StoreCtx, q: CompaniesQuery & { myEmails: string[]; genericDomains: string[] }): CompanyRow[] {
-  if (q?.filter !== 'all' && q?.filter !== 'met') throw invalid('filter must be all or met')
+  // `voice` is a people filter; companies read it as all.
+  if (q?.filter !== 'all' && q?.filter !== 'met' && q?.filter !== 'voice') throw invalid('filter must be all or met')
   const m = maps(s)
   const folderId = folderIdOf(q.folderId)
   const scope = scoped(s, m, folderId)

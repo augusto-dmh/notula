@@ -51,8 +51,8 @@ import type { SourceInputs } from '../enhance/inputs'
 import { expected } from '../ipc-expected'
 import { log } from '../log'
 import { egressBlocked } from '../privacy'
+import { labelQueue, type ChunkFieldPatch } from '../speakers/label-queue'
 import { transcriptionControl } from '../transcription'
-import { getTranscriptionManager } from '../transcription/manager'
 import {
   extensionCues,
   extensionTrack,
@@ -410,17 +410,24 @@ async function mapPositions(ctx: MainContext, noteId: string): Promise<void> {
   if (!spans.length) return
   const session = await ctx.storage.latestSession(noteId).catch(() => null)
   const provider = session?.provider ?? 'local'
-  const stored = await ctx.storage.getTranscript(noteId)
-  const changed: TranscriptChunk[] = []
-  for (const c of stored) {
-    if (isCaptionChunk(c) || isUntimedChunk(c) || !c.is_final || c.text === DELETED_CHUNK_MARKER) continue
-    const pos = positionFromSpans(Date.parse(c.start_timestamp), spans)
-    if (pos === null || chunkPositionMs(c) === pos) continue
-    changed.push(withPosition(c, pos, provider))
-  }
-  if (!changed.length) return
-  await getTranscriptionManager(ctx).store.publishRevisions(noteId, changed)
-  log('info', 'sources:positions-mapped', { chunks: changed.length, spans: spans.length })
+  // Through the note's label-write queue: only `sourcePositionMs`
+  // changes, on the chunks as read inside the queue, never a stale whole chunk.
+  const r = await labelQueue(ctx).enqueue(noteId, {
+    kind: 'position',
+    patch: (stored) => {
+      const out: ChunkFieldPatch[] = []
+      for (const c of stored) {
+        if (isCaptionChunk(c) || isUntimedChunk(c) || !c.is_final || c.text === DELETED_CHUNK_MARKER) continue
+        const pos = positionFromSpans(Date.parse(c.start_timestamp), spans)
+        if (pos === null || chunkPositionMs(c) === pos) continue
+        const base = c.providerDetails ? undefined : withPosition(c, pos, provider).providerDetails
+        out.push({ chunkId: c.id, details: { sourcePositionMs: pos }, ...(base ? { base } : {}) })
+      }
+      return out
+    }
+  })
+  if (r.status !== 'written' || !r.chunks) return
+  log('info', 'sources:positions-mapped', { chunks: r.chunks, spans: spans.length })
 }
 
 const mapTimers = new Map<string, NodeJS.Timeout>()

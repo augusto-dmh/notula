@@ -107,6 +107,20 @@ import type {
 } from '@shared/types/imports-markdown'
 import type { RecoveryAction, StorageStatus } from '@shared/types/storage'
 import type { NoteTemplate, NoteTemplateCreate, NoteTemplatePatch } from '@shared/types/templates'
+import type {
+  SpeakerAgreementMethod,
+  SpeakerAgreementRevokedVia,
+  SpeakerCandidate,
+  SpeakerBand,
+  SpeakerChannel,
+  SpeakerMatchKind,
+  SpeakerMatchRow,
+  SpeakerMergePreview,
+  SpeakerNoticeLanguage,
+  SpeakerPersonView,
+  SpeakerSampleRow,
+  SpeakerSampleVia
+} from '@shared/types/speakers'
 import type { SpeakerNameSuggestion, TranscriptChunk, TranscriptProviderId } from '@shared/types/transcript'
 import type { YdocState } from '@shared/types/ydoc'
 
@@ -359,6 +373,151 @@ export interface VoiceprintRow {
   centroids: { vector: number[]; totalSpeechMs: number; updatedAt: IsoTime }[]
   total_speech_ms: number
   updated_at: IsoTime
+}
+
+// ---------- speaker profiles (migration 12; main only, src/main/storage/speaker-*-repo.ts) ----------
+// Vectors are Float32Array, L2-normalized. They never cross IPC to the renderer and are never logged.
+
+/** A `speaker_people` row. `email` is lower-cased; `mergedInto` set on a merged row. */
+export interface SpeakerPersonRow {
+  id: string
+  displayName: string
+  email: string | null
+  isSelf: boolean
+  autoRecognize: boolean
+  mergedInto: string | null
+  lastMatchedAt: IsoTime | null
+  skippedSamples: number
+  createdAt: IsoTime
+  updatedAt: IsoTime
+  /** The person has at least one exemplar (of any model). Set on every row the repo returns. */
+  hasVoice?: boolean
+}
+
+/** A candidate for the job (a known person): confirmed or recognized lately, or of the same calendar series. */
+export interface KnownSpeakerPerson {
+  personId: string
+  name: string
+  email: string | null
+  isSelf: boolean
+  /** The latest match row's time. */
+  lastAt: IsoTime | null
+  sameSeries: boolean
+  /** Named (confirmed or auto) in the note the query named. */
+  inNote: boolean
+}
+
+/** One voice space of the matching gallery: a person × channel of one model. */
+export interface SpeakerVoiceSpaceRow {
+  personId: string
+  modelId: string
+  channel: SpeakerChannel
+  centroid: Float32Array
+  count: number
+  cleanMs: number
+  confirmations: number
+  exemplars: { id: string; vector: Float32Array; weight: number }[]
+}
+
+/** Provenance and vector of a new exemplar. `weight` = min(1, cleanMs / 30 s). */
+export interface NewSpeakerExemplar {
+  personId: string
+  modelId: string
+  channel: SpeakerChannel
+  vector: Float32Array
+  cleanMs: number
+  weight: number
+  sourceNoteId: string | null
+  sourcePassId: string | null
+  sourceLabel: string | null
+  spanStartMs: number | null
+  spanEndMs: number | null
+  via: SpeakerSampleVia
+  /**
+   * The far-from-profile floor: with ≥ 3 exemplars in the channel, a vector whose
+   * cosine to the centroid is below it is skipped and counted. Null skips the check.
+   */
+  farCosine: number | null
+}
+
+/**
+ * `added` (`replacedId` set when the cap replaced one), `skipped-far` (counted on the person),
+ * or `refused-no-agreement` (a non-self person without an active agreement; logged as a code).
+ */
+export type AddSpeakerExemplarResult =
+  | { status: 'added'; id: string; replacedId: string | null }
+  | { status: 'skipped-far' }
+  | { status: 'refused-no-agreement' }
+
+/** A `speaker_cluster_vectors` row. `label` is `r<N>`; `source` the audio source. */
+export interface SpeakerClusterVectorRow {
+  noteId: string
+  passId: string
+  source: AudioSource
+  label: string
+  modelId: string
+  vector: Float32Array
+  speechMs: number
+  cleanMs: number
+  createdAt: IsoTime
+  expiresAt: IsoTime
+}
+
+export type NewSpeakerClusterVector = Omit<SpeakerClusterVectorRow, 'createdAt' | 'expiresAt'>
+
+/** A "Not <name>": the pairing only, no vector. */
+export interface SpeakerNegativeRow {
+  noteId: string
+  passId: string
+  identityKey: string
+  personId: string
+  createdAt: IsoTime
+}
+
+/**
+ * A request waiting for an agreement: a time span and a channel, never a vector. The span is
+ * epoch ms, wall clock (`wallClockAnchorMs + s_ms` / `+ e_ms`), of the cluster's longest turn, and
+ * `source` its channel; a request without `source` counts every channel.
+ */
+export interface SpeakerPendingRow {
+  id: string
+  personId: string
+  noteId: string
+  startMs: number
+  endMs: number
+  source: AudioSource | null
+  askedAt: IsoTime
+}
+
+/** `addSpeakerPending`: `source` is optional (null counts every channel). */
+export type NewSpeakerPending = Omit<SpeakerPendingRow, 'id' | 'askedAt' | 'source'> & { source?: AudioSource | null }
+
+/** A `speaker_agreements` row, with its text. Main only; the renderer gets `SpeakerAgreementInfo`. */
+export interface SpeakerAgreementRow {
+  id: string
+  personId: string
+  attestedAt: IsoTime
+  method: SpeakerAgreementMethod
+  noticeVersion: string
+  noticeLanguage: SpeakerNoticeLanguage
+  noticeText: string
+  evidenceText: string | null
+  evidenceNoteId: string | null
+  evidenceAtMs: number | null
+  revokedAt: IsoTime | null
+  revokedVia: SpeakerAgreementRevokedVia | null
+}
+
+export type NewSpeakerAgreement = Omit<SpeakerAgreementRow, 'id' | 'attestedAt' | 'revokedAt' | 'revokedVia'>
+
+/** Counts of a voice delete (Forget, Forget all, expiry, switch off). Every one runs `secure_delete` + a TRUNCATE checkpoint. */
+export interface SpeakerVoiceDeleted {
+  exemplars: number
+  spaces: number
+  clusterVectors: number
+  negatives: number
+  pending: number
+  agreementsStamped: number
 }
 
 export type NewTranscriptReport = Omit<TranscriptReport, 'id' | 'created_at'> & { excerpt: unknown[] }
@@ -907,6 +1066,124 @@ export interface StorageApi {
   /** One transaction: deletes the note's rows, inserts in order. */
   replaceSpeakerNameSuggestions(noteId: string, rows: Omit<SpeakerNameSuggestion, 'created_at'>[]): Promise<void>
   deleteSpeakerNameSuggestion(noteId: string, identityKey: string): Promise<void>
+  /** One row's band, candidates or pending flag; a missing row is a no-op. */
+  patchSpeakerNameSuggestion(
+    noteId: string,
+    identityKey: string,
+    patch: { band?: SpeakerBand; candidates?: SpeakerCandidate[]; pending?: boolean }
+  ): Promise<void>
+
+  // speaker profiles (main only; src/main/storage/speaker-*-repo.ts). Every delete of a vector
+  // runs with `secure_delete` on, then a TRUNCATE checkpoint. No vector reaches a log.
+  // people
+  /** Idempotent: one `is_self` row per owner. Its name follows `profile.name`, "Me" while empty. Also run at storage start. */
+  ensureSelfPerson(displayName: string | null): Promise<SpeakerPersonRow>
+  /** `resolveMerged` follows `merged_into` to the surviving person. */
+  getSpeakerPerson(id: string, opts?: { resolveMerged?: boolean }): Promise<SpeakerPersonRow | null>
+  findSpeakerPersonByEmail(email: string): Promise<SpeakerPersonRow | null>
+  /** Unmerged people; by name or email when `query` is set; most recently matched first. */
+  listSpeakerPeople(q: { query?: string; ids?: string[]; limit: number }): Promise<SpeakerPersonRow[]>
+  /** `invalid-input` when the email is taken (UNIQUE per owner). */
+  createSpeakerPerson(p: { displayName: string; email: string | null }): Promise<SpeakerPersonRow>
+  updateSpeakerPerson(
+    id: string,
+    patch: { displayName?: string; autoRecognize?: boolean; lastMatchedAt?: IsoTime }
+  ): Promise<SpeakerPersonRow>
+  linkSpeakerPersonEmail(id: string, email: string): Promise<{ ok: true } | { taken: { personId: string; name: string } }>
+  previewSpeakerMerge(q: { fromId: string; intoId: string }): Promise<SpeakerMergePreview>
+  /**
+   * Moves exemplars, voice spaces, negatives, matches, pending requests and agreements, then
+   * re-applies the cap. Into the user: refused (`invalid-input`) while the other person
+   * has a sample, an agreement record or a pending request.
+   */
+  mergeSpeakerPeople(q: { fromId: string; intoId: string }): Promise<SpeakerMergePreview>
+  /**
+   * Refused (`invalid-input`) unless the person has no voice, no agreement record and no pending
+   * request, and for a merged row. The rows merged into the person go with it.
+   */
+  deleteSpeakerPerson(id: string): Promise<void>
+  /** Known people: matched since `since`, plus the people of `recurringEventId`'s series; at most `limit` by recency. */
+  knownSpeakerPeople(q: { noteId: string; since: IsoTime; recurringEventId: string | null; limit: number }): Promise<KnownSpeakerPerson[]>
+  /**
+   * `speaker-people:get`. `modelId` is the installed extractor's id (null when missing), for `stale`.
+   * A pending meeting's `canName` is a display hint (any live vector in the note): `name-pending`
+   * re-resolves the span to the current cluster and checks its vector and that it is unnamed.
+   */
+  speakerPersonView(q: { personId: string; modelId: string | null }): Promise<SpeakerPersonView | null>
+  /**
+   * The counts of `speakers:get-status`, and `movedFromLabs`: migration 12 found the Labs switch
+   * on or a Labs self voiceprint.
+   */
+  speakerVoiceSummary(q: { modelId: string | null }): Promise<{
+    peopleWithVoice: number
+    peopleWithAgreement: number
+    self: { present: boolean; sampleCount: number; updatedAt: IsoTime | null }
+    movedFromLabs: boolean
+  }>
+  // exemplars and voice spaces
+  /** The matching gallery of one model: the unmerged people's voice spaces, with their exemplars. */
+  speakerVoiceGallery(q: { modelId: string; personIds?: string[] }): Promise<SpeakerVoiceSpaceRow[]>
+  /** Applies the agreement guard, the far-from-profile check and the cap; recomputes the centroid exactly. */
+  addSpeakerExemplar(e: NewSpeakerExemplar): Promise<AddSpeakerExemplarResult>
+  listSpeakerSamples(personId: string): Promise<SpeakerSampleRow[]>
+  /** Recomputes the centroid exactly. Resolves with the person, or null when the sample is gone. */
+  removeSpeakerExemplar(id: string): Promise<{ personId: string } | null>
+  /**
+   * Once, at first start on schema 12. `aliasModelId` (the ResNet-34 file's SHA when it is
+   * the shipped extractor): legacy centroids become self `legacy` exemplars. Otherwise they are
+   * secure-deleted. Either way the legacy table ends empty.
+   */
+  convertLegacyVoiceprints(q: { aliasModelId: string | null }): Promise<{ converted: number; deleted: number }>
+  // cluster vectors (the 14-day store)
+  /** Skips every row while `speakers.voices` is off (read in the same transaction) and rows of a trashed note. */
+  saveSpeakerClusterVectors(rows: NewSpeakerClusterVector[]): Promise<void>
+  listSpeakerClusterVectors(q: { noteId: string; passId?: string; modelId?: string }): Promise<SpeakerClusterVectorRow[]>
+  /** Notes that still hold a cluster vector of this model (relabel's fan-out). */
+  notesWithSpeakerClusterVectors(q: { modelId: string }): Promise<string[]>
+  /**
+   * `labels` limits it to those clusters of `passId`. Resolves with the count deleted. `{all}` or a
+   * whole note (no `passId`) also drops the pending requests left without a vector;
+   * a pass or labels leave pending requests to the caller (re-pass re-map, naming).
+   */
+  deleteSpeakerClusterVectors(q: { noteId: string; passId?: string; labels?: string[] } | { all: true }): Promise<number>
+  // negatives
+  addSpeakerNegative(n: Omit<SpeakerNegativeRow, 'createdAt'>): Promise<void>
+  deleteSpeakerNegative(q: { noteId: string; identityKey: string; personId: string }): Promise<void>
+  listSpeakerNegatives(noteId: string): Promise<SpeakerNegativeRow[]>
+  /** Re-pass: each old identity key moves to its successor of `passId`; `to: null` deletes it. */
+  remapSpeakerNegatives(q: { noteId: string; passId: string; map: { from: string; to: string | null }[] }): Promise<void>
+  // pending requests
+  /** `invalid-input` when the note holds no live cluster vector. */
+  addSpeakerPending(p: NewSpeakerPending): Promise<SpeakerPendingRow>
+  listSpeakerPending(q: { personId?: string; noteId?: string }): Promise<SpeakerPendingRow[]>
+  deleteSpeakerPending(ids: string[]): Promise<number>
+  // agreements
+  recordSpeakerAgreement(a: NewSpeakerAgreement): Promise<SpeakerAgreementRow>
+  /** The active record, else the latest revoked one. */
+  getSpeakerAgreement(personId: string): Promise<SpeakerAgreementRow | null>
+  /** Every record of the person, newest first (Export agreement record keeps the history). */
+  listSpeakerAgreements(personId: string): Promise<SpeakerAgreementRow[]>
+  /** Revoked records only (Remove record); `invalid-input` for an active one. */
+  deleteSpeakerAgreement(personId: string): Promise<void>
+  // forget and sweeps
+  /** Exemplars, voice spaces and pending requests of the person; the active agreement is stamped `via`. */
+  forgetSpeakerVoice(q: { personId: string; via: Exclude<SpeakerAgreementRevokedVia, 'forget_all'> }): Promise<SpeakerVoiceDeleted>
+  /**
+   * Every exemplar, voice space, cluster vector, negative and pending request; active agreements
+   * are stamped `forget_all`. `keepSelf`: the self person's exemplars and voice spaces stay.
+   */
+  forgetAllSpeakerVoices(q: { keepSelf: boolean }): Promise<SpeakerVoiceDeleted>
+  /**
+   * Cluster vectors past `expires_at` (14 days), every pending request whose note holds no live
+   * vector, and voices not matched for 365 days (stamped `expired`). `modelId` (the installed
+   * extractor's id): cluster vectors of another model go too. With `speakers.voices` off,
+   * every cluster vector goes.
+   */
+  sweepSpeakerData(q: { now: IsoTime; modelId?: string }): Promise<{ clusterVectors: number; peopleExpired: string[] }>
+  // matches
+  /** One row per (note, person, kind), refreshed. */
+  recordSpeakerMatches(rows: { noteId: string; personId: string; kind: SpeakerMatchKind }[]): Promise<void>
+  listSpeakerMatches(personId: string): Promise<SpeakerMatchRow[]>
 
   // recordings
   createRecording(r: NewRecording): Promise<RecordingRow>

@@ -13,6 +13,8 @@ export type ErrorCode =
   | 'internal'
   /** The device lock refused an IPC call. */
   | 'locked'
+  /** The request was computed for an older state (a speaker naming for a replaced pass); re-read and retry. */
+  | 'stale'
 
 export const ERROR_CODES: readonly ErrorCode[] = [
   'storage-unavailable',
@@ -23,7 +25,8 @@ export const ERROR_CODES: readonly ErrorCode[] = [
   'no-model',
   'provider-error',
   'internal',
-  'locked'
+  'locked',
+  'stale'
 ]
 
 export interface ParsedError {

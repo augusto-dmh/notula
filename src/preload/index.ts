@@ -510,11 +510,63 @@ const api: NotulaApi = {
     list: (req) => ipcRenderer.invoke('speaker-names:list' satisfies InvokeChannel, req),
     accept: (req) => ipcRenderer.invoke('speaker-names:accept' satisfies InvokeChannel, req),
     reject: (req) => ipcRenderer.invoke('speaker-names:reject' satisfies InvokeChannel, req),
+    notPerson: (req) => ipcRenderer.invoke('speaker-names:not-person' satisfies InvokeChannel, req),
+    askFirst: (req) => ipcRenderer.invoke('speaker-names:ask-first' satisfies InvokeChannel, req),
+    namePending: (req) => ipcRenderer.invoke('speaker-names:name-pending' satisfies InvokeChannel, req),
+    undo: (req) => ipcRenderer.invoke('speaker-names:undo' satisfies InvokeChannel, req),
+    clip: (req) => ipcRenderer.invoke('speaker-names:clip' satisfies InvokeChannel, req),
     onChanged: (cb) => {
       const listener = (_e: IpcRendererEvent, p: PushPayload<'speaker-names:changed'>): void => cb(p)
       ipcRenderer.on('speaker-names:changed' satisfies PushChannel, listener)
       return () => {
         ipcRenderer.removeListener('speaker-names:changed' satisfies PushChannel, listener)
+      }
+    }
+  },
+  speakers: {
+    getStatus: () => ipcRenderer.invoke('speakers:get-status' satisfies InvokeChannel),
+    forgetAll: (req) => ipcRenderer.invoke('speakers:forget-all' satisfies InvokeChannel, req),
+    dismissNotice: () => ipcRenderer.invoke('speakers:dismiss-notice' satisfies InvokeChannel),
+    participantNotice: (req) => ipcRenderer.invoke('speakers:participant-notice' satisfies InvokeChannel, req),
+    addChatNoticeLine: (req) => ipcRenderer.invoke('speakers:add-chat-notice-line' satisfies InvokeChannel, req),
+    jobState: (req) => ipcRenderer.invoke('speakers:job-state' satisfies InvokeChannel, req),
+    onStatusChanged: (cb) => {
+      const listener = (_e: IpcRendererEvent, p: PushPayload<'speakers:status-changed'>): void => cb(p)
+      ipcRenderer.on('speakers:status-changed' satisfies PushChannel, listener)
+      return () => {
+        ipcRenderer.removeListener('speakers:status-changed' satisfies PushChannel, listener)
+      }
+    },
+    onJobChanged: (cb) => {
+      const listener = (_e: IpcRendererEvent, p: PushPayload<'speakers:job-changed'>): void => cb(p)
+      ipcRenderer.on('speakers:job-changed' satisfies PushChannel, listener)
+      return () => {
+        ipcRenderer.removeListener('speakers:job-changed' satisfies PushChannel, listener)
+      }
+    }
+  },
+  speakerPeople: {
+    list: (req) => ipcRenderer.invoke('speaker-people:list' satisfies InvokeChannel, req),
+    get: (req) => ipcRenderer.invoke('speaker-people:get' satisfies InvokeChannel, req),
+    matches: (req) => ipcRenderer.invoke('speaker-people:matches' satisfies InvokeChannel, req),
+    samples: (req) => ipcRenderer.invoke('speaker-people:samples' satisfies InvokeChannel, req),
+    removeSample: (req) => ipcRenderer.invoke('speaker-people:remove-sample' satisfies InvokeChannel, req),
+    setAuto: (req) => ipcRenderer.invoke('speaker-people:set-auto' satisfies InvokeChannel, req),
+    forgetVoice: (req) => ipcRenderer.invoke('speaker-people:forget-voice' satisfies InvokeChannel, req),
+    mergePreview: (req) => ipcRenderer.invoke('speaker-people:merge-preview' satisfies InvokeChannel, req),
+    merge: (req) => ipcRenderer.invoke('speaker-people:merge' satisfies InvokeChannel, req),
+    linkEmail: (req) => ipcRenderer.invoke('speaker-people:link-email' satisfies InvokeChannel, req),
+    delete: (req) => ipcRenderer.invoke('speaker-people:delete' satisfies InvokeChannel, req),
+    copyAgreementMessage: (req) => ipcRenderer.invoke('speaker-people:copy-agreement-message' satisfies InvokeChannel, req),
+    agreementText: (req) => ipcRenderer.invoke('speaker-people:agreement-text' satisfies InvokeChannel, req),
+    recordAgreement: (req) => ipcRenderer.invoke('speaker-people:record-agreement' satisfies InvokeChannel, req),
+    exportAgreement: (req) => ipcRenderer.invoke('speaker-people:export-agreement' satisfies InvokeChannel, req),
+    deleteAgreement: (req) => ipcRenderer.invoke('speaker-people:delete-agreement' satisfies InvokeChannel, req),
+    onChanged: (cb) => {
+      const listener = (_e: IpcRendererEvent, p: PushPayload<'speaker-people:changed'>): void => cb(p)
+      ipcRenderer.on('speaker-people:changed' satisfies PushChannel, listener)
+      return () => {
+        ipcRenderer.removeListener('speaker-people:changed' satisfies PushChannel, listener)
       }
     }
   },
@@ -985,7 +1037,6 @@ const api: NotulaApi = {
     resolvePending: (req) => ipcRenderer.invoke('consent:resolve-pending' satisfies InvokeChannel, req)
   },
   voiceprint: {
-    getStatus: () => ipcRenderer.invoke('voiceprint:get-status' satisfies InvokeChannel),
     recordSample: (req) => ipcRenderer.invoke('voiceprint:record-sample' satisfies InvokeChannel, req),
     sendSampleAudio: (p) => ipcRenderer.send('voiceprint:sample-audio' satisfies SendChannel, p),
     onSampleProgress: (cb) => {
@@ -995,17 +1046,7 @@ const api: NotulaApi = {
         ipcRenderer.removeListener('voiceprint:sample-progress' satisfies PushChannel, listener)
       }
     },
-    cancelSample: (p) => ipcRenderer.send('voiceprint:cancel-sample' satisfies SendChannel, p),
-    setPassive: (req) => ipcRenderer.invoke('voiceprint:set-passive' satisfies InvokeChannel, req),
-    identifyNote: (req) => ipcRenderer.invoke('voiceprint:identify-note' satisfies InvokeChannel, req),
-    forget: () => ipcRenderer.invoke('voiceprint:forget' satisfies InvokeChannel),
-    onStatusChanged: (cb) => {
-      const listener = (_e: IpcRendererEvent, p: PushPayload<'voiceprint:status-changed'>): void => cb(p)
-      ipcRenderer.on('voiceprint:status-changed' satisfies PushChannel, listener)
-      return () => {
-        ipcRenderer.removeListener('voiceprint:status-changed' satisfies PushChannel, listener)
-      }
-    }
+    cancelSample: (p) => ipcRenderer.send('voiceprint:cancel-sample' satisfies SendChannel, p)
   },
   transcriptReport: {
     create: (req) => ipcRenderer.invoke('transcript-report:create' satisfies InvokeChannel, req),

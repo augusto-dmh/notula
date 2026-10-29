@@ -6,7 +6,8 @@
 //   on; while captions are active it shows only its controls,
 //   because the captions replace the hover transcript;
 // - it shows the screen-snapshot panel while snapshots run;
-// - the inactivity window doubles as the side card for the snapshot notices.
+// - the inactivity window doubles as the side card for the snapshot notices;
+// - its bar carries the speakers' quiet line once the meeting's speakers wait for names.
 
 import { useEffect, useState, type JSX } from 'react'
 import type { ScreenSnapshotsNotice, ScreenSnapshotsState } from '@shared/types/snapshots'
@@ -17,7 +18,7 @@ import { InactivityCard } from '../capture/MeetingPrompts'
 import { useLiveSignals } from '../capture/live'
 import { mountCaptureMirror } from '../capture/store'
 import { useScreenSnapshots } from '../snapshots'
-import { TranscriptPanel } from '../transcript'
+import { SpeakerQuietLine, TranscriptPanel } from '../transcript'
 import { useSecondaryWindow } from './secondary'
 import { useBubbleState } from './state'
 import './bubble.css'
@@ -90,6 +91,8 @@ export function BubbleTranscript(): JSX.Element {
     <>
       <div className="bubble-panel__bar">
         <CaptionsToggle noteId={doc.noteId} />
+        {/* "<n> speakers to name": the card can't show here. */}
+        <SpeakerQuietLine noteId={doc.noteId} />
       </div>
       {snaps ? <SnapshotPanel state={snaps} /> : null}
     </>

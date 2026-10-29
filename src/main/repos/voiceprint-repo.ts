@@ -6,8 +6,12 @@
 // is never logged (counts only), and Forget deletes it with `secure_delete` on, then checkpoints
 // the WAL so no old page image outlives the delete.
 
+import { SPEAKER_PROFILE_LIMITS } from '@shared/types/speakers'
 import type { VoiceprintRow } from '../storage/api'
+import { getSettingsRaw } from '../storage/kv-repo'
 import { nowIso, parseJson } from '../storage/rows'
+import { ensureSelfPerson } from '../storage/speaker-people-repo'
+import { checkpointVoice, checkVector, insertExemplar, secureWrite } from '../storage/speaker-voice-repo'
 import { inTransaction, invalid, type StoreCtx } from '../storage/store'
 
 type Row = Record<string, unknown>
@@ -97,4 +101,54 @@ export function deleteVoiceprints(s: StoreCtx): number {
   s.touch('voiceprints')
   s.log('info', 'voiceprint:deleted', { rows: n })
   return n
+}
+
+/** The model id the Labs self voiceprint was stored under (the ResNet-34 file). */
+const LEGACY_MODEL_ID = 'wespeaker-en-voxceleb-resnet34'
+
+/**
+ * Speaker profiles, at first start on schema 12 (then a no-op: the table ends empty). With
+ * `aliasModelId` (the shipped extractor is the ResNet-34 file itself), each legacy centroid
+ * becomes a self mic exemplar `via legacy` under that SHA. Otherwise they can't be compared with
+ * the new model. Either way every legacy row is secure-deleted.
+ */
+export function convertLegacyVoiceprints(s: StoreCtx, q: { aliasModelId: string | null }): { converted: number; deleted: number } {
+  const rows = s.db.prepare(`SELECT * FROM voiceprints WHERE owner_id = ?`).all(s.identity.ownerId) as Row[]
+  if (!rows.length) return { converted: 0, deleted: 0 }
+  const alias = typeof q?.aliasModelId === 'string' && q.aliasModelId ? q.aliasModelId : null
+  const legacy = alias ? rows.filter((r) => r['model_id'] === LEGACY_MODEL_ID).flatMap((r) => toVoiceprint(r).centroids) : []
+  const self = legacy.length ? ensureSelfPerson(s, String(getSettingsRaw(s)['profile.name'] ?? '')) : null
+  let converted = 0
+  const deleted = secureWrite(s, () => {
+    for (const c of legacy) {
+      let vector: Float32Array
+      try {
+        vector = checkVector(c.vector)
+      } catch {
+        continue
+      }
+      insertExemplar(s, {
+        personId: self!.id,
+        modelId: alias!,
+        channel: 'mic',
+        vector,
+        cleanMs: Math.round(c.totalSpeechMs),
+        // The profile's speech, as a confirmation's clean speech; never below a tenth.
+        weight: Math.min(1, Math.max(0.1, c.totalSpeechMs / SPEAKER_PROFILE_LIMITS.exemplarWeightFullMs)),
+        sourceNoteId: null,
+        sourcePassId: null,
+        sourceLabel: null,
+        spanStartMs: null,
+        spanEndMs: null,
+        via: 'legacy'
+      })
+      converted++
+    }
+    return s.db.prepare(`DELETE FROM voiceprints WHERE owner_id = ?`).run(s.identity.ownerId).changes
+  })
+  checkpointVoice(s)
+  s.touch('voiceprints')
+  if (converted) s.touch('speaker_exemplars', self!.id)
+  s.log('info', 'speakers:legacy-converted', { converted, deleted })
+  return { converted, deleted }
 }

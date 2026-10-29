@@ -5,15 +5,18 @@
 // resumed meeting is kept whole. Rows with an unparsable or future last section are skipped.
 //
 // One transaction per note: its transcript sections, speaker-name suggestions, transcript reports
-// and recordings (the `recordings_ad` trigger queues their files) go; its full-text rows are
+// and recordings (the `recordings_ad` trigger queues their files) go; so do its speaker cluster
+// vectors (secure-deleted), negatives, match rows and pending requests, by hand, because the
+// `documents` row stays and no cascade fires. Its full-text rows are
 // re-queued; its kept per-note temp audio is queued for deletion; `transcript_purged_at` is set.
-// The note, its summaries, action items, chats, attachments and the voiceprint are kept. Files are
-// deleted after commit (storage's `processFileDeletions`); a failed file delete is retried next run.
+// The note, its summaries, action items, chats, attachments and the voice profiles are kept. Files
+// are deleted after commit (storage's `processFileDeletions`); a failed file delete is retried next run.
 
 import { isAbsolute, relative, resolve } from 'node:path'
 import type { IsoTime } from '@shared/types/common'
 import { RETENTION_LIMITS, type RetentionHours, type RetentionPreview, type RetentionRun } from '@shared/types/retention'
 import { nowIso, parseJson } from '../storage/rows'
+import { checkpointVoice, deleteNoteVoiceRows, secureWrite } from '../storage/speaker-voice-repo'
 import { inTransaction, invalid, type StoreCtx } from '../storage/store'
 import { processFileDeletions } from '../storage/trash-repo'
 
@@ -88,14 +91,17 @@ function noteTmpPath(s: StoreCtx, noteId: string): string | null {
   return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel) ? path : null
 }
 
-function purgeNote(s: StoreCtx, noteId: string, at: IsoTime): { sections: number; recordings: number; bytes: number } {
-  return inTransaction(s.db, () => {
+function purgeNote(s: StoreCtx, noteId: string, at: IsoTime): { sections: number; recordings: number; bytes: number; vectors: number } {
+  return secureWrite(s, () => {
     const rec = s.db.prepare(`SELECT count(*) AS n, COALESCE(SUM(bytes), 0) AS b FROM recordings WHERE note_id = ?`).get(noteId) as {
       n: number
       b: number
     }
     const sections = s.db.prepare(`DELETE FROM transcript_chunks WHERE document_id = ?`).run(noteId).changes
     s.db.prepare(`DELETE FROM speaker_guesses WHERE document_id = ?`).run(noteId)
+    const vectors = deleteNoteVoiceRows(s, noteId).vectors
+    s.db.prepare(`DELETE FROM speaker_negatives WHERE note_id = ?`).run(noteId)
+    s.db.prepare(`DELETE FROM speaker_matches WHERE note_id = ?`).run(noteId)
     s.db.prepare(`DELETE FROM transcript_reports WHERE note_id = ?`).run(noteId)
     // The recordings_ad trigger queues each file in file_deletions.
     s.db.prepare(`DELETE FROM recordings WHERE note_id = ?`).run(noteId)
@@ -108,7 +114,7 @@ function purgeNote(s: StoreCtx, noteId: string, at: IsoTime): { sections: number
     // The indexer re-reads the note, whatever the FTS layout holds for it.
     s.db.prepare(`INSERT OR REPLACE INTO fts_queue (kind, row_id, queued_at) VALUES ('document', ?, ?)`).run(noteId, at)
     s.db.prepare(`UPDATE documents SET transcript_purged_at = ? WHERE id = ?`).run(at, noteId)
-    return { sections, recordings: rec.n, bytes: rec.b }
+    return { sections, recordings: rec.n, bytes: rec.b, vectors }
   })
 }
 
@@ -123,6 +129,7 @@ export function purgeTranscripts(
   const more = found.length > batch
   const out = { notes: 0, sections: 0, recordings: 0, bytes: 0, noteIds: [] as string[], errors: [] as string[], more }
   const at = nowIso()
+  let vectors = 0
   for (const c of found.slice(0, batch)) {
     try {
       const r = purgeNote(s, c.id, at)
@@ -130,6 +137,7 @@ export function purgeTranscripts(
       out.sections += r.sections
       out.recordings += r.recordings
       out.bytes += r.bytes
+      vectors += r.vectors
       out.noteIds.push(c.id)
       s.touch('transcript_chunks', c.id)
       s.touch('documents', c.id)
@@ -139,6 +147,8 @@ export function purgeTranscripts(
       out.errors.push(`${c.id}: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
+  if (vectors) checkpointVoice(s)
+  if (out.notes) for (const t of ['speaker_cluster_vectors', 'speaker_negatives', 'speaker_matches', 'speaker_pending']) s.touch(t, ...out.noteIds)
   // A note that failed would be selected again at once; the next run retries it.
   if (failed.size && out.notes === 0) out.more = false
   try {

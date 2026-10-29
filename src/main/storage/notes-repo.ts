@@ -18,6 +18,7 @@ import type {
 import type { NoteQuery } from './api'
 import { NOTE_COLUMNS, NOTE_LIST_COLUMNS, nowIso, toJson, toNote, toNoteListItem } from './rows'
 import { inTransaction, invalid, notFound, type StoreCtx } from './store'
+import { checkpointVoice, deleteNoteVoiceRows, secureWrite } from './speaker-voice-repo'
 
 const COLS = NOTE_COLUMNS.join(', ')
 
@@ -253,19 +254,27 @@ export function updateNote(s: StoreCtx, id: string, patch: NotePatch & MainNoteF
   return requireNote(s, id)
 }
 
+/**
+ * Trash also secure-deletes the note's speaker cluster vectors and drops its pending requests in
+ * the same transaction: trash counts as deletion, and a restore brings
+ * none back. The purge 30 days later cascades the rest.
+ */
 export function trashNote(s: StoreCtx, id: string): void {
   requireNote(s, id)
   const now = nowIso()
-  const changes = inTransaction(
-    s.db,
-    () =>
-      s.db
-        .prepare(
-          `UPDATE documents SET deleted_at = ?, updated_at = ?, once_trashed = 1 WHERE id = ? AND deleted_at IS NULL`
-        )
-        .run(now, now, id).changes
-  )
+  let voice = { vectors: 0, pending: 0, guesses: false }
+  const changes = secureWrite(s, () => {
+    const n = s.db
+      .prepare(`UPDATE documents SET deleted_at = ?, updated_at = ?, once_trashed = 1 WHERE id = ? AND deleted_at IS NULL`)
+      .run(now, now, id).changes
+    if (n > 0) voice = deleteNoteVoiceRows(s, id)
+    return n
+  })
+  if (voice.vectors) checkpointVoice(s)
   if (changes > 0) s.touch('documents', id)
+  if (voice.vectors) s.touch('speaker_cluster_vectors', id)
+  if (voice.pending) s.touch('speaker_pending', id)
+  if (voice.guesses) s.touch('speaker_guesses', id)
 }
 
 export function restoreNote(s: StoreCtx, id: string): void {

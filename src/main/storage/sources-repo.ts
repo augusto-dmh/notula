@@ -50,6 +50,8 @@ import type {
   SourceSeriesPatch
 } from './api'
 import { nowIso, parseJson } from './rows'
+import { clearDroppedPendingFlags } from './speaker-names-repo'
+import { checkpointVoice, deleteNoteVoiceRows, secureWrite } from './speaker-voice-repo'
 import { inTransaction, invalid, notFound, type StoreCtx } from './store'
 
 type Row = Record<string, unknown>
@@ -1045,7 +1047,8 @@ export function mergeSourceNotes(
   const [a, b] = [id(q.noteIds[0], 'noteIds'), id(q.noteIds[1], 'noteIds')]
   if (a === b) throw invalid('Choose two different notes')
   const extra = extraJson(q.extra)
-  const res = inTransaction(s.db, () => {
+  // `secure_delete` on: the trashed note's speaker cluster vectors are deleted in here.
+  const res = secureWrite(s, () => {
     const rows = [ownNoteRow(s, a), ownNoteRow(s, b)]
     if (rows.some((r) => r['deleted_at'] !== null)) throw invalid('A note in Trash cannot be merged')
     rows.sort((x, y) => String(x['created_at']).localeCompare(String(y['created_at'])) || String(x['id']).localeCompare(String(y['id'])))
@@ -1147,6 +1150,10 @@ export function mergeSourceNotes(
 
     s.db.prepare(`UPDATE documents SET updated_at = ? WHERE id = ?`).run(now, keep)
     s.db.prepare(`UPDATE documents SET deleted_at = ?, updated_at = ?, once_trashed = 1 WHERE id = ?`).run(now, now, drop)
+    // Like the other trash paths: the trashed note's cluster vectors and
+    // pending requests go, and so do the `pending` flags of the suggestion rows it handed over.
+    const voice = deleteNoteVoiceRows(s, drop)
+    const flagged = clearDroppedPendingFlags(s, [keep])
 
     const undo: MergeUndo = { sessionIds, spanIds, panelIds, attachmentIds, folderIds, attendees: added, tags, supersededIds, audioImportIds, speakerKeys }
     const mergeId = randomUUID()
@@ -1173,7 +1180,9 @@ export function mergeSourceNotes(
       superseded: supersededIds.length,
       audioImportIds,
       speakerGuesses: speakerKeys.length,
-      spansMerged
+      spansMerged,
+      voice,
+      flagged
     }
   })
   const notes = [res.keptNoteId, res.trashedNoteId]
@@ -1186,7 +1195,12 @@ export function mergeSourceNotes(
   if (res.moved.attachments) s.touch('attachments', ...notes)
   if (res.moved.folders) s.touch('folder_notes', res.keptNoteId)
   if (res.audioImportIds.length) s.touch('audio_imports', ...res.audioImportIds)
-  if (res.speakerGuesses) s.touch('speaker_guesses', ...notes)
+  if (res.speakerGuesses || res.voice.guesses || res.flagged.length) s.touch('speaker_guesses', ...notes)
+  if (res.voice.vectors) {
+    checkpointVoice(s)
+    s.touch('speaker_cluster_vectors', res.trashedNoteId)
+  }
+  if (res.voice.pending) s.touch('speaker_pending', res.trashedNoteId)
   s.log('info', 'sources:merged', {
     mergeId: res.mergeId,
     ...res.moved,
@@ -1194,7 +1208,9 @@ export function mergeSourceNotes(
     superseded: res.superseded,
     audioImports: res.audioImportIds.length,
     speakerGuesses: res.speakerGuesses,
-    spansMerged: res.spansMerged
+    spansMerged: res.spansMerged,
+    clusterVectors: res.voice.vectors,
+    pending: res.voice.pending
   })
   return { mergeId: res.mergeId, keptNoteId: res.keptNoteId, trashedNoteId: res.trashedNoteId, moved: res.moved }
 }

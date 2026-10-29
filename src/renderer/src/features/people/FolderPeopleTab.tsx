@@ -4,7 +4,7 @@
 // "Everyone" / "People I met". The search also matches the person's company and domain.
 
 import { useEffect, useMemo, useState, type JSX } from 'react'
-import { companyName } from '@shared/lib/people'
+import { companyName, personRouteKey } from '@shared/lib/people'
 import type { PeopleFilter, PersonRow } from '@shared/types/people'
 import { navigate } from '../../app/navigation'
 import { debugLog } from '../../app/platform'
@@ -32,7 +32,7 @@ const COLUMNS: Column<PersonRow>[] = [
       </span>
     )
   },
-  { id: 'email', label: 'Email', compare: (a, b) => a.email.localeCompare(b.email), cell: (p) => <span className="directory-table__muted">{p.email}</span> },
+  { id: 'email', label: 'Email', compare: (a, b) => (a.email ?? '').localeCompare(b.email ?? ''), cell: (p) => <span className="directory-table__muted">{p.email ?? ''}</span> },
   { id: 'notes', label: 'Notes', compare: (a, b) => a.count - b.count, cell: (p) => <span className="directory-table__num">{p.count}</span>, className: 'directory-table__cell--num' },
   {
     id: 'last',
@@ -70,7 +70,7 @@ export function FolderPeopleTab({ folderId }: { folderId: string }): JSX.Element
           (p) =>
             !q ||
             p.name.toLowerCase().includes(q) ||
-            p.email.toLowerCase().includes(q) ||
+            (p.email ?? '').toLowerCase().includes(q) ||
             (p.domain ?? '').includes(q) ||
             (p.domain ? companyName(p.domain).toLowerCase().includes(q) : false)
         )
@@ -89,10 +89,10 @@ export function FolderPeopleTab({ folderId }: { folderId: string }): JSX.Element
         <DirectoryTable
           columns={COLUMNS}
           rows={visible}
-          rowKey={(p) => p.email}
+          rowKey={(p) => personRouteKey(p)}
           onOpen={(p) => {
             debugLog('folder-person-opened')
-            navigate(`/person/${encodeURIComponent(p.email)}`)
+            navigate(`/person/${encodeURIComponent(personRouteKey(p))}`)
           }}
           sort={sort}
           onSort={onSort}

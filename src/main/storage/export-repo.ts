@@ -17,10 +17,12 @@
 //   stamped body (`notes_md_stamped`), and a sibling `<name>.transcript.md`.
 // - `index.csv`: RFC 4180, UTF-8 with a BOM, CRLF, a `'` before a cell that starts with
 //   `= + - @`.
-// - `database/`: the encrypted copy is the recovery file set plus `Local State` after a
-//   checkpoint; the decrypted copy is `VACUUM INTO` a partial file, attached (it inherits the
-//   key), rekeyed to no key and checked (the SQLite3MultipleCiphers build has no
-//   `sqlcipher_export`).
+// - `database/`: the encrypted copy is `VACUUM INTO` a partial file (it keeps the key) with the
+//   biometric tables cleared, plus the key file and `Local State`; the decrypted copy is
+//   `VACUUM INTO` a partial file, attached (it inherits the key), stripped of the voice and
+//   agreement tables, rekeyed to no key and checked (the SQLite3MultipleCiphers build has no
+//   `sqlcipher_export`). Speaker profiles: no copy carries a voice; agreement records travel
+//   only in the encrypted one.
 // - Counts may be logged; titles and content never are.
 
 import {
@@ -58,11 +60,11 @@ import type { ExportNoteRef } from './api'
 import { getSettingsRaw } from './kv-repo'
 import { getNote, listNotes } from './notes-repo'
 import { listPanels } from './panels-repo'
-import { DB_SIDE_FILES, KEY_FILE } from './protocol'
+import { DB_FILE, KEY_FILE } from './protocol'
 import { getNoteSourceView } from './sources-repo'
 import { getTranscript } from './transcript-repo'
 import { listTrash } from './trash-repo'
-import { invalid, StoreError, type StoreCtx } from './store'
+import { invalid, StoreError, type Db, type StoreCtx } from './store'
 
 /** The folder name main gives an export (`Notula Markdown export …` for Export notes as Markdown). */
 export const EXPORT_DIR_NAME = /^Notula (?:Markdown )?export \d{4}-\d{2}-\d{2} \d{2}\.\d{2}(?: \(\d{1,4}\))?$/
@@ -515,6 +517,54 @@ export function writeExportReadme(s: StoreCtx, q2: { root: string; text: string 
 
 // ---------- database copies ----------
 
+/**
+ * The tables no copy of the database carries rows of: voice samples,
+ * centroids, the 14-day cluster vectors and the legacy self profile.
+ */
+export const BIOMETRIC_TABLES = ['speaker_exemplars', 'speaker_voice_spaces', 'speaker_cluster_vectors', 'voiceprints'] as const
+/** Also left out of the decrypted copy: the plaintext copy has no use for them. */
+const PLAINTEXT_DROPPED = ['speaker_agreements', 'speaker_negatives'] as const
+
+const sqlPath = (p: string): string => p.split("'").join("''")
+
+/** Deletes every row of these tables in an attached copy, where the table exists. */
+function clearTables(db: Db, schema: string, tables: readonly string[]): void {
+  const present = new Set(
+    (db.prepare(`SELECT name FROM ${schema}.sqlite_master WHERE type = 'table'`).all() as { name: string }[]).map((r) => r.name)
+  )
+  for (const t of tables) if (present.has(t)) db.exec(`DELETE FROM ${schema}."${t}"`)
+}
+
+/**
+ * An encrypted copy (same key) at `dest`, without voices: `VACUUM INTO`, then the biometric
+ * tables emptied with `secure_delete` on and the copy vacuumed, so no free page keeps a vector.
+ * The rollback journal stays in memory, so no page image of a vector lands in a `-journal` file
+ * next to the copy (an export may go to removable media); a failed copy is discarded anyway.
+ * Used by the encrypted export and the pre-migration backup. The live database is never touched.
+ */
+export function writeCopyWithoutVoices(db: Db, dest: string): void {
+  db.exec(`VACUUM INTO '${sqlPath(dest)}'`)
+  db.exec(`ATTACH DATABASE '${sqlPath(dest)}' AS voice_free_copy`)
+  try {
+    db.pragma('voice_free_copy.secure_delete = ON')
+    db.pragma('voice_free_copy.journal_mode = MEMORY')
+    clearTables(db, 'voice_free_copy', BIOMETRIC_TABLES)
+    db.exec('VACUUM voice_free_copy')
+  } finally {
+    db.exec('DETACH DATABASE voice_free_copy')
+  }
+}
+
+function removePartial(partial: string): void {
+  for (const f of [partial, `${partial}-journal`, `${partial}-wal`, `${partial}-shm`]) {
+    try {
+      if (existsSync(f) && statSync(f).isFile()) rmSync(f)
+    } catch {
+      // left for the user; it is inside the export folder
+    }
+  }
+}
+
 function databaseReadme(kind: 'encrypted' | 'decrypted', files: string[]): string {
   const at = new Date().toISOString()
   if (kind === 'encrypted') {
@@ -528,10 +578,12 @@ function databaseReadme(kind: 'encrypted' | 'decrypted', files: string[]): strin
       'Windows protects for the signed-in user; on macOS through the Keychain. So this copy opens only on',
       'this computer, signed in as the same user.',
       '',
-      'To open it in Notula: quit Notula, then copy notula.db, notula.db-wal, notula.db-shm (when present)',
-      'and notula.key into the "data" folder inside Notula\'s data folder, replacing what is there. On',
-      'Windows, if Notula\'s data folder was reset or reinstalled since, also copy "Local State" into',
-      'Notula\'s data folder (the folder that contains "data"), replacing that file.',
+      'To open it in Notula: quit Notula, then copy notula.db and notula.key into the "data" folder inside',
+      'Notula\'s data folder, replacing what is there (delete notula.db-wal and notula.db-shm there, when',
+      'present). On Windows, if Notula\'s data folder was reset or reinstalled since, also copy "Local',
+      'State" into Notula\'s data folder (the folder that contains "data"), replacing that file.',
+      '',
+      'Remembered voices are not in this copy: they stay on this computer only. Voice agreement records are.',
       '',
       ''
     ].join('\r\n')
@@ -567,15 +619,24 @@ export function writeDatabaseCopy(
     if (basename(localState) !== LOCAL_STATE_FILE || resolve(dirname(localState)) !== userData) {
       throw invalid('unexpected Local State path')
     }
-    // Fold the WAL into the .db first, so the copy is complete on its own. The worker runs
-    // one call at a time, so nothing writes between the checkpoint and the copy.
-    s.db.pragma('wal_checkpoint(TRUNCATE)')
-    const files: string[] = []
-    for (const f of [...DB_SIDE_FILES, KEY_FILE]) {
-      const from = join(dataDir, f)
-      if (!existsSync(from)) continue
-      copyFileSync(from, inside(root, `database/${f}`), fsConstants.COPYFILE_EXCL)
-      files.push(f)
+    // A consistent copy with the same key and without voices; then the key file. The
+    // worker runs one call at a time, so nothing writes while the copy is made.
+    const copy = inside(root, `database/${DB_FILE}`)
+    const partial = `${copy}.partial`
+    if (existsSync(copy) || existsSync(partial)) throw invalid('a database copy already exists in this export')
+    try {
+      writeCopyWithoutVoices(s.db, partial)
+      if (existsSync(copy)) throw new Error('a database copy appeared meanwhile')
+      renameSync(partial, copy)
+    } catch (err) {
+      removePartial(partial)
+      s.log('error', 'export-encrypted-copy-failed', { err })
+      throw new StoreError('internal', `The encrypted copy could not be made: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    const files: string[] = [DB_FILE]
+    if (existsSync(join(dataDir, KEY_FILE))) {
+      copyFileSync(join(dataDir, KEY_FILE), inside(root, `database/${KEY_FILE}`), fsConstants.COPYFILE_EXCL)
+      files.push(KEY_FILE)
     }
     if (existsSync(localState)) {
       copyFileSync(localState, inside(root, `database/${LOCAL_STATE_FILE}`), fsConstants.COPYFILE_EXCL)
@@ -589,7 +650,7 @@ export function writeDatabaseCopy(
   const out = inside(root, 'database/notula-decrypted.db')
   const partial = `${out}.partial`
   if (existsSync(out) || existsSync(partial)) throw invalid('a decrypted copy already exists in this export')
-  const sql = (p: string): string => p.split("'").join("''")
+  const sql = sqlPath
   let attached = false
   try {
     // 1. An encrypted, consistent copy (the WAL included), written straight into the export.
@@ -598,10 +659,10 @@ export function writeDatabaseCopy(
     //    an empty key decrypts that copy in place. The live database is never touched.
     s.db.exec(`ATTACH DATABASE '${sql(partial)}' AS export_copy`)
     attached = true
-    // Biometric data never leaves as plaintext. Deleted while the copy is still
-    // encrypted, so no plaintext page image of it reaches the rollback journal.
+    // Biometric data and agreement records never leave as plaintext. Deleted while the
+    // copy is still encrypted, so no plaintext page image of them reaches the rollback journal.
     s.db.pragma('export_copy.secure_delete = ON')
-    s.db.exec('DELETE FROM export_copy.voiceprints')
+    clearTables(s.db, 'export_copy', [...BIOMETRIC_TABLES, ...PLAINTEXT_DROPPED])
     s.db.pragma(`export_copy.rekey = ''`)
     s.db.pragma('export_copy.journal_mode = DELETE')
     s.db.exec('DETACH DATABASE export_copy')
@@ -625,13 +686,7 @@ export function writeDatabaseCopy(
         // already detached
       }
     }
-    for (const f of [partial, `${partial}-journal`, `${partial}-wal`, `${partial}-shm`]) {
-      try {
-        if (existsSync(f) && statSync(f).isFile()) rmSync(f)
-      } catch {
-        // left for the user; it is inside the export folder
-      }
-    }
+    removePartial(partial)
     s.log('error', 'export-decrypted-copy-failed', { err })
     throw new StoreError('internal', `The decrypted copy could not be made: ${err instanceof Error ? err.message : String(err)}`)
   }

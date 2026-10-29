@@ -1,48 +1,9 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* The voiceprint. */
+/* Record my voice and the Your voice rows. */
 
-.vp-link {
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--accent);
-  font: inherit;
-  cursor: pointer;
-}
-
-.vp-link:hover:not(:disabled) {
-  text-decoration: underline;
-}
-
-.vp-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin: 0 16px 14px;
-  padding: 12px 14px;
-  border-radius: var(--radius);
-  background: var(--surface-2);
-  font-size: var(--text-sm);
-}
-
-.vp-panel__status,
-.vp-panel__model {
-  margin: 0;
-  color: var(--fg-2);
-}
-
-.vp-panel__actions {
+.vp-actions {
   display: flex;
   gap: 8px;
-}
-
-.vp-panel__passive {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding-top: 10px;
-  border-top: 1px dashed var(--border);
 }
 
 .vp-record {
@@ -113,25 +74,4 @@
   margin: 10px 0 0;
   color: var(--danger);
   font-size: var(--text-sm);
-}
-
-.vp-note-line {
-  margin: 4px 16px 0;
-  color: var(--fg-3);
-  font-size: var(--text-xs);
-}
-
-.vp-menu-item {
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--fg-2);
-  font: inherit;
-  font-size: var(--text-xs);
-  cursor: pointer;
-}
-
-.vp-menu-item:hover:not(:disabled) {
-  color: var(--fg);
-  text-decoration: underline;
 }

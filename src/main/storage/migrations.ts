@@ -1323,11 +1323,188 @@ ALTER TABLE action_items ADD line_fingerprint TEXT;
 ALTER TABLE action_items ADD draft_thread_id TEXT;
 `
 
+/**
+ * Version 12: speaker profiles. Eight tables, and the two Labs voiceprint keys moved to their
+ * new names. A Labs user (the switch on, or a self voiceprint) first gets the `meta` marker
+ * `speakers_moved_from_labs`, since nothing else can tell that afterwards (`movedFromLabs`).
+ * `speakers.voices` is never written here. The legacy `voiceprints` table stays and is emptied
+ * at runtime. No CHECK on extensible values: the repos validate them. Trash only sets
+ * `deleted_at` and the transcript purge keeps the `documents` row, so those paths delete these
+ * rows by hand; the cascades fire on the purge.
+ */
+const SPEAKER_PROFILES = `
+CREATE TABLE speaker_people (
+  rid INTEGER PRIMARY KEY,
+  id TEXT NOT NULL UNIQUE,
+  workspace_id TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  email TEXT,
+  is_self INTEGER NOT NULL DEFAULT 0,
+  auto_recognize INTEGER NOT NULL DEFAULT 1,
+  merged_into TEXT REFERENCES speaker_people (id) ON DELETE SET NULL,
+  last_matched_at TEXT,
+  skipped_samples INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX speaker_people_email_idx ON speaker_people (owner_id, email) WHERE email IS NOT NULL;
+
+CREATE UNIQUE INDEX speaker_people_self_idx ON speaker_people (owner_id) WHERE is_self = 1;
+
+CREATE INDEX speaker_people_merged_idx ON speaker_people (merged_into);
+
+CREATE TABLE speaker_exemplars (
+  rid INTEGER PRIMARY KEY,
+  id TEXT NOT NULL UNIQUE,
+  workspace_id TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  person_id TEXT NOT NULL REFERENCES speaker_people (id) ON DELETE CASCADE,
+  model_id TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  vector BLOB NOT NULL,
+  clean_ms INTEGER NOT NULL DEFAULT 0,
+  weight REAL NOT NULL,
+  source_note_id TEXT,
+  source_pass_id TEXT,
+  source_label TEXT,
+  span_start_ms INTEGER,
+  span_end_ms INTEGER,
+  confirmed_via TEXT NOT NULL,
+  confirmed_at TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX speaker_exemplars_person_idx ON speaker_exemplars (person_id, model_id, channel);
+
+CREATE INDEX speaker_exemplars_note_idx ON speaker_exemplars (source_note_id);
+
+CREATE TABLE speaker_voice_spaces (
+  rid INTEGER PRIMARY KEY,
+  id TEXT NOT NULL UNIQUE,
+  workspace_id TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  person_id TEXT NOT NULL REFERENCES speaker_people (id) ON DELETE CASCADE,
+  model_id TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  centroid BLOB NOT NULL,
+  count INTEGER NOT NULL DEFAULT 0,
+  clean_ms INTEGER NOT NULL DEFAULT 0,
+  confirmations INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL,
+  UNIQUE (person_id, model_id, channel)
+);
+
+CREATE TABLE speaker_negatives (
+  rid INTEGER PRIMARY KEY,
+  id TEXT NOT NULL UNIQUE,
+  workspace_id TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  note_id TEXT NOT NULL REFERENCES documents (id) ON DELETE CASCADE,
+  pass_id TEXT NOT NULL,
+  identity_key TEXT NOT NULL,
+  person_id TEXT NOT NULL REFERENCES speaker_people (id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  UNIQUE (note_id, identity_key, person_id)
+);
+
+CREATE INDEX speaker_negatives_person_idx ON speaker_negatives (person_id);
+
+CREATE TABLE speaker_cluster_vectors (
+  rid INTEGER PRIMARY KEY,
+  id TEXT NOT NULL UNIQUE,
+  workspace_id TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  note_id TEXT NOT NULL REFERENCES documents (id) ON DELETE CASCADE,
+  pass_id TEXT NOT NULL,
+  source TEXT NOT NULL,
+  label TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  vector BLOB NOT NULL,
+  speech_ms INTEGER NOT NULL DEFAULT 0,
+  clean_ms INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  UNIQUE (note_id, pass_id, label)
+);
+
+CREATE INDEX speaker_cluster_vectors_expires_idx ON speaker_cluster_vectors (expires_at);
+
+CREATE TABLE speaker_agreements (
+  rid INTEGER PRIMARY KEY,
+  id TEXT NOT NULL UNIQUE,
+  workspace_id TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  person_id TEXT NOT NULL REFERENCES speaker_people (id) ON DELETE CASCADE,
+  attested_at TEXT NOT NULL,
+  method TEXT NOT NULL,
+  notice_version TEXT NOT NULL,
+  notice_language TEXT NOT NULL,
+  notice_text TEXT NOT NULL,
+  evidence_text TEXT,
+  evidence_note_id TEXT,
+  evidence_at_ms INTEGER,
+  revoked_at TEXT,
+  revoked_via TEXT
+);
+
+CREATE INDEX speaker_agreements_person_idx ON speaker_agreements (person_id, revoked_at);
+
+CREATE INDEX speaker_agreements_note_idx ON speaker_agreements (evidence_note_id);
+
+CREATE TABLE speaker_matches (
+  rid INTEGER PRIMARY KEY,
+  id TEXT NOT NULL UNIQUE,
+  workspace_id TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  note_id TEXT NOT NULL REFERENCES documents (id) ON DELETE CASCADE,
+  person_id TEXT NOT NULL REFERENCES speaker_people (id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  at TEXT NOT NULL,
+  UNIQUE (note_id, person_id, kind)
+);
+
+CREATE INDEX speaker_matches_person_idx ON speaker_matches (person_id, at);
+
+CREATE TABLE speaker_pending (
+  rid INTEGER PRIMARY KEY,
+  id TEXT NOT NULL UNIQUE,
+  workspace_id TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  person_id TEXT NOT NULL REFERENCES speaker_people (id) ON DELETE CASCADE,
+  note_id TEXT NOT NULL REFERENCES documents (id) ON DELETE CASCADE,
+  start_ms INTEGER NOT NULL,
+  end_ms INTEGER NOT NULL,
+  source TEXT,
+  asked_at TEXT NOT NULL
+);
+
+CREATE INDEX speaker_pending_person_idx ON speaker_pending (person_id);
+
+CREATE INDEX speaker_pending_note_idx ON speaker_pending (note_id);
+
+INSERT OR IGNORE INTO meta (key, value)
+  SELECT 'speakers_moved_from_labs', json_object(
+    'enabled', json(CASE WHEN EXISTS (SELECT 1 FROM settings WHERE key = 'voiceprint.enabled' AND value = 'true') THEN 'true' ELSE 'false' END),
+    'profile', json(CASE WHEN EXISTS (SELECT 1 FROM voiceprints) THEN 'true' ELSE 'false' END))
+  WHERE EXISTS (SELECT 1 FROM settings WHERE key = 'voiceprint.enabled' AND value = 'true') OR EXISTS (SELECT 1 FROM voiceprints);
+
+INSERT OR IGNORE INTO settings (owner_id, key, value, updated_at)
+  SELECT owner_id, 'speakers.selfVoice', value, updated_at FROM settings WHERE key = 'voiceprint.enabled';
+DELETE FROM settings WHERE key = 'voiceprint.enabled';
+
+INSERT OR IGNORE INTO settings (owner_id, key, value, updated_at)
+  SELECT owner_id, 'speakers.selfPassive', value, updated_at FROM settings WHERE key = 'voiceprint.passive';
+DELETE FROM settings WHERE key = 'voiceprint.passive';
+`
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: BASELINE_VERSION, name: 'baseline', sql: BASELINE },
   { version: 9, name: 'sources-and-imports', sql: SOURCES_AND_IMPORTS },
   { version: 10, name: 'dictation-usage', sql: DICTATION_USAGE },
-  { version: 11, name: 'action-item-drafts', sql: ACTION_ITEM_DRAFTS }
+  { version: 11, name: 'action-item-drafts', sql: ACTION_ITEM_DRAFTS },
+  { version: 12, name: 'speaker-profiles', sql: SPEAKER_PROFILES }
 ]
 
 /**

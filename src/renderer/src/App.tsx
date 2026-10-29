@@ -85,7 +85,8 @@ function settingsRedirect(path: string, query: URLSearchParams): string | null {
 
 /**
  * Routes: `/` home, `/meeting/:id` note, `/settings/:section`, `/permissions`,
- * `/chat[/:threadId]`, `/recipes`, `/search`, `/list/:id` (a folder) and `/person/:email`.
+ * `/chat[/:threadId]`, `/recipes`, `/search`, `/list/:id` (a folder) and `/person/:email`
+ * (an email, or `p:<personId>`).
  * `/action-items` and `/scratchpad` are each the home page while their Labs switch is off;
  * then `/people`, `/person/:email`, `/companies` and `/company/:domain`.
  */
@@ -126,11 +127,12 @@ function Router(): JSX.Element | null {
       </FramedPage>
     )
   }
-  const email = params['email']
-  if (path.startsWith('/person/') && email) {
+  // An email, or `p:<personId>` for a speaker person without one.
+  const personKey = params['email']
+  if (path.startsWith('/person/') && personKey) {
     return (
       <FramedPage>
-        <PersonPage key={email} email={email} />
+        <PersonPage key={personKey} routeKey={personKey} />
       </FramedPage>
     )
   }

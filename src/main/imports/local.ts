@@ -131,7 +131,9 @@ export async function transcribeLocally(manager: TranscriptionManager, media: Me
   }
   await manager.store.flush(input.noteId)
   if (tee) {
-    // One diarization pass over the decoded audio, then the letters are on the words.
+    // One diarization pass over the decoded audio, then the letters are on the words. The
+    // pass is step 1 of the note's post-meeting job (speaker profiles), which
+    // runs inside it: `awaitPass` resolves once the job wrote its names or ended.
     manager.diarizer.sessionClosed(input.noteId, await tee.close())
     manager.diarizer.noteStopped(input.noteId)
     await manager.diarizer.awaitPass(input.noteId)

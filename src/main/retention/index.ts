@@ -33,6 +33,7 @@ import type { MainContext } from '../context'
 import { expected } from '../ipc-expected'
 import { openSettingsSection } from '../lifecycle'
 import { log } from '../log'
+import { labelQueue } from '../speakers/label-queue'
 import { startVHarness, vHarness, vHarnessOn } from '../voiceprint/harness'
 
 const HOUR_MS = 3_600_000
@@ -306,7 +307,16 @@ export function registerRetention(ctx: MainContext): void {
       if (ctx.capture.isCapturing() && ctx.capture.currentNoteId() === noteId) {
         throw expected(notulaError('busy', 'Stop the transcript first'))
       }
-      const r = await ctx.storage.deleteTranscriptSections(noteId, ids)
+      // Through the note's label-write queue, so it never interleaves
+      // with a speaker write that read the chunks before them.
+      let r: InvokeRes<'transcript:delete-sections'> = { deleted: 0 }
+      await labelQueue(ctx).enqueue(noteId, {
+        kind: 'delete-sections',
+        patch: () => [],
+        commit: async () => {
+          r = await ctx.storage.deleteTranscriptSections(noteId, ids)
+        }
+      })
       log('info', 'transcript:sections-deleted', { noteId, deleted: r.deleted })
       if (r.deleted) {
         const p: TranscriptChanged = { noteId, upserted: [], removedIds: ids }

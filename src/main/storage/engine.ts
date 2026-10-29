@@ -7,18 +7,7 @@
 // a newer schema is only read (never migrated), and a file that will not open is
 // left exactly where it is.
 
-import {
-  closeSync,
-  constants,
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  openSync,
-  readdirSync,
-  readSync,
-  statSync,
-  unlinkSync
-} from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import Database from 'better-sqlite3-multiple-ciphers'
 import type { ErrorCode } from '@shared/errors'
@@ -51,6 +40,9 @@ import * as importsMd from './imports-md-repo'
 import * as search from './search-repo'
 import * as sources from './sources-repo'
 import * as speakerNames from './speaker-names-repo'
+import * as speakerAgreements from './speaker-agreements-repo'
+import * as speakerPeople from './speaker-people-repo'
+import * as speakerVoice from './speaker-voice-repo'
 import * as tags from './tags-repo'
 import * as templates from './templates-repo'
 import * as trash from './trash-repo'
@@ -153,25 +145,14 @@ function stamp(): string {
   return new Date().toISOString().replace(/[:.]/g, '-')
 }
 
-const COMPARE_CHUNK = 1 << 20
-
-/** Byte-for-byte equality of two files, read in 1 MiB chunks. */
-function sameBytes(a: string, b: string): boolean {
-  if (statSync(a).size !== statSync(b).size) return false
-  const fa = openSync(a, 'r')
-  const fb = openSync(b, 'r')
-  try {
-    const ba = Buffer.alloc(COMPARE_CHUNK)
-    const bb = Buffer.alloc(COMPARE_CHUNK)
-    for (let pos = 0; ; pos += COMPARE_CHUNK) {
-      const na = readSync(fa, ba, 0, COMPARE_CHUNK, pos)
-      const nb = readSync(fb, bb, 0, COMPARE_CHUNK, pos)
-      if (na !== nb || !ba.subarray(0, na).equals(bb.subarray(0, nb))) return false
-      if (na < COMPARE_CHUNK) return true
+/** A partial copy and its side files, when present. */
+function removeCopy(path: string): void {
+  for (const f of [path, `${path}-journal`, `${path}-wal`, `${path}-shm`]) {
+    try {
+      if (existsSync(f) && statSync(f).isFile()) rmSync(f)
+    } catch {
+      // left in the backups folder; never read back (it isn't a .db)
     }
-  } finally {
-    closeSync(fa)
-    closeSync(fb)
   }
 }
 
@@ -319,6 +300,46 @@ export class StorageEngine {
     listSpeakerNameSuggestions: (noteId) => speakerNames.listSpeakerNameSuggestions(this.need(), noteId),
     replaceSpeakerNameSuggestions: (noteId, rows) => speakerNames.replaceSpeakerNameSuggestions(this.need(), noteId, rows),
     deleteSpeakerNameSuggestion: (noteId, identityKey) => speakerNames.deleteSpeakerNameSuggestion(this.need(), noteId, identityKey),
+    patchSpeakerNameSuggestion: (...a) => speakerNames.patchSpeakerNameSuggestion(this.need(), ...a),
+    // speaker profiles (migration 12)
+    ensureSelfPerson: (...a) => speakerPeople.ensureSelfPerson(this.need(), ...a),
+    getSpeakerPerson: (...a) => speakerPeople.getSpeakerPerson(this.need(), ...a),
+    findSpeakerPersonByEmail: (...a) => speakerPeople.findSpeakerPersonByEmail(this.need(), ...a),
+    listSpeakerPeople: (...a) => speakerPeople.listSpeakerPeople(this.need(), ...a),
+    createSpeakerPerson: (...a) => speakerPeople.createSpeakerPerson(this.need(), ...a),
+    updateSpeakerPerson: (...a) => speakerPeople.updateSpeakerPerson(this.need(), ...a),
+    linkSpeakerPersonEmail: (...a) => speakerPeople.linkSpeakerPersonEmail(this.need(), ...a),
+    previewSpeakerMerge: (...a) => speakerPeople.previewSpeakerMerge(this.need(), ...a),
+    mergeSpeakerPeople: (...a) => speakerPeople.mergeSpeakerPeople(this.need(), ...a),
+    deleteSpeakerPerson: (...a) => speakerPeople.deleteSpeakerPerson(this.need(), ...a),
+    knownSpeakerPeople: (...a) => speakerPeople.knownSpeakerPeople(this.need(), ...a),
+    speakerPersonView: (...a) => speakerPeople.speakerPersonView(this.need(), ...a),
+    speakerVoiceSummary: (...a) => speakerPeople.speakerVoiceSummary(this.need(), ...a),
+    speakerVoiceGallery: (...a) => speakerVoice.speakerVoiceGallery(this.need(), ...a),
+    addSpeakerExemplar: (...a) => speakerVoice.addSpeakerExemplar(this.need(), ...a),
+    listSpeakerSamples: (...a) => speakerVoice.listSpeakerSamples(this.need(), ...a),
+    removeSpeakerExemplar: (...a) => speakerVoice.removeSpeakerExemplar(this.need(), ...a),
+    convertLegacyVoiceprints: (...a) => voiceprintRepo.convertLegacyVoiceprints(this.need(), ...a),
+    saveSpeakerClusterVectors: (...a) => speakerVoice.saveSpeakerClusterVectors(this.need(), ...a),
+    listSpeakerClusterVectors: (...a) => speakerVoice.listSpeakerClusterVectors(this.need(), ...a),
+    notesWithSpeakerClusterVectors: (...a) => speakerVoice.notesWithSpeakerClusterVectors(this.need(), ...a),
+    deleteSpeakerClusterVectors: (...a) => speakerVoice.deleteSpeakerClusterVectors(this.need(), ...a),
+    addSpeakerNegative: (...a) => speakerVoice.addSpeakerNegative(this.need(), ...a),
+    deleteSpeakerNegative: (...a) => speakerVoice.deleteSpeakerNegative(this.need(), ...a),
+    listSpeakerNegatives: (...a) => speakerVoice.listSpeakerNegatives(this.need(), ...a),
+    remapSpeakerNegatives: (...a) => speakerVoice.remapSpeakerNegatives(this.need(), ...a),
+    addSpeakerPending: (...a) => speakerVoice.addSpeakerPending(this.need(), ...a),
+    listSpeakerPending: (...a) => speakerVoice.listSpeakerPending(this.need(), ...a),
+    deleteSpeakerPending: (...a) => speakerVoice.deleteSpeakerPending(this.need(), ...a),
+    recordSpeakerAgreement: (...a) => speakerAgreements.recordSpeakerAgreement(this.need(), ...a),
+    getSpeakerAgreement: (...a) => speakerAgreements.getSpeakerAgreement(this.need(), ...a),
+    listSpeakerAgreements: (...a) => speakerAgreements.listSpeakerAgreements(this.need(), ...a),
+    deleteSpeakerAgreement: (...a) => speakerAgreements.deleteSpeakerAgreement(this.need(), ...a),
+    forgetSpeakerVoice: (...a) => speakerVoice.forgetSpeakerVoice(this.need(), ...a),
+    forgetAllSpeakerVoices: (...a) => speakerVoice.forgetAllSpeakerVoices(this.need(), ...a),
+    sweepSpeakerData: (...a) => speakerVoice.sweepSpeakerData(this.need(), ...a),
+    recordSpeakerMatches: (...a) => speakerPeople.recordSpeakerMatches(this.need(), ...a),
+    listSpeakerMatches: (...a) => speakerPeople.listSpeakerMatches(this.need(), ...a),
     createRecording: (r) => recordings.createRecording(this.need(), r),
     updateRecording: (id, patch) => recordings.updateRecording(this.need(), id, patch),
     listRecordings: (q) => recordings.listRecordings(this.need(), q),
@@ -607,7 +628,7 @@ export class StorageEngine {
     if (version < target) {
       if (existed) {
         try {
-          backupPath = this.backup(db, p.dataDir, dbPath, version)
+          backupPath = this.backup(db, p.dataDir, version)
         } catch (err) {
           db.close()
           this.log('error', 'sqlite-backup-failed', { err })
@@ -671,6 +692,12 @@ export class StorageEngine {
         if (transcribeReset || chunksFinalized) this.log('info', 'startup-housekeeping', { transcribeReset, chunksFinalized })
       } catch (err) {
         this.log('error', 'startup-housekeeping-failed', { err })
+      }
+      // Speaker profiles: the self row exists once the identity does.
+      try {
+        speakerPeople.ensureSelfPerson(this.store, String(kv.getSettingsRaw(this.store)['profile.name'] ?? ''))
+      } catch (err) {
+        this.log('error', 'speakers:self-person-failed', { err })
       }
     }
     try {
@@ -789,27 +816,95 @@ export class StorageEngine {
     }
   }
 
-  /** WAL checkpoint, then a size-verified copy, still encrypted with the same key. */
-  private backup(db: Db, dataDir: string, dbPath: string, from: number): string {
+  /**
+   * WAL checkpoint, then a copy still encrypted with the same key, written through `VACUUM INTO`
+   * with the biometric tables cleared (the speaker-profile voice tables; `speaker_agreements` stays). The copy
+   * is checked by `integrity_check` plus per-table row counts against the live database before it
+   * is kept, and a retried migration reuses a previous same-version backup only when that check
+   * passes again.
+   */
+  private backup(db: Db, dataDir: string, from: number): string {
     const [cp] = db.pragma('wal_checkpoint(TRUNCATE)') as { busy: number }[]
     if (cp && cp.busy) throw new Error('the WAL could not be checkpointed')
     const dir = join(dataDir, 'backups')
     mkdirSync(dir, { recursive: true })
     // A retried migration (Try again) meets the same file again: the failed attempt was
     // rolled back. Reuse that backup rather than writing another full copy.
-    // Older backups are never pruned here.
+    // Older backups are never pruned or rewritten here: one an earlier build made as a byte copy
+    // keeps whatever voice data it held (the user docs say so).
     const previous = readdirSync(dir)
       .filter((n) => n.startsWith(`notula-v${from}-`) && n.endsWith('.db'))
       .sort()
       .pop()
-    if (previous && sameBytes(join(dir, previous), dbPath)) {
-      this.log('info', 'sqlite-backup-reused', { backup: previous })
-      return join(dir, previous)
+    if (previous) {
+      const why = this.checkBackup(db, join(dir, previous))
+      if (!why) {
+        this.log('info', 'sqlite-backup-reused', { backup: previous })
+        return join(dir, previous)
+      }
+      this.log('info', 'sqlite-backup-not-reused', { backup: previous, reason: why })
     }
     const dest = join(dir, `notula-v${from}-${stamp()}.db`)
-    copyFileSync(dbPath, dest, constants.COPYFILE_EXCL)
-    if (statSync(dest).size !== statSync(dbPath).size) throw new Error('the backup size does not match')
+    const partial = `${dest}.partial`
+    removeCopy(partial)
+    try {
+      dataExport.writeCopyWithoutVoices(db, partial)
+      const why = this.checkBackup(db, partial)
+      if (why) throw new Error(`the backup check failed: ${why}`)
+      renameSync(partial, dest)
+    } catch (err) {
+      removeCopy(partial)
+      throw err
+    }
     return dest
+  }
+
+  /**
+   * Null when the copy at `path` passes `integrity_check`, holds every live table with the same
+   * row count (the biometric tables excluded) and holds no biometric row; else the reason.
+   */
+  private checkBackup(db: Db, path: string): string | null {
+    const quoted = path.split("'").join("''")
+    try {
+      db.exec(`ATTACH DATABASE '${quoted}' AS backup_check`)
+    } catch (err) {
+      return describe(err)
+    }
+    try {
+      const ok = db.pragma('backup_check.integrity_check', { simple: true })
+      if (ok !== 'ok') return `integrity_check: ${String(ok)}`
+      const tables = (schema: string): Set<string> =>
+        new Set(
+          (
+            db
+              .prepare(
+                `SELECT name FROM ${schema}.sqlite_master
+                 WHERE type = 'table' AND name NOT LIKE 'sqlite!_%' ESCAPE '!' AND sql NOT LIKE 'CREATE VIRTUAL%'`
+              )
+              .all() as { name: string }[]
+          ).map((r) => r.name)
+        )
+      const copy = tables('backup_check')
+      for (const t of tables('main')) {
+        if (!copy.has(t)) return `table ${t} is missing`
+        const n = (db.prepare(`SELECT count(*) AS n FROM backup_check."${t}"`).get() as { n: number }).n
+        if ((dataExport.BIOMETRIC_TABLES as readonly string[]).includes(t)) {
+          if (n !== 0) return `table ${t} holds voice data`
+          continue
+        }
+        const m = (db.prepare(`SELECT count(*) AS n FROM main."${t}"`).get() as { n: number }).n
+        if (m !== n) return `table ${t} has ${n} rows, the database ${m}`
+      }
+      return null
+    } catch (err) {
+      return describe(err)
+    } finally {
+      try {
+        db.exec('DETACH DATABASE backup_check')
+      } catch (err) {
+        this.log('warn', 'sqlite-backup-detach-failed', { err })
+      }
+    }
   }
 
   /** Returns null on success, or the failure detail after a rollback. */

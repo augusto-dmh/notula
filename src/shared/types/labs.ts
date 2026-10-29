@@ -60,7 +60,6 @@ export type LabsSettingKey =
   | 'consent.enabled'
   | 'meetingDock.enabled'
   | 'liveContext.mode'
-  | 'voiceprint.enabled'
   | 'transcriptReport.enabled'
   | 'companionCli.enabled'
   | 'updates.channel'
@@ -254,13 +253,6 @@ export const LABS_FEATURES: readonly LabsFeature[] = [
     description: 'File notes into folders or send them to a webhook when a meeting ends.',
     section: 'meetings',
     kind: 'switch'
-  },
-  {
-    key: 'voiceprint.enabled',
-    label: 'Recognize my voice',
-    description: 'Learn your voice on this computer so in-person transcripts label you as Me.',
-    section: 'transcription',
-    kind: 'custom'
   },
   {
     key: 'transcriptReport.enabled',

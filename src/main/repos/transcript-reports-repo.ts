@@ -5,15 +5,12 @@
 // A report keeps a snapshot of the reported excerpt, so
 // it holds transcript text: retention deletes it with the transcript, and a note purge cascades.
 
+import { chunkSpeakerLabels } from '@shared/lib/speakers'
 import type { IsoTime } from '@shared/types/common'
-import {
-  SPEAKER_LABEL_ME,
-  SPEAKER_LABEL_THEM,
-  DELETED_CHUNK_MARKER,
-  type TranscriptChunk
-} from '@shared/types/transcript'
+import { SPEAKER_LABEL_ME, SPEAKER_LABEL_THEM, DELETED_CHUNK_MARKER, type TranscriptChunk } from '@shared/types/transcript'
 import { TRANSCRIPT_REPORT_LIMITS, type TranscriptReport, type TranscriptReportCategory } from '@shared/types/transcript-reports'
 import type { NewTranscriptReport } from '../storage/api'
+import { getSettingsRaw } from '../storage/kv-repo'
 import { nowIso, toChunk } from '../storage/rows'
 import { inTransaction, invalid, type StoreCtx } from '../storage/store'
 import { randomUUID } from 'node:crypto'
@@ -103,10 +100,10 @@ export function deleteTranscriptReport(s: StoreCtx, id: string): boolean {
   return true
 }
 
-function speakerOf(c: TranscriptChunk): string {
-  const name = c.detected_speaker_name?.trim()
-  if (c.source === 'microphone') return name && name !== 'You' ? name : SPEAKER_LABEL_ME
-  return name || SPEAKER_LABEL_THEM
+/** Each chunk's speaker through the shared label rules: once the job has written, a suggest, tie or none speaker is its letter. */
+function speakersOf(s: StoreCtx, chunks: TranscriptChunk[]): (c: TranscriptChunk) => string {
+  const labels = chunkSpeakerLabels(chunks, { wordLevel: getSettingsRaw(s)['transcription.diarization'] === true })
+  return (c) => labels.get(c.id) ?? (c.source === 'microphone' ? SPEAKER_LABEL_ME : SPEAKER_LABEL_THEM)
 }
 
 function visible(c: TranscriptChunk): boolean {
@@ -133,6 +130,7 @@ export function reportExcerpt(
     .filter(visible)
   const ids = Array.isArray(chunkIds) ? new Set(chunkIds.filter((i) => typeof i === 'string').slice(0, MAX_SELECTION)) : null
   const picked = ids && ids.size ? all.filter((c) => ids.has(c.id)) : []
+  const speakerOf = speakersOf(s, all)
   const line = (c: TranscriptChunk): string => `${speakerOf(c)}: ${c.text.trim()}`
   if (picked.length) {
     const excerpt = picked.map((c) => ({

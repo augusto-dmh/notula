@@ -24,6 +24,9 @@ export { SpeechPreferencesRows } from './SpeechPreferencesRows'
 
 // ---------- speaker names ----------
 
+/** The bubble's panel: "<n> speakers to name", where the card can't show. */
+export { SpeakerQuietLine } from './SpeakerQuietLine'
+
 /** NotePage, top of the page: the speaker-name suggestion banner. */
 export function SpeakerNameBanner({ noteId }: { noteId: string }): JSX.Element | null {
   return createElement(SpeakerNameCard, { noteId, variant: 'banner' })

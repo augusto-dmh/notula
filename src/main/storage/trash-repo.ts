@@ -13,6 +13,7 @@ import { TRASH_RETENTION_MS, type TrashItem } from '@shared/types/notes'
 import { YDOC_ROOM_VERSION } from '@shared/types/ydoc'
 import type { NoteEmptiness } from './api'
 import { nowIso, parseJson } from './rows'
+import { checkpointVoice, deleteNoteVoiceRows, secureWrite } from './speaker-voice-repo'
 import { inTransaction, invalid, notFound, type StoreCtx } from './store'
 
 const QUARANTINE_PREFIX = 'quarantine:'
@@ -189,14 +190,25 @@ export function noteEmptiness(s: StoreCtx, id: string): NoteEmptiness | null {
   }
 }
 
-/** Auto-delete: only `deleted_at` and `updated_at`; `once_trashed` is untouched. */
+/**
+ * Auto-delete: only `deleted_at` and `updated_at`; `once_trashed` is untouched. Like the user's
+ * trash, it secure-deletes the note's speaker cluster vectors and pending requests in the same
+ * transaction.
+ */
 export function markNoteDeleted(s: StoreCtx, id: string): void {
-  const changes = inTransaction(s.db, () => {
+  let voice = { vectors: 0, pending: 0, guesses: false }
+  const changes = secureWrite(s, () => {
     const now = nowIso()
-    return s.db
+    const n = s.db
       .prepare(`UPDATE documents SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`)
       .run(now, now, id).changes
+    if (n > 0) voice = deleteNoteVoiceRows(s, id)
+    return n
   })
+  if (voice.vectors) checkpointVoice(s)
+  if (voice.vectors) s.touch('speaker_cluster_vectors', id)
+  if (voice.pending) s.touch('speaker_pending', id)
+  if (voice.guesses) s.touch('speaker_guesses', id)
   if (changes > 0) s.touch('documents', id)
   else if (!s.db.prepare(`SELECT 1 FROM documents WHERE id = ?`).get(id)) throw notFound('note', id)
 }

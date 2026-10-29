@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
-// `/person/:email`: the person's avatar and name, the
+// `/person/:email` and `/person/p:<personId>`: the person's avatar and name, the
 // email (click to copy), their company domain (a link, or plain text for a webmail
 // domain), a chat scoped to their notes (`search` / `person`), and those notes. A compact
 // header appears after 48 px of scroll. The "All notes" / "My notes" switch is the shared
 // search value and, as on the search page, shows only once a note is not the user's.
+// A speaker person without an email (`p:<personId>`, speaker profiles) has a letter
+// avatar, no email line, and the meetings where the person was named or recognized.
 
 import { useCallback, useEffect, useMemo, useState, type JSX } from 'react'
 import { displayName, isGenericDomain, isResourceEmail } from '@shared/lib/people'
 import type { NoteListItem } from '@shared/types/notes'
 import type { PersonDetail } from '@shared/types/people'
+import type { SpeakerPersonView } from '@shared/types/speakers'
 import { IconCheck } from '../../app/icons'
 import { navigate } from '../../app/navigation'
 import { debugLog, isOwnNote } from '../../app/platform'
@@ -16,6 +19,7 @@ import { Avatar } from '../calendar/Avatar'
 import { ListChatInput } from '../chat'
 import { NoteList } from '../folders/NoteList'
 import { setSearchScope, useSearchScope } from '../search/store'
+import { VoiceSection } from '../speaker-profiles'
 import { usePrefs } from '../settings/prefs-store'
 import { usePeopleChanged, useScrollContainer } from './directory'
 import { IconCopySmall } from './icons'
@@ -99,7 +103,103 @@ export function DomainLink({ domain }: { domain: string }): JSX.Element {
   )
 }
 
-export function PersonPageView({ email: raw }: { email: string }): JSX.Element | null {
+/** A speaker person with no email: `/person/p:<personId>`. */
+function SpeakerPersonPageView({ personId }: { personId: string }): JSX.Element | null {
+  const [view, setView] = useState<SpeakerPersonView | null | undefined>(undefined)
+  const [noteIds, setNoteIds] = useState<string[] | null>(null)
+  const [attach, scrollEl] = useScrollContainer()
+  const compact = useCompact(scrollEl)
+  const scope = useSearchScope()
+
+  const load = useCallback(() => {
+    window.notula.speakerPeople
+      .get({ personId })
+      .then((v) => {
+        // Merged away, or given an email since: the page moves to where the person lives now.
+        if (v.person.mergedInto) navigate(`/person/${encodeURIComponent(`p:${v.person.mergedInto}`)}`, { replace: true })
+        else if (v.person.email) navigate(`/person/${encodeURIComponent(v.person.email)}`, { replace: true })
+        else setView(v)
+      })
+      .catch((err: unknown) => {
+        debugLog('speaker-people:get-failed', { err: String(err).slice(0, 200) })
+        setView(null)
+      })
+    window.notula.speakerPeople
+      .matches({ personId })
+      .then((m) => setNoteIds([...new Set(m.map((x) => x.noteId))]))
+      .catch(() => setNoteIds([]))
+  }, [personId])
+  useEffect(load, [load])
+  useEffect(
+    () =>
+      window.notula.speakerPeople.onChanged((p) => {
+        if (!p.personId || p.personId === personId) load()
+      }),
+    [load, personId]
+  )
+
+  const notes = useScopedNotes(noteIds, scope === 'mine')
+  if (view === null) {
+    return (
+      <div className="directory-page directory-page--detail">
+        <div className="directory-page__column">
+          <p className="directory-error" role="alert">
+            Couldn’t find this person
+          </p>
+        </div>
+      </div>
+    )
+  }
+  const name = view?.person.name ?? ''
+
+  return (
+    <div className="directory-page directory-page--detail" ref={attach}>
+      <div className={`directory-compact${compact ? ' is-shown' : ''}`} aria-hidden={!compact}>
+        <Avatar name={name} size={16} />
+        <span>{name}</span>
+      </div>
+      <div className="directory-page__column">
+        <header className="directory-who">
+          <Avatar name={name} size={32} />
+          <div className="directory-who__text">
+            <h1 className="directory-who__name">{name}</h1>
+          </div>
+        </header>
+        <VoiceSection personId={personId} name={name} />
+        <hr className="directory-rule" />
+        {notes.status === 'ready' ? <NotesSwitch items={notes.items} /> : null}
+        {view === undefined || notes.status === 'loading' ? (
+          <div className="directory-loading" aria-busy="true" aria-label="Loading notes">
+            <span className="n-spinner" />
+          </div>
+        ) : notes.status === 'error' ? (
+          <p className="directory-error" role="alert">
+            Couldn’t load the notes
+          </p>
+        ) : notes.items.length === 0 ? (
+          <p className="directory-none">No notes with this person yet.</p>
+        ) : (
+          <NoteList items={notes.items} scrollEl={scrollEl} label={`Notes with ${name}`} onOpen={(id) => navigate(`/meeting/${encodeURIComponent(id)}`)} />
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** The route key: an email, or `p:<personId>` for a speaker person without one. */
+export function PersonPageView({ routeKey }: { routeKey: string }): JSX.Element | null {
+  const key = useMemo(() => {
+    try {
+      return decodeURIComponent(routeKey).trim()
+    } catch {
+      return routeKey.trim()
+    }
+  }, [routeKey])
+  if (key.startsWith('p:') && key.length > 2) return <SpeakerPersonPageView personId={key.slice(2)} />
+  return <EmailPersonPageView email={key} />
+}
+
+function EmailPersonPageView({ email: raw }: { email: string }): JSX.Element | null {
   const email = useMemo(() => {
     try {
       return decodeURIComponent(raw).trim().toLowerCase()
@@ -168,6 +268,7 @@ export function PersonPageView({ email: raw }: { email: string }): JSX.Element |
             </div>
           </div>
         </header>
+        <VoiceSection email={email} name={name} />
         <div className="directory-page__chat">
           <ListChatInput place={{ kind: 'search', query: email, type: 'person', documentIds: noteIds }} />
         </div>

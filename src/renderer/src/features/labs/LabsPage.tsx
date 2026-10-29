@@ -24,7 +24,6 @@ import { BetaLabsRow } from '../release-channel'
 import { Switch } from '../settings/controls'
 import { usePrefs, setPrefs } from '../settings/prefs-store'
 import { ScreenSnapshotsLabsRow } from '../snapshots'
-import { VoiceprintLabsRow } from '../voiceprint'
 import './labs.css'
 
 /** The owning features' custom rows. */
@@ -33,7 +32,6 @@ const CUSTOM_ROWS: Partial<Record<LabsSettingKey, () => JSX.Element | null>> = {
   'quickAsk.enabled': QuickAskLabsRow,
   'voiceTyping.enabled': VoiceTypingLabsRow,
   'consent.enabled': ConsentLabsRow,
-  'voiceprint.enabled': VoiceprintLabsRow,
   'liveContext.mode': LiveContextLabsRow,
   'companionCli.enabled': CompanionCliLabsRow,
   'updates.channel': BetaLabsRow,

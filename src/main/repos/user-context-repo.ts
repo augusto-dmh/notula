@@ -68,10 +68,10 @@ export function upsertUserContextSection(
 export function userContextPeople(s: StoreCtx, q: { decayDays: number; limit: number; myEmails: string[] }): UserContextPerson[] {
   const now = Date.now()
   return listPeople(s, { filter: 'all', myEmails: q.myEmails })
-    .filter((p) => !p.isSelf)
-    .map((p) => {
+    .flatMap((p) => {
+      if (p.isSelf || !p.email) return []
       const days = Math.max(0, (now - Date.parse(p.lastSeenAt)) / DAY_MS)
-      return { email: p.email, name: p.name, count: p.count, lastSeenAt: p.lastSeenAt, score: Math.max(1, p.count) * Math.exp(-days / q.decayDays) }
+      return [{ email: p.email, name: p.name, count: p.count, lastSeenAt: p.lastSeenAt, score: Math.max(1, p.count) * Math.exp(-days / q.decayDays) }]
     })
     .sort((a, b) => b.score - a.score || b.lastSeenAt.localeCompare(a.lastSeenAt))
     .slice(0, q.limit)

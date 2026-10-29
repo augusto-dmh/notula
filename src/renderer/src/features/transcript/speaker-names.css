@@ -139,3 +139,15 @@
   color: var(--fg-3);
   font-size: var(--text-xs);
 }
+
+/* Without a verdict: "<n> speakers to name" and Name them. */
+.nt-sn--count {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.nt-sn__all {
+  margin-right: auto;
+}

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-// Audio taps. The voiceprint tap is the only user so far. Capture's batch sink calls every
+// Audio taps. Nothing registers one since speaker profiles retired the voiceprint tap (the self
+// voice is matched in the note's own diarization pass). Capture's batch sink calls every
 // tap synchronously with each 16 kHz s16le mono batch,
 // beside `transcription.feed`. A tap must only buffer; one that throws is logged and skipped.
 

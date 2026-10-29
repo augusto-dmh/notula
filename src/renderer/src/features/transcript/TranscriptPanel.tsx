@@ -10,10 +10,15 @@
 // A source note (content sources) shows its transcript plan above the list, leaves out
 // superseded sessions, shows either the video's captions or the audio transcript, and labels
 // each turn with its video time instead of a speaker.
+//
+// Speaker profiles: a word-level turn's label is the speaker pill. While the
+// note's job runs, the top of the list says "Naming speakers…" and the pills don't open. In
+// pick mode (the agreement sheet's Pick the moment) a banner shows, and a click on a turn
+// returns its note id, chunk and time to the sheet; Esc cancels.
 
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent, type ReactNode } from 'react'
-import { hasWordLabels, speakerTurns } from '@shared/lib/speakers'
+import { hasWordLabels, type IdentityTurn } from '@shared/lib/speakers'
 import { isUntimedChunk, sourceTranscriptChunks, sourceTranscriptViews, type SourceTranscriptView } from '@shared/lib/source-transcript'
 import { transcriptCopyText } from '@shared/lib/transcript-text'
 import type { Note } from '@shared/types/notes'
@@ -25,11 +30,14 @@ import { useNote } from '../enhance/store'
 import { NuxTip } from '../nux'
 import { TranscriptDeletedNotice } from '../retention'
 import { TranscriptReportButton, TranscriptReportMenuItems, TranscriptSelectionActions } from '../transcript-reports'
-import { InPersonMenuItem, VoiceprintNoteLine } from '../voiceprint'
+import { cancelPickMode, pickTurn, usePickMode } from '../speaker-profiles'
 import type { TranscriptPanelProps } from './index'
 import { LanguageMenu } from './LanguageMenu'
 import { mediaTurns, positionLabel, SourcePlanBar, useNoteSource } from './SourcePlan'
 import { SpeakerNameCard } from './SpeakerNameCard'
+import { SpeakerPill } from './SpeakerPill'
+import { useSpeakerNote } from './speaker-note'
+import * as SpeakerText from '../speaker-profiles/strings'
 import { useSpeechPrefs } from './speech-state'
 import { findTurnForQuote, formatElapsed, groupTurns, type Turn } from './turns'
 import { useLiveTranscript } from './live-transcript'
@@ -104,17 +112,26 @@ function highlighted(text: string, matches: Match[], active: Match | null): Reac
   return parts
 }
 
-/** Word-level turns (diarization on) in the panel's shape. */
-function wordTurns(chunks: TranscriptChunk[], live: boolean): Turn[] {
-  return speakerTurns(chunks, { wordLevel: true, live }).map((t, i) => ({
+/** A panel turn; a word-level one carries its speaker identity for the pill. */
+type PanelTurn = Turn & { speaker?: IdentityTurn }
+
+/** Word-level turns (diarization on) in the panel's shape: one per run of one speaker identity. */
+function wordTurns(turns: IdentityTurn[]): PanelTurn[] {
+  return turns.map((t, i) => ({
     id: `${t.chunkIds[0] ?? 'turn'}:${i}`,
-    source: t.source,
+    source: t.channel,
     label: t.label,
     chunkIds: t.chunkIds,
     text: t.text,
-    startMs: Date.parse(t.startTimestamp),
-    endMs: Date.parse(t.endTimestamp)
+    startMs: t.startMs,
+    endMs: t.endMs,
+    speaker: t
   }))
+}
+
+/** A note with a diarization pass shows word-level turns, so its speakers keep their letters. */
+function hasPass(chunks: TranscriptChunk[]): boolean {
+  return chunks.some((c) => !!c.providerDetails?.mergeScopeId)
 }
 
 export function TranscriptPanel({ noteId, reveal, onClose, variant = 'note' }: TranscriptPanelProps): JSX.Element {
@@ -122,8 +139,13 @@ export function TranscriptPanel({ noteId, reveal, onClose, variant = 'note' }: T
   const cap = useCaptureSnapshot()
   const prefs = useSpeechPrefs()
   // Word-level too when words carry confirmed names, attribution or provider labels.
-  const wordLevel = (prefs?.['transcription.diarization'] ?? false) || hasWordLabels(chunks)
+  const wordLevel = (prefs?.['transcription.diarization'] ?? false) || hasWordLabels(chunks) || hasPass(chunks)
   const live = cap.transcribingNoteId === noteId
+  const speakers = useSpeakerNote(noteId, chunks, live)
+  const pickMode = usePickMode()
+  const picking = pickMode.active && pickMode.noteId === noteId && variant !== 'bubble'
+  // In pick mode a click picks a turn, so the pills don't open.
+  const pillView = useMemo(() => (picking ? { ...speakers.view, viewing: false } : speakers.view), [picking, speakers.view])
   // A source note: its plan, which transcript is shown, and video-time turns.
   const sourceView = useNoteSource(noteId)
   const source = sourceView?.source ?? null
@@ -136,8 +158,8 @@ export function TranscriptPanel({ noteId, reveal, onClose, variant = 'note' }: T
   )
   const sourceTurns = useMemo(() => (source ? mediaTurns(shownChunks) : null), [source, shownChunks])
   const turns = useMemo(
-    () => sourceTurns ?? (wordLevel ? wordTurns(chunks, live) : groupTurns(chunks)),
-    [sourceTurns, chunks, wordLevel, live]
+    (): PanelTurn[] => sourceTurns ?? (wordLevel ? wordTurns(speakers.identityTurns) : groupTurns(chunks)),
+    [sourceTurns, chunks, wordLevel, speakers.identityTurns]
   )
   // An untimed import's turns show no time (its times are 1 s offsets).
   const untimed = useMemo(() => new Set(chunks.filter(isUntimedChunk).map((c) => c.id)), [chunks])
@@ -320,12 +342,24 @@ export function TranscriptPanel({ noteId, reveal, onClose, variant = 'note' }: T
     })
   }
 
+  // Pick mode: Esc returns to the agreement sheet with nothing picked.
+  useEffect(() => {
+    if (!picking) return
+    const onKey = (e: globalThis.KeyboardEvent): void => {
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      cancelPickMode()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [picking])
+
   const isThis = cap.transcribingNoteId === noteId
   const emptyState = isThis && cap.ui === 'active' ? 'active' : isThis && cap.ui === 'starting' ? 'starting' : 'paused'
   const items = virtualizer.getVirtualItems()
 
   return (
-    <aside className={bubble ? 'nt-tr nt-tr--bubble' : 'nt-tr'} aria-label="Transcript" tabIndex={-1} onKeyDown={onPanelKey}>
+    <aside className={['nt-tr', bubble ? 'nt-tr--bubble' : '', picking ? 'nt-tr--picking' : ''].join(' ').trim()} aria-label="Transcript" tabIndex={-1} onKeyDown={onPanelKey}>
       {bubble ? (
         !findOpen && (
           <button type="button" className="nt-tr-icon nt-tr-bubble-find" title="Find" aria-label="Find" onClick={openFind}>
@@ -363,9 +397,22 @@ export function TranscriptPanel({ noteId, reveal, onClose, variant = 'note' }: T
       {!bubble && <AudioHealthBanner noteId={noteId} />}
       {/* The speaker-name suggestion card, top of the panel. */}
       {!bubble && <SpeakerNameCard noteId={noteId} variant="panel" />}
-      {/* The voiceprint line and the live-transcript tip. */}
-      {!bubble && <VoiceprintNoteLine noteId={noteId} />}
+      {/* The live-transcript tip. */}
       {!bubble && <NuxTip id="live-transcript" />}
+      {/* While the post-meeting job runs the pills don't open. */}
+      {speakers.view.busy && !live && (
+        <div className="nt-spk-quiet" role="status">
+          {SpeakerText.namingSpeakers()}
+        </div>
+      )}
+      {picking && pickMode.active && (
+        <div className="nt-spk-pickbar" role="status">
+          <span>{SpeakerText.pickBanner(pickMode.personName)}</span>
+          <button type="button" className="nt-tr-link" onClick={cancelPickMode}>
+            {SpeakerText.cancel()}
+          </button>
+        </div>
+      )}
 
       {findOpen && (
         <div className="nt-tr-find">
@@ -420,7 +467,7 @@ export function TranscriptPanel({ noteId, reveal, onClose, variant = 'note' }: T
               )
             }
             const i = item.index - lead
-            const turn = turns[i] as Turn
+            const turn = turns[i] as PanelTurn
             const prev = i > 0 ? turns[i - 1] : undefined
             const timeless = untimed.has(turn.chunkIds[0] ?? '')
             const elapsedAbove = !source && !timeless && !!prev && prev.chunkIds.length >= 2 && prev.source !== turn.source
@@ -437,6 +484,23 @@ export function TranscriptPanel({ noteId, reveal, onClose, variant = 'note' }: T
                     highlight === turn.id ? 'nt-tr-highlight' : '',
                     isSelected ? 'nt-tr-selected' : ''
                   ].join(' ')}
+                  onClickCapture={
+                    picking
+                      ? (e) => {
+                          // The label and text are for the sheet's display only; main gets the note id and
+                          // the time and extracts the excerpt itself.
+                          e.preventDefault()
+                          e.stopPropagation()
+                          pickTurn({
+                            noteId,
+                            chunkId: turn.chunkIds[0] ?? '',
+                            atMs: turn.startMs,
+                            ...(turn.label ? { speaker: turn.label } : {}),
+                            ...(turn.text ? { text: turn.text } : {})
+                          })
+                        }
+                      : undefined
+                  }
                 >
                   <button
                     type="button"
@@ -449,7 +513,11 @@ export function TranscriptPanel({ noteId, reveal, onClose, variant = 'note' }: T
                   </button>
                   <div className="nt-tr-turn-main">
                     <div className="nt-tr-meta">
-                      {turn.label && <span className="nt-tr-label">{turn.label}</span>}
+                      {turn.speaker && !source ? (
+                        <SpeakerPill view={pillView} turn={turn.speaker} />
+                      ) : (
+                        turn.label && <span className="nt-tr-label">{turn.label}</span>
+                      )}
                       {!timeless && <span className="nt-tr-time">{videoTime ?? formatElapsed(turn.startMs - origin)}</span>}
                     </div>
                     <div className="nt-tr-text">{highlighted(turn.text, turnMatches, active)}</div>
@@ -503,9 +571,8 @@ export function TranscriptPanel({ noteId, reveal, onClose, variant = 'note' }: T
       {!bubble && (
         <footer className="nt-tr-foot">
           <LanguageMenu />
-          {/* The transcript menu's report and in-person items. */}
+          {/* The transcript menu's report items. */}
           <TranscriptReportMenuItems noteId={noteId} />
-          <InPersonMenuItem noteId={noteId} />
         </footer>
       )}
     </aside>

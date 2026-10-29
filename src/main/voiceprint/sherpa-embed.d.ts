@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// The speaker-embedding part of sherpa-onnx-node 1.13.8 that notula-voiceprint uses (the package
-// ships no declarations; `asr/sherpa.d.ts` declares the rest, and the two blocks merge).
-// Only the voiceprint utility process loads it; main never does.
+// The speaker-embedding part of sherpa-onnx-node 1.13.8 that notula-voiceprint and notula-diarize
+// use for identification (the package ships no declarations; `asr/sherpa.d.ts` declares the rest,
+// and the two blocks merge). Only the utility processes load it; main never does.
 
 declare module 'sherpa-onnx-node' {
   export interface SpeakerEmbeddingExtractorConfig {

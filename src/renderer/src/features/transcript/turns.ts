@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Grouping chunks into speaker turns, labels and elapsed times. The copy format is the
-// shared transcriptCopyText (src/shared/lib/transcript-text.ts).
+// shared transcriptCopyText (src/shared/lib/transcript-text.ts). Labels come from the shared
+// label layer (`speakerTurns`, speaker profiles): once the post-meeting job has written,
+// a suggest, tie or none speaker shows its letter, never its raw `detected_speaker_name`.
 
-import {
-  DELETED_CHUNK_MARKER,
-  SPEAKER_LABEL_ME,
-  SPEAKER_LABEL_THEM,
-  type TranscriptChunk
-} from '@shared/types/transcript'
+import { speakerTurns } from '@shared/lib/speakers'
+import { DELETED_CHUNK_MARKER, type TranscriptChunk } from '@shared/types/transcript'
 
 /** The gap rule exists but is off by default (`transcript_gap_grouping`). */
 export const GAP_GROUPING = false
@@ -45,11 +43,13 @@ function speakerKey(c: TranscriptChunk): string {
   return String(d.participantId ?? '')
 }
 
-/** Me / Them, or an attributed name. */
-export function speakerLabel(c: TranscriptChunk): string {
-  const name = c.detected_speaker_name?.trim()
-  if (c.source === 'microphone') return name && name !== 'You' ? name : SPEAKER_LABEL_ME
-  return name || SPEAKER_LABEL_THEM
+/** Each chunk's label (its first word's, for a chunk split across speakers) from the shared label layer. */
+function chunkLabels(chunks: TranscriptChunk[]): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const t of speakerTurns(chunks, { wordLevel: false, live: false })) {
+    for (const id of t.chunkIds) if (!out.has(id)) out.set(id, t.label)
+  }
+  return out
 }
 
 function capitalize(s: string): string {
@@ -66,11 +66,13 @@ export function groupTurns(input: TranscriptChunk[]): Turn[] {
       break
     }
   }
+  const labels = chunkLabels(chunks)
   const turns: Turn[] = []
   let cur: (Turn & { speaker: string; lead: string; lastText: string; session: string }) | null = null
   for (const c of chunks) {
     const text = c.text.trim()
     const speaker = speakerKey(c)
+    const label = labels.get(c.id) ?? ''
     const lead = LEADING_SPEAKER.exec(text)?.[1] ?? ''
     const start = Date.parse(c.start_timestamp)
     const end = Date.parse(c.end_timestamp)
@@ -80,6 +82,7 @@ export function groupTurns(input: TranscriptChunk[]): Turn[] {
       !cur ||
       cur.source !== c.source ||
       cur.speaker !== speaker ||
+      cur.label !== label ||
       cur.lead !== lead ||
       cur.session !== c.transcription_session_id
     if (!fresh && cur) {
@@ -97,7 +100,7 @@ export function groupTurns(input: TranscriptChunk[]): Turn[] {
       cur = {
         id: c.id,
         source: c.source,
-        label: speakerLabel(c),
+        label,
         chunkIds: [c.id],
         text: capitalize(text),
         startMs: start,

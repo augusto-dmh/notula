@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // The wait for a note's final speaker labels before its prompt inputs are built: the late
-// finals of its last session and, when diarization is on, the diarization pass at stop.
-// Both live behind `TranscriptionControl.awaitSpeakerLabels`.
-// A failed wait is logged and generation goes on with the labels it has.
+// finals of its last session and, when diarization is on, the diarization pass at stop and
+// the post-meeting job's write, so a summary at stop sees the
+// automatic names. Both live behind `TranscriptionControl.awaitSpeakerLabels`, which is
+// bounded by the pass cap + the embedding cap + the LLM step.
+// A failed or timed-out wait is logged and generation goes on with the labels it has.
 
 import type { MainContext } from '../context'
 import { log } from '../log'

@@ -133,6 +133,13 @@ Use these terms, and only these, for Notula's own concepts. Lowercase in running
 | **lesson** | An item of a course or playlist, with a number. | class, aula |
 | **video captions** | The subtitle track a video provides. | captions (alone: that's live captions), subtitles |
 | **catalog** | The ordered lesson list of a series. | curriculum |
+| **speaker** | A voice in one transcript, shown as “Speaker A” until it’s named. | cluster |
+| **person** | Someone Notula knows across notes: a name, maybe an email. | contact, profile |
+| **voice** | What Notula remembers to recognize a person, when that person agreed. | voiceprint, biometric, embedding (fine in docs and code) |
+| **sample** | One remembered piece of a person’s voice. | exemplar |
+| **name a speaker** | Put a name on every turn of a speaker in one note. | tag, label (as verbs) |
+| **recognize** | Notula named a speaker by voice. | identify, match |
+| **agreement** | A person’s yes to having their voice remembered, and the record of it. The code says agreement too; “consent” in code is the meeting notice. | consent (in new code identifiers) |
 
 Verbs: **record**, **enhance**, **transcribe**, **share**, **send** (to an integration), **connect**/**disconnect** (accounts), **turn on**/**turn off** (features, in prose), **delete** (moves to Trash), **delete permanently** (empties it).
 
@@ -157,10 +164,27 @@ Verbs: **record**, **enhance**, **transcribe**, **share**, **send** (to an integ
 - **Progress** uses the present participle and an ellipsis: "Transcribing…", "Connecting to HubSpot…".
 - **Privacy statements** are exact: what is stored, where, for how long, and who can see it.
 
-## 11. Checklist before you ship a string
+## 11. Speaker profiles: never a pronoun for the person being named
+
+Speaker names come from meeting apps, the conversation and the user, so the app can’t know anyone’s pronouns. **No string uses a gendered pronoun for the person being named.** Use the name again, or rephrase (“Notula starts remembering the voice the next time you name Ana”). A name that appears twice in one sentence is fine. No string shows a score or a percentage for a name or a voice.
+
+## 12. Speaker profiles: texts other people read
+
+The texts other people read live in `src/shared/lib/speaker-notices.ts`, so the sheet’s preview, the clipboard and the stored record use the same words. Each has a version id. A change to the text of a version that has shipped, or a change of purpose, bumps it and asks every person again.
+
+| Text | Version | Where |
+|---|---|---|
+| The voice agreement message, English and Portuguese | `voice-agreement-1` | Copy message on the agreement sheet; stored in the agreement record |
+| The participant notice, English and Portuguese, with the AI-provider sentence when names from the conversation use a cloud provider | `participants-1` | The notice card and Settings ▸ Speaker tags |
+| The meeting-notice sentence, English and Portuguese | — | Add to meeting notice |
+
+The interface strings of speaker profiles (the notice card, Settings ▸ Speaker tags, the agreement sheet, the person page, the dialogs and toasts) are in `src/renderer/src/features/speaker-profiles/strings.ts`.
+
+## 13. Checklist before you ship a string
 
 1. Is it in sentence case, in the user's terms, and within its budget?
 2. Does it use the glossary terms?
 3. If it's an error, does it say what happened and what to do next?
 4. Are all placeholders still there, in an order that reads naturally?
 5. Would it make sense read aloud by a screen reader, without colour or position?
+6. Does it name a person without a pronoun, and show no score?

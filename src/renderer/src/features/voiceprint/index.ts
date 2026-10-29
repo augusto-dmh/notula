@@ -1,4 +1,4 @@
 // SPDX-License-Identifier: Apache-2.0
-// The voiceprint.
+// Record my voice and the Your voice rows of Settings ▸ Speaker tags.
 
-export { InPersonMenuItem, VoiceprintLabsRow, VoiceprintNoteLine } from './Voiceprint'
+export { YourVoiceRows } from './YourVoiceRows'

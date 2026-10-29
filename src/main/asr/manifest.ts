@@ -31,13 +31,35 @@ export interface ModelDownload {
 
 export interface ModelManifestEntry {
   id: LocalModelId
-  kind: 'asr' | 'diarization'
+  /** `speaker-id`: the speaker identification extractor, separate from diarization's clustering model. */
+  kind: 'asr' | 'diarization' | 'speaker-id'
   /** Base codes, plus `multi` (LOCAL_ASR_MODELS for the speech models). */
   languages: readonly string[]
+  /** Empty for an alias. */
   downloads: ModelDownload[]
   /** The sum of the downloads' bytes (the progress total). */
   totalBytes: number
+  /** Set: this model is one file of another, with no download and no copy of its own. */
+  alias?: ModelAlias
 }
+
+/**
+ * A model that is one member file of another model: it shares that model's download,
+ * folder, state and progress, and is ready when that model is.
+ */
+export interface ModelAlias {
+  of: LocalModelId
+  /** The member's path inside `of`. */
+  path: string
+}
+
+/**
+ * Speaker profiles: true makes `speaker-id` an alias of the WeSpeaker ResNet-34 file inside
+ * `diarization-en` (no second download and no second copy; ready with it; its model id is that
+ * file's SHA-256). False until a benchmark result picks ResNet-34; the calibration file's
+ * `modelSha` changes with it.
+ */
+const SPEAKER_ID_IS_RESNET34_ALIAS: boolean = false
 
 const MiB = 1024 * 1024
 
@@ -190,5 +212,70 @@ export const MODEL_MANIFEST: Record<LocalModelId, ModelManifestEntry> = {
       }
     ],
     totalBytes: 6_958_444 + 26_534_365
-  }
+  },
+  // Speaker identification: CAM++ zh-en advanced, 192-dim, Apache-2.0
+  // (ModelScope iic/speech_campplus_sv_zh_en_16k-common_advanced). Downloaded only when the user
+  // turns on a voice row, after the size and licence are shown.
+  'speaker-id': SPEAKER_ID_IS_RESNET34_ALIAS
+    ? {
+        id: 'speaker-id',
+        kind: 'speaker-id',
+        languages: ['multi'],
+        downloads: [],
+        totalBytes: 0,
+        alias: { of: 'diarization-en', path: 'wespeaker_en_voxceleb_resnet34.onnx' }
+      }
+    : {
+        id: 'speaker-id',
+        kind: 'speaker-id',
+        languages: ['multi'],
+        downloads: [
+          {
+            // "recongition" is the upstream release tag's spelling.
+            url: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx',
+            bytes: 28_281_164,
+            sha256: 'aa3cfc16963a10586a9393f5035d6d6b57e98d358b347f80c2a30bf4f00ceba2',
+            capBytes: 40 * MiB,
+            timeoutMs: 600_000,
+            kind: 'file',
+            members: [
+              {
+                path: '3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx',
+                bytes: 28_281_164,
+                sha256: 'aa3cfc16963a10586a9393f5035d6d6b57e98d358b347f80c2a30bf4f00ceba2'
+              }
+            ]
+          }
+        ],
+        totalBytes: 28_281_164
+      }
+}
+
+/** The model whose download and folder hold this one's files: `alias.of`, else itself. */
+export function modelHome(id: LocalModelId): LocalModelId {
+  return MODEL_MANIFEST[id].alias?.of ?? id
+}
+
+/** The models that are aliases of `id`. */
+export function aliasesOf(id: LocalModelId): LocalModelId[] {
+  return (Object.keys(MODEL_MANIFEST) as LocalModelId[]).filter((a) => MODEL_MANIFEST[a].alias?.of === id)
+}
+
+/** The model's files, relative to its home's folder: an alias's one member, else every member. */
+export function modelFiles(id: LocalModelId): ModelFile[] {
+  const alias = MODEL_MANIFEST[id].alias
+  const members = (m: LocalModelId): ModelFile[] => MODEL_MANIFEST[m].downloads.flatMap((d) => d.members)
+  if (!alias) return members(id)
+  const hit = members(alias.of).find((m) => m.path === alias.path)
+  if (!hit) throw new Error(`manifest: alias ${id} names no member ${alias.path} of ${alias.of}`)
+  return [hit]
+}
+
+/**
+ * The speaker identification model id: the SHA-256 of the extractor file the manifest pins
+ *, the alias's file included. Every vector carries it; it is never
+ * written by hand.
+ */
+export function speakerIdModelId(): string {
+  return (modelFiles('speaker-id')[0] as ModelFile).sha256
 }

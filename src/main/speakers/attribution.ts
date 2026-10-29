@@ -2,9 +2,10 @@
 // Speaker attribution in main.
 //
 // - Detectors: one per app (Zoom, Teams, Meet in Chrome), each behind its switch
-//   (`attribution.zoom|teams|meet`, off by default). A detector runs while its switch is on
-//   and its app is in the meeting-app list (bus `meetings:mic-apps`); only the first to start
-//   owns attribution. Windows only for now; macOS shows "Coming later".
+//   (`attribution.zoom|teams|meet`) and the master `speakers.appNames` (Names from meeting apps).
+//   A detector runs while both are on and its app is in the meeting-app list (bus
+//   `meetings:mic-apps`); only the first to start owns attribution. Windows only for now; macOS
+//   shows "Coming later" and the master has no effect.
 // - Readers: main forks `notula-uia` while a detector runs; it runs the PowerShell UIA reader
 //   (resources/uia/attribution.ps1) and relays its JSON records. Restarts, `failed` and
 //   `unavailable` come from the worker.
@@ -42,7 +43,7 @@ import { SpeakerTimeline, type Winner } from './timeline'
 
 const APPS: readonly AttributionApp[] = ['zoom', 'teams', 'meet']
 const SOURCE: Record<AttributionApp, AttributionSource> = { zoom: 'zoom-uia', teams: 'teams-uia', meet: 'meet-uia' }
-/** Windows defaults (ms between someone starting to speak and the tile lighting). */
+/** Windows defaults (ms between someone starting to speak and the tile lighting). Fixed in v1: no per-meeting estimate. */
 const LAG_WINDOWS: Record<AttributionApp, number> = { zoom: 1_400, teams: 900, meet: 500 }
 const ROSTER: Record<AttributionApp, string> = {
   zoom: 'zoom-roster',
@@ -186,12 +187,17 @@ export class AttributionService implements SystemAttribution {
     this.ctx.bus.on('capture:stopped', ({ noteId }) => void this.logSessionSummary(noteId))
   }
 
+  /** The app's readers may run: the master and the app's own switch are both on. */
+  private appOn(app: AttributionApp, s: Settings = this.settings): boolean {
+    return s['speakers.appNames'] === true && s[SETTING[app]] === true
+  }
+
   private applySettings(next: Settings, keys: string[]): void {
     const prev = this.settings
     this.settings = next
     for (const app of APPS) {
-      const turnedOn = !prev[SETTING[app]] && next[SETTING[app]]
-      if (turnedOn) this.detectors[app].stuck = null
+      // The master or the app's switch going off and on again lets a stuck detector retry.
+      if (!this.appOn(app, prev) && this.appOn(app, next)) this.detectors[app].stuck = null
     }
     const readerArgsChanged =
       keys.includes('profile.name') ||
@@ -220,10 +226,10 @@ export class AttributionService implements SystemAttribution {
       return
     }
     const eligible = (app: AttributionApp): boolean =>
-      this.settings[SETTING[app]] === true &&
+      this.appOn(app) &&
       this.detectors[app].stuck === null &&
       this.micApps.some((a) => appMatches(app, a.appId))
-    // The owner stops when its switch goes off or its app leaves the list.
+    // The owner stops when the master or its switch goes off, or its app leaves the list.
     if (this.owner && !eligible(this.owner)) {
       const app = this.owner
       log('info', 'attribution:detector-stop', { app, why })
@@ -245,7 +251,7 @@ export class AttributionService implements SystemAttribution {
     this.publishIfChanged(() => {
       for (const app of APPS) {
         const d = this.detectors[app]
-        if (!this.settings[SETTING[app]]) {
+        if (!this.appOn(app)) {
           d.state = 'off'
           d.detail = null
         } else if (d.stuck) {
@@ -494,7 +500,8 @@ export class AttributionService implements SystemAttribution {
       apps: APPS.map(
         (app): AttributionAppStatus => ({
           app,
-          enabled: this.settings[SETTING[app]] === true,
+          // On macOS the master has no effect: the row shows its own switch under "Coming later".
+          enabled: this.supported ? this.appOn(app) : this.settings[SETTING[app]] === true,
           state: this.detectors[app].state,
           speakerEventCount: this.detectors[app].eventsReceived,
           uniqueSpeakers: this.detectors[app].speakers.size,
@@ -610,7 +617,7 @@ export class AttributionService implements SystemAttribution {
 
   /** The end-of-meeting attribution summary, a local log line only. */
   private async logSessionSummary(noteId: string): Promise<void> {
-    if (!APPS.some((a) => this.settings[SETTING[a]])) return
+    if (!APPS.some((a) => this.appOn(a))) return
     try {
       const chunks = (await this.ctx.storage.getTranscript(noteId)).filter((c) => c.is_final)
       const system = chunks.filter((c) => c.source === 'system')

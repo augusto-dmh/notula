@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Types for the subset of sherpa-onnx-node 1.13.8 that notula-asr and notula-diarize
 // use (the package ships no declarations). Only the utility processes load it; main
-// never does (no ONNX inference in main).
+// never does (no ONNX inference in main). SpeakerEmbeddingExtractor, which notula-diarize
+// also uses for identification, is declared in `voiceprint/sherpa-embed.d.ts` (the two
+// blocks merge); it moves here when that file goes.
 
 declare module 'sherpa-onnx-node' {
   export interface Waveform {
@@ -58,6 +60,11 @@ declare module 'sherpa-onnx-node' {
     minDurationOff: number
   }
 
+  /**
+   * 1.13.8's Node addon returns these three fields only. The core's opt-in per-segment
+   * silhouette confidence isn't passed through by the addon (checked for speaker
+   * profiles), so nothing here reads one.
+   */
   export interface SpeakerDiarizationSegment {
     /** Seconds. */
     start: number

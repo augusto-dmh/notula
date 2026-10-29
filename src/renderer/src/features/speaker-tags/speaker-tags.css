@@ -48,3 +48,37 @@
     gap: 4px;
   }
 }
+
+/* Speaker profiles: the app rows under Names from meeting apps, the Your voice rows, the
+   notes under a row and the actions beside a switch. */
+.nt-st-sub .settings-row {
+  padding-left: 40px;
+}
+
+.nt-st-sub.is-off {
+  opacity: 0.6;
+}
+
+.nt-st-sub:empty {
+  display: none;
+}
+
+.settings-card > .nt-st-sub {
+  border-top: 1px dashed var(--border);
+}
+
+.nt-st-note {
+  margin: 0;
+  /* Reads as part of the row above it. */
+  margin-top: -8px;
+  padding: 0 16px 14px;
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.nt-st-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}

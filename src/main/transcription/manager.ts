@@ -86,12 +86,9 @@ export class TranscriptionManager {
     this.store = new ChunkStore(ctx)
     this.recordings = getRecordings(ctx)
     this.attribution = getAttribution(ctx)
-    this.diarizer = new DiarizationService({
-      userDataPath: ctx.userDataPath,
-      models: this.models,
-      getChunks: (noteId) => this.store.getTranscript(noteId),
-      publish: (noteId, chunks) => this.store.publishRevisions(noteId, chunks)
-    })
+    // The pass's chunk write goes through the note's label-write queue, from the job
+    // (`speakers/job.ts` sets it on the service).
+    this.diarizer = new DiarizationService({ userDataPath: ctx.userDataPath, models: this.models })
     // Start fresh creates a new workspace and owner: never stamp chunks with old ones.
     ctx.bus.on('storage:status', (s) => {
       this.identity = null

@@ -228,6 +228,14 @@
   font-weight: 500;
 }
 
+.directory-person__voice {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  color: var(--accent);
+  vertical-align: middle;
+}
+
 .directory-person__me {
   color: var(--fg-3);
   font-weight: 400;

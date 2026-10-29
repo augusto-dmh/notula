@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// People: `/people`, `/person/:email` and the sidebar's
+// People: `/people`, `/person/:email` (or `/person/p:<personId>`) and the sidebar's
 // People and Companies buttons, plus the folder page's People tab.
 
 import { createElement, type JSX } from 'react'
@@ -13,9 +13,9 @@ export function PeoplePage(): JSX.Element {
   return createElement(PeoplePageView)
 }
 
-/** `/person/:email`. */
-export function PersonPage({ email }: { email: string }): JSX.Element {
-  return createElement(PersonPageView, { key: email, email })
+/** `/person/:email`, or `/person/p:<personId>` for a speaker person without an email. */
+export function PersonPage({ routeKey }: { routeKey: string }): JSX.Element {
+  return createElement(PersonPageView, { key: routeKey, routeKey })
 }
 
 /** The sidebar footer: People and Companies icon buttons, before Trash. */

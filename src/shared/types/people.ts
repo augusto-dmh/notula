@@ -5,7 +5,8 @@
 import type { IsoTime } from './common'
 import type { CalendarAttendee, NotePerson } from './notes'
 
-export type PeopleFilter = 'all' | 'met'
+/** `voice`: people with a remembered voice. */
+export type PeopleFilter = 'all' | 'met' | 'voice'
 
 export interface PeopleQuery {
   filter: PeopleFilter
@@ -13,8 +14,14 @@ export interface PeopleQuery {
   query?: string
 }
 
+/**
+ * A derived row (keyed by email) or a persisted speaker person (`personId`), joined by email.
+ * A person without an email opens `/person/p:<personId>`.
+ */
 export interface PersonRow {
-  email: string
+  email?: string
+  personId?: string
+  hasVoice: boolean
   name: string
   domain: string | null
   lastSeenAt: IsoTime

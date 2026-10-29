@@ -60,6 +60,11 @@ export function displayName(
 }
 
 /** The domain's first label, first letter upper-cased; empty for a `gmail` domain. */
+/** The `/person/…` key of a people row: its email, or `p:<personId>` for a person without one. */
+export function personRouteKey(p: { email?: string; personId?: string }): string {
+  return p.email ?? `p:${p.personId ?? ''}`
+}
+
 export function companyFromEmail(email: string): string {
   const at = email.lastIndexOf('@')
   if (at < 0) return ''

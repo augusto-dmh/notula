@@ -55,7 +55,7 @@ async function scope(ctx: MainContext): Promise<{ myEmails: string[]; genericDom
 }
 
 function personMatch(query: string, p: PersonRow): Match | null {
-  return best(matchText(query, p.email, 'email'), matchText(query, p.name, 'name'))
+  return best(matchText(query, p.email ?? '', 'email'), matchText(query, p.name, 'name'))
 }
 
 async function rankedPeople(ctx: MainContext, query: string): Promise<{ p: PersonRow; m: Match }[]> {

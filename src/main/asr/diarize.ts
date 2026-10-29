@@ -15,8 +15,16 @@
 //   the pass is skipped and logged.
 // - Mapping: every final word takes `merged_spk = r<N>` from the turn holding its
 //   midpoint, or the nearest turn within 0.5 s, and the chunk carries the
-//   pass's `mergeScopeId`. The chunks are republished through storage and
-//   `transcript:changed`.
+//   pass's `mergeScopeId`.
+// - Speaker profiles: the pass is step 1 of the note's post-meeting job
+//   (`speakers/job.ts`, set with `setJob`). The job picks the embed mode at the start; after
+//   diarization the worker sends `embedding-started`, and from then on the 10 min cap is
+//   replaced by the 2 min embedding cap. On that cap, or a worker crash while embedding, the
+//   turns and the clusters already reported are kept. The finished pass goes to the job,
+//   which writes its `merged_spk` patch through the note's label-write queue. The job runs
+//   inside the pass, so `awaitPass` covers it. Each file goes to the worker with its timing,
+//   so the mic's echo cut compares the two channels in capture time. A job
+//   abandoned by a resume cancels its worker (`cancel`); the next stop runs the pass again.
 // - Retention: the audio stays only so a resumed note gets one consistent pass over
 //   all its sessions, so its speaker letters stay consistent. It is deleted 2 h after the
 //   note's last pass, when more than 8 notes hold audio, at quit, and at startup.
@@ -28,12 +36,14 @@ import { mkdirSync, readdirSync, rmdirSync, rmSync, writeFileSync } from 'node:f
 import { join } from 'node:path'
 import { app, utilityProcess, type UtilityProcess } from 'electron'
 import type { AudioSource } from '@shared/types/common'
-import type { ProviderWord, TranscriptChunk } from '@shared/types/transcript'
+import type { TranscriptChunk } from '@shared/types/transcript'
 import { FramedWriter, randomKey } from '../crypto/blobs'
 import { log } from '../log'
 import { workerEnv, workerPath } from './instance'
+import { SPEAKER_PROFILE_LIMITS } from '@shared/types/speakers'
+import { cleanSpans, echoOnMic, spanSeconds } from './clean-spans'
 import type { LocalModelManager } from './models'
-import type { DiarizeInput, DiarizeSegment, DiarizeToMain, DiarizeWorkerArgs, VerifiedFile } from './protocol'
+import type { DiarizeCluster, DiarizeEmbedMode, DiarizeInput, DiarizeSegment, DiarizeToMain, DiarizeWorkerArgs, VerifiedFile } from './protocol'
 import { baseName } from './verify'
 
 const MODEL = 'diarization-en' as const
@@ -42,8 +52,9 @@ const SAMPLES_PER_MS = 16
 const GAP_FILL_MIN_MS = 200
 /** Longer gaps are cut to this, and the cut is recorded so mapping stays aligned. */
 const GAP_FILL_MAX_MS = 10 * 60_000
-/** The pass's compute cap. */
-const PASS_CAP_MS = 10 * 60_000
+/** The pass's compute cap (diarization only; embedding has its own). */
+export const PASS_CAP_MS = 10 * 60_000
+const EMBED_CAP_MS = SPEAKER_PROFILE_LIMITS.embeddingCapMs
 /** A word maps to the nearest turn within 0.5 s (8,000 samples). */
 const NEAREST_TURN_S = 0.5
 const KEEP_AFTER_PASS_MS = 2 * 3_600_000
@@ -226,10 +237,42 @@ interface NoteAudio {
 export interface DiarizationDeps {
   userDataPath: string
   models: LocalModelManager
-  /** The note's chunks (persisted plus live). */
-  getChunks(noteId: string): Promise<TranscriptChunk[]>
-  /** Writes revised chunks and pushes `transcript:changed`. */
-  publish(noteId: string, chunks: TranscriptChunk[]): Promise<void>
+}
+
+/** What the job asks the pass to embed. `identification` is null with mode `none`. */
+export interface DiarizeEmbedPlan {
+  mode: DiarizeEmbedMode
+  identification: VerifiedFile | null
+}
+
+/** One finished pass, handed to the post-meeting job. Vectors stay in main. */
+export interface DiarizePass {
+  passId: string
+  /** Turns per source (`microphone`, `system`), in seconds into the source's audio. */
+  turns: ReadonlyMap<string, readonly DiarizeSegment[]>
+  /** The identification result per `r<N>`; empty without embedding. */
+  clusters: ReadonlyMap<string, DiarizeCluster>
+  /** Clean speech per `r<N>`, computed in main for every cluster. */
+  cleanMs: ReadonlyMap<string, number>
+  /** True when the pass maps this chunk's words (a final chunk with words of a recorded session). */
+  covers(chunk: TranscriptChunk): boolean
+  /** The `r<N>` of a covered chunk's word, or null when no turn is near it. */
+  labelOf(chunk: TranscriptChunk, wordIndex: number): string | null
+}
+
+/** The post-meeting job's side of the pass (`speakers/job.ts`). */
+export interface DiarizeJob {
+  /** A pass is about to run for the note (job state `queued`). */
+  queued(noteId: string): void
+  /** At the pass's start (state `diarizing`): what to embed. */
+  plan(noteId: string): Promise<DiarizeEmbedPlan>
+  /** The rest of the job; null when the pass produced nothing (`reason` is a code). */
+  run(noteId: string, pass: DiarizePass | null, reason?: string): Promise<void>
+}
+
+interface WorkerOutcome {
+  turns: Map<string, DiarizeSegment[]>
+  clusters: DiarizeCluster[]
 }
 
 /** Index of the turn holding `t`, else the nearest within 0.5 s, else -1. Turns sorted by start. */
@@ -265,9 +308,17 @@ export function turnAt(turns: readonly DiarizeSegment[], t: number): number {
 
 export class DiarizationService {
   private readonly notes = new Map<string, NoteAudio>()
+  /** Ends the note's running worker (the pass then fails, or keeps what embedding reported). */
+  private readonly cancels = new Map<string, () => void>()
   private quitting = false
+  private job: DiarizeJob | null = null
 
   constructor(private readonly deps: DiarizationDeps) {}
+
+  /** Set once by `registerSpeakerJob`. */
+  setJob(job: DiarizeJob): void {
+    this.job = job
+  }
 
   tmpDir(noteId: string): string {
     return join(this.deps.userDataPath, 'tmp', noteId)
@@ -293,12 +344,19 @@ export class DiarizationService {
     if (!n || !n.files.length || this.quitting) return
     if (n.expiry) clearTimeout(n.expiry)
     n.expiry = null
+    const willRun = this.deps.models.isReady(MODEL)
     if (n.running) {
       n.again = true
+      if (willRun) this.job?.queued(noteId)
       return
     }
+    if (willRun) this.job?.queued(noteId)
     n.running = this.pass(noteId, n)
-      .catch((err: unknown) => log('warn', 'asr:diarize-failed', { noteId, err }))
+      .catch(async (err: unknown) => {
+        log('warn', 'asr:diarize-failed', { noteId, err })
+        // The job ends too (and lets go of the model it held).
+        await this.job?.run(noteId, null, 'pass-error').catch(() => undefined)
+      })
       .finally(() => {
         n.running = null
         if (n.again && !this.quitting) {
@@ -310,10 +368,29 @@ export class DiarizationService {
       })
   }
 
+  /** The note's job was abandoned (a resume): its worker stops now instead of running to its cap. */
+  cancel(noteId: string): void {
+    this.cancels.get(noteId)?.()
+  }
+
   /** Resolves when the note has no diarization pass running, including a queued re-run. */
   async awaitPass(noteId: string): Promise<void> {
     const n = this.notes.get(noteId)
     while (n?.running) await n.running
+  }
+
+  /**
+   * The note's diarization temp audio while it still exists (about 2 h after its pass), for
+   * clips. Null when there is none. The keys never leave main.
+   */
+  tempAudioFor(noteId: string): readonly RecordedFile[] | null {
+    const n = this.notes.get(noteId)
+    return n?.files.length ? n.files : null
+  }
+
+  /** A stop or `ensureJob` would run a pass for the note: its temp audio still exists. */
+  willRunPass(noteId: string): boolean {
+    return !this.quitting && !!this.notes.get(noteId)?.files.length
   }
 
   /** At startup: temp audio left over from an earlier run is deleted. */
@@ -392,27 +469,70 @@ export class DiarizationService {
 
   private async pass(noteId: string, n: NoteAudio): Promise<void> {
     const files = [...n.files].sort((a, b) => a.baseEpochMs - b.baseEpochMs)
+    const job = this.job
     if (!this.deps.models.isReady(MODEL)) {
       log('info', 'asr:diarize-skipped', { noteId, reason: 'model-missing' })
+      // A job queued at the stop ends here: the model went between the stop and the pass.
+      await job?.run(noteId, null, 'model-missing')
+      return
+    }
+    if (!job) {
+      log('warn', 'asr:diarize-skipped', { noteId, reason: 'no-job' })
       return
     }
     const inputs: DiarizeInput[] = []
     const offsets = new Map<string, { offsetSec: number; file: RecordedFile }>()
+    const bySource = new Map<string, RecordedFile[]>()
     // System first, so its speakers take the lower numbers.
     for (const source of ['system', 'microphone'] as const) {
       const mine = files.filter((f) => f.source === source)
       if (!mine.length) continue
+      bySource.set(source, mine)
       let at = 0
       for (const f of mine) {
         offsets.set(`${f.sessionId}:${source}`, { offsetSec: at / 16000, file: f })
         at += f.samples
       }
-      inputs.push({ key: source, files: mine.map((f) => ({ path: f.path, id: f.id, key: f.key.toString('base64') })) })
+      inputs.push({
+        key: source,
+        files: mine.map((f) => ({
+          path: f.path,
+          id: f.id,
+          key: f.key.toString('base64'),
+          timing: { baseEpochMs: f.baseEpochMs, samples: f.samples, cuts: f.cuts }
+        }))
+      })
     }
+    const plan = await job.plan(noteId).catch((err: unknown): DiarizeEmbedPlan => {
+      log('warn', 'asr:diarize-plan-failed', { noteId, err })
+      return { mode: 'none', identification: null }
+    })
     const started = Date.now()
     const audioS = files.reduce((n, f) => n + f.samples, 0) / 16000
-    const results = await this.runWorker(noteId, inputs, audioS <= SHORT_AUDIO_S ? SHIFT_SHORT : SHIFT_LONG)
-    if (!results) return
+    const outcome = await this.runWorker(noteId, inputs, audioS <= SHORT_AUDIO_S ? SHIFT_SHORT : SHIFT_LONG, plan)
+    if (!outcome) {
+      await job.run(noteId, null, 'pass-failed')
+      return
+    }
+    try {
+      await this.finishPass(noteId, files, outcome, offsets, bySource, started, job)
+    } finally {
+      // The job zeroes them when it ends; this covers a throw before it got them.
+      for (const c of outcome.clusters) c.vector?.fill(0)
+    }
+  }
+
+  /** The worker's turns and clusters as the job's pass. */
+  private async finishPass(
+    noteId: string,
+    files: readonly RecordedFile[],
+    outcome: WorkerOutcome,
+    offsets: ReadonlyMap<string, { offsetSec: number; file: RecordedFile }>,
+    bySource: ReadonlyMap<string, RecordedFile[]>,
+    started: number,
+    job: DiarizeJob
+  ): Promise<void> {
+    const results = outcome.turns
     const passId = randomUUID()
     // r<N> numbers are unique across the note's sources.
     const ids = new Map<string, number>()
@@ -428,38 +548,58 @@ export class DiarizationService {
     for (const source of ['system', 'microphone']) {
       for (const s of [...(results.get(source) ?? [])].sort((a, b) => a.start - b.start)) label(source, s.speaker)
     }
-    const chunks = await this.deps.getChunks(noteId)
-    const revised: TranscriptChunk[] = []
-    for (const c of chunks) {
-      const d = c.providerDetails
+    const clusters = new Map<string, DiarizeCluster>()
+    for (const c of outcome.clusters) if (ids.has(`${c.source}:${c.label}`)) clusters.set(label(c.source, c.label), c)
+    const cleanMs = new Map<string, number>()
+    for (const [source, turns] of results) {
+      // The worker's echo cut: system speech on the mic's timeline.
+      const other = source === 'microphone' ? echoOnMic(results.get('system') ?? [], bySource.get('system') ?? [], bySource.get('microphone') ?? []) : []
+      for (const span of cleanSpans(turns, other)) {
+        const r = label(source, span.speaker)
+        cleanMs.set(r, (cleanMs.get(r) ?? 0) + Math.round(spanSeconds(span) * 1000))
+      }
+    }
+    const placed = (c: TranscriptChunk): { at: { offsetSec: number; file: RecordedFile }; turns: DiarizeSegment[] } | null => {
       const at = offsets.get(`${c.transcription_session_id}:${c.source}`)
       const turns = results.get(c.source)
-      if (!c.is_final || !d?.words.length || !at || !turns) continue
-      const words: ProviderWord[] = d.words.map((w) => {
-        const mid = d.wallClockAnchorMs + (w.s_ms + w.e_ms) / 2
-        const t = at.offsetSec + fileSeconds(at.file, mid)
-        const i = turnAt(turns, t)
-        const { merged_spk: _old, ...rest } = w
-        return i >= 0 ? { ...rest, merged_spk: label(c.source, (turns[i] as DiarizeSegment).speaker) } : rest
-      })
-      revised.push({ ...c, providerDetails: { ...d, words, mergeScopeId: passId } })
+      return c.is_final && c.providerDetails?.words.length && at && turns ? { at, turns } : null
     }
-    if (revised.length) await this.deps.publish(noteId, revised)
+    const pass: DiarizePass = {
+      passId,
+      turns: results,
+      clusters,
+      cleanMs,
+      covers: (c) => placed(c) !== null,
+      labelOf: (c, i) => {
+        const p = placed(c)
+        const d = c.providerDetails
+        const w = d?.words[i]
+        if (!p || !d || !w) return null
+        const mid = d.wallClockAnchorMs + (w.s_ms + w.e_ms) / 2
+        const t = p.at.offsetSec + fileSeconds(p.at.file, mid)
+        const turn = turnAt(p.turns, t)
+        return turn >= 0 ? label(c.source, (p.turns[turn] as DiarizeSegment).speaker) : null
+      }
+    }
     log('info', 'asr:diarize-done', {
       noteId,
       passId,
       speakers: ids.size,
-      chunks: revised.length,
+      clusters: clusters.size,
       files: files.length,
       ms: Date.now() - started
     })
+    await job.run(noteId, pass)
   }
 
-  private runWorker(noteId: string, inputs: DiarizeInput[], windowShiftRatio: number): Promise<Map<string, DiarizeSegment[]> | null> {
+  private runWorker(noteId: string, inputs: DiarizeInput[], windowShiftRatio: number, plan: DiarizeEmbedPlan): Promise<WorkerOutcome | null> {
     const files = this.deps.models.files(MODEL)
     const pick = (name: string): VerifiedFile => files.find((f) => baseName(f.path) === name) as VerifiedFile
     const args: DiarizeWorkerArgs = {
       files: { segmentation: pick('model.onnx'), embedding: pick('wespeaker_en_voxceleb_resnet34.onnx') },
+      // Speaker profiles: the identification embedding per cluster, as the job asked.
+      identification: plan.mode === 'none' ? null : plan.identification,
+      embedMode: plan.identification ? plan.mode : 'none',
       // The pass runs after the meeting, so it may use more of the machine.
       numThreads: Math.max(2, Math.min(4, Math.floor(cpus().length / 2))),
       threshold: CLUSTER_THRESHOLD,
@@ -469,11 +609,15 @@ export class DiarizationService {
     const release = this.deps.models.use(MODEL)
     return new Promise((resolve) => {
       const results = new Map<string, DiarizeSegment[]>()
+      const clusters: DiarizeCluster[] = []
       let proc: UtilityProcess | null = null
       let settled = false
+      // Set by `embedding-started`: diarization is done, and a failure from here keeps it.
+      let embedding = false
       const finish = (ok: boolean, why?: string): void => {
         if (settled) return
         settled = true
+        if (this.cancels.get(noteId) === cancel) this.cancels.delete(noteId)
         clearTimeout(cap)
         try {
           proc?.kill()
@@ -481,10 +625,16 @@ export class DiarizationService {
           // Already gone.
         }
         release()
-        if (!ok) log('warn', 'asr:diarize-pass-failed', { noteId, reason: why ?? 'unknown' })
-        resolve(ok ? results : null)
+        if (!ok && embedding) {
+          // The job continues without voice for the clusters not reported yet.
+          log('warn', 'asr:diarize-embed-ended', { noteId, reason: why ?? 'unknown', clusters: clusters.length })
+          ok = true
+        } else if (!ok) log('warn', 'asr:diarize-pass-failed', { noteId, reason: why ?? 'unknown' })
+        resolve(ok ? { turns: results, clusters } : null)
       }
-      const cap = setTimeout(() => {
+      const cancel = (): void => finish(false, 'cancelled')
+      this.cancels.set(noteId, cancel)
+      let cap = setTimeout(() => {
         // On the compute cap, skip diarization for this note and log it.
         log('warn', 'asr:diarize-cap', { noteId, capMs: PASS_CAP_MS })
         finish(false, 'compute cap reached')
@@ -520,6 +670,19 @@ export class DiarizationService {
               audioMs: m.audioMs,
               computeMs: m.computeMs
             })
+            return
+          case 'embedding-started':
+            // The 10 min cap covered diarization; embedding runs under its own 2 min cap.
+            embedding = true
+            clearTimeout(cap)
+            cap = setTimeout(() => {
+              log('warn', 'asr:diarize-embed-cap', { noteId, capMs: EMBED_CAP_MS })
+              finish(false, 'embedding cap reached')
+            }, EMBED_CAP_MS)
+            return
+          case 'cluster':
+            // Never logged: it carries the vector.
+            clusters.push(m.cluster)
             return
           case 'done':
             finish(true)

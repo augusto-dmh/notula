@@ -45,6 +45,7 @@ import { eventStart, formatTime, isAllDay, noteTime } from '../home/grouping'
 import { SummaryFeedbackBanner } from '../summary-feedback'
 import { TemplateChip } from '../templates'
 import { SourceChip } from '../sources'
+import { usePickMode } from '../speaker-profiles'
 import { SpeakerNameBanner, TranscriptPanel } from '../transcript'
 import { deletePermanently, IconRestore, IconTrash, restoreFromTrash } from '../trash'
 import { noteInNavHistory } from './nav-history'
@@ -305,6 +306,13 @@ function NoteView({ note, reveal: revealQuery }: { note: Note; reveal: string | 
     setSelected(latest?.id ?? null)
     setView(panels.length === 0 || (own && note.private_notes_visible) ? 'private' : 'enhanced')
   }, [view, panelsState.loading, panels, latest, own, note.private_notes_visible])
+
+  // Pick the moment: the transcript opens so the turn can be clicked.
+  const pickMode = usePickMode()
+  const pickingHere = pickMode.active && pickMode.noteId === note.id
+  useEffect(() => {
+    if (pickingHere) setTranscriptOpen(true)
+  }, [pickingHere])
 
   // `?reveal=<quote>` (chat citations): open the transcript and highlight the passage.
   useEffect(() => {

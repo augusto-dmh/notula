@@ -1,39 +1,26 @@
 // SPDX-License-Identifier: Apache-2.0
 // Dev only (unpackaged builds, `NOTULA_DEV_V_HARNESS=1`): scripted checks of the voice and transcript
 // features in the real app, like the egress harness. It seeds scratch notes, drives the retention purge, the section
-// delete, transcript reports and the voiceprint through their real paths (renderer IPC where one
+// delete, transcript reports and the self voice's sample through their real paths (renderer IPC where one
 // exists), and writes `<userData>/v-harness.json`. Voice clips come from `NOTULA_DEV_V_WAV_DIR`
 // (16 kHz mono WAV files made by a test script; nothing is played). Never in a package.
 
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { app } from 'electron'
 import type { TranscriptChunk } from '@shared/types/transcript'
-import type { VoiceprintClassification, VoiceprintIdentifyResult, VoiceprintSampleResult } from '@shared/types/voiceprint'
+import type { VoiceprintSampleResult } from '@shared/types/voiceprint'
 import { getLocalModels } from '../asr/instance'
-import { FramedWriter, randomKey } from '../crypto/blobs'
+import { randomKey } from '../crypto/blobs'
 import type { MainContext } from '../context'
 import { log } from '../log'
-import type { Anchor } from './math'
-import type { VoiceprintSegment } from './protocol'
-
-export interface VHarnessAudio {
-  noteId: string
-  sessionId: string
-  path: string
-  id: string
-  key: Buffer
-  anchors: Anchor[]
-  samples: number
-}
+import type { VoiceprintClassification } from './math'
 
 export interface VHarnessHooks {
   purge?(trigger: 'startup' | 'daily'): Promise<void>
   notice?(): Promise<void>
   sample?(pcm: Buffer, durationMs: number): Promise<VoiceprintSampleResult>
-  calibrate?(pcm: Buffer): Promise<{ self: number | null; best: number; margin: number; speakers: number; segments: VoiceprintSegment[] } | null>
-  relabel?(noteId: string, audio: VHarnessAudio, chunks: TranscriptChunk[]): Promise<VoiceprintIdentifyResult>
   classify?(chunks: TranscriptChunk[], apps: string[]): VoiceprintClassification
 }
 
@@ -109,7 +96,20 @@ async function run(ctx: MainContext): Promise<void> {
       }))
       await ctx.storage.upsertChunks(chunks)
       await ctx.storage.replaceSpeakerNameSuggestions(note.id, [
-        { identityKey: 'r1', label: 'Speaker A', name: 'Alex', evidenceTypes: [], channel: 'system', labelStream: 'reconciled', transcriptExcerpts: [phrase], position: 0 }
+        {
+          identityKey: 'r1',
+          label: 'Speaker A',
+          name: 'Alex',
+          evidenceTypes: [],
+          channel: 'system',
+          labelStream: 'reconciled',
+          transcriptExcerpts: [phrase],
+          position: 0,
+          band: 'suggest',
+          candidates: [{ name: 'Alex', source: 'conversation' }],
+          passId: null,
+          pending: false
+        }
       ])
       await ctx.storage.createTranscriptReport({
         note_id: note.id,
@@ -252,122 +252,56 @@ async function run(ctx: MainContext): Promise<void> {
     check('two meeting apps: copied with several-meeting-windows', two.ok && two.value.status === 'copied' && two.value.reason === 'several-meeting-windows', two)
     ctx.bus.emit('meetings:mic-apps', { apps: [], previous: [] })
 
-    // ---------- voiceprint ----------
+    // ---------- the self voice ----------
     const wavDir = process.env.NOTULA_DEV_V_WAV_DIR ?? ''
-    await ctx.settings.set('voiceprint.enabled', false)
-    const offSet = await ipc('window.notula.voiceprint.setPassive({ enabled: true })')
-    check('passive is refused while the feature is off', !offSet.ok, offSet)
-    ctx.bus.emit('capture:started', { noteId: capNote.id, sessionId: randomUUID(), startedAt: iso(Date.now()) })
-    await new Promise((r) => setTimeout(r, 800))
-    const tmp = join(ctx.userDataPath, 'voiceprint-tmp')
-    check('feature off: no temp audio file', !existsSync(tmp) || readdirCount(tmp) === 0)
-    await ctx.settings.set('voiceprint.enabled', true)
+    const retired = await ipc<boolean>('Promise.resolve(window.notula.voiceprint.getStatus === undefined && window.notula.voiceprint.forget === undefined)')
+    check('the retired voiceprint channels are gone from the bridge', retired.ok && retired.value, retired)
+    check('the retired temp folder is gone', !existsSync(join(ctx.userDataPath, 'voiceprint-tmp')))
+    await ctx.settings.set('speakers.selfVoice', false)
     const models = getLocalModels(ctx)
-    if (!models.isReady('diarization-en')) void models.download('diarization-en').catch(() => undefined)
-    for (let i = 0; i < 240 && !models.isReady('diarization-en'); i++) await new Promise((r) => setTimeout(r, 500))
-    check('speaker model ready', models.isReady('diarization-en'))
-    if (wavDir && vHarness.sample && vHarness.calibrate && vHarness.relabel && vHarness.classify) {
+    for (const id of ['diarization-en', 'speaker-id'] as const) if (!models.isReady(id)) void models.download(id).catch(() => undefined)
+    for (let i = 0; i < 240 && !(models.isReady('diarization-en') && models.isReady('speaker-id')); i++) await new Promise((r) => setTimeout(r, 500))
+    check('speaker models ready', models.isReady('diarization-en') && models.isReady('speaker-id'))
+    if (wavDir && vHarness.sample && vHarness.classify) {
       const sample = wav(wavDir, 'zira_sample.wav').subarray(0, 30 * 32_000)
       const enrolled = await vHarness.sample(Buffer.from(sample), 30_000)
       check('a 30 s clear sample enrols', enrolled.enrolled, enrolled)
+      check('recording a sample turns Recognize my voice on', (await ctx.settings.get('speakers.selfVoice')) === true)
       const noise = Buffer.alloc(30 * 32_000)
       for (let i = 0; i < noise.length; i += 2) noise.writeInt16LE(Math.round((Math.random() * 2 - 1) * 9000), i)
       const noisy = await vHarness.sample(noise, 30_000)
       check('a noisy sample is refused', !noisy.enrolled && noisy.reason !== null, noisy)
-      const st1 = await ipc<{ profile: { present: boolean; totalSpeechMs: number; centroidCount: number } }>('window.notula.voiceprint.getStatus()')
-      check('the status carries no vector', st1.ok && !JSON.stringify(st1.value).includes('vector') && st1.value.profile.present, st1)
-      const duo = wav(wavDir, 'duo.wav')
-      const cal = await vHarness.calibrate(duo)
-      check('two voices: the enrolled one is matched', !!cal && cal.self !== null && cal.speakers >= 2, cal && { self: cal.self, best: cal.best, margin: cal.margin, speakers: cal.speakers })
-      const other = await vHarness.calibrate(wav(wavDir, 'zira_more.wav'))
-      check('calibration: same voice, other text', !!other, other && { self: other.self, best: other.best, margin: other.margin, speakers: other.speakers })
-      // In person: a NAU1 mic temp file and mic chunks on its timeline, then the real relabel.
-      if (cal) {
-        const note = await ctx.storage.createNote({ origin: 'new_note_button', title: 'V harness in person', created_via: 'Windows' })
-        const sessionId = randomUUID()
-        const t0 = Date.now() - 400_000
-        await ctx.storage.createSession({ id: sessionId, document_id: note.id, provider: 'local', model: 'harness', language: 'en', started_at: iso(t0) })
-        const ident = await ctx.storage.identity()
-        const chunks: TranscriptChunk[] = cal.segments.map((s, i) => ({
-          id: randomUUID(),
-          document_id: note.id,
-          workspace_id: ident.workspaceId,
-          owner_id: ident.ownerId,
-          transcription_session_id: sessionId,
-          source: 'microphone',
-          start_timestamp: iso(t0 + s.start * 1000),
-          end_timestamp: iso(t0 + s.end * 1000),
-          text: `in person ${i}`,
-          is_final: true,
-          detected_speaker_name: null,
-          detectedSpeaker: null
-        }))
-        await ctx.storage.upsertChunks(chunks)
-        check('classification of a mic-only 60 s+ meeting is in_person', vHarness.classify(chunks, []) === 'in_person')
-        check('a Zoom call classifies online', vHarness.classify(chunks, ['us.zoom.xos']) === 'online')
-        mkdirSync(tmp, { recursive: true })
-        const id = randomUUID()
-        const key = randomKey()
-        const path = join(tmp, `${id}.naud`)
-        const w = await FramedWriter.create({ path, key, id })
-        w.append(duo)
-        await w.close()
-        const head = readFileSync(path).subarray(0, 4).toString('latin1')
-        check('the temp audio is NAU1 at rest', head === 'NAU1' && !readFileSync(path).includes(duo.subarray(32_000, 32_064)), head)
-        const r = await vHarness.relabel(note.id, { noteId: note.id, sessionId, path, id, key, anchors: [{ sample: 0, unixMs: t0 }], samples: duo.length / 2 }, chunks)
-        rmSync(path, { force: true })
-        const after = await ctx.storage.getTranscript(note.id)
-        const names = new Set(after.map((c) => c.detected_speaker_name))
-        check(
-          'in person: labels Me and Speaker 2 with diarized ids and source diarization',
-          r.action === 'relabelled' && r.selfMatched && names.has('Me') && names.has('Speaker 2') && after.some((c) => c.detectedSpeaker?.participantId.startsWith('diarized-')),
-          { r, names: [...names] }
-        )
-      }
-      const before = await ipc<{ profile: { totalSpeechMs: number } }>('window.notula.voiceprint.getStatus()')
-      const more = await vHarness.sample(wav(wavDir, 'zira_more.wav').subarray(0, 30 * 32_000), 30_000)
-      const grown = await ipc<{ profile: { totalSpeechMs: number; centroidCount: number } }>('window.notula.voiceprint.getStatus()')
-      check(
-        'folding more speech grows the profile',
-        more.enrolled && before.ok && grown.ok && grown.value.profile.totalSpeechMs > before.value.profile.totalSpeechMs,
-        grown.ok ? grown.value.profile : grown
-      )
+      const st1 = await ipc<{ self: { present: boolean; sampleCount: number } }>('window.notula.speakers.getStatus()')
+      check('the status carries no vector and counts the sample', st1.ok && !JSON.stringify(st1.value).includes('vector') && st1.value.self.sampleCount === 1, st1)
+      const ident = await ctx.storage.identity()
+      const chunks: TranscriptChunk[] = Array.from({ length: 4 }, (_, i) => ({
+        id: randomUUID(),
+        document_id: 'harness',
+        workspace_id: ident.workspaceId,
+        owner_id: ident.ownerId,
+        transcription_session_id: 'harness',
+        source: 'microphone',
+        start_timestamp: iso(now + i * 20_000),
+        end_timestamp: iso(now + i * 20_000 + 19_000),
+        text: `in person ${i}`,
+        is_final: true,
+        detected_speaker_name: null,
+        detectedSpeaker: null
+      }))
+      check('classification of a mic-only 60 s+ meeting is in_person', vHarness.classify(chunks, []) === 'in_person')
+      check('a Zoom call classifies online', vHarness.classify(chunks, ['us.zoom.xos']) === 'online')
     } else {
       check('voice clips available', false, 'NOTULA_DEV_V_WAV_DIR not set')
     }
-    // A marker vector, to grep for after the run (the test script searches userData and the log).
-    const p = await ctx.storage.getVoiceprint('wespeaker-en-voxceleb-resnet34')
-    if (p) {
-      await ctx.storage.saveVoiceprint({ ...p, centroids: [...p.centroids.slice(0, 3), { vector: Array.from({ length: 256 }, () => 0.0123456789), totalSpeechMs: 1, updatedAt: iso(Date.now()) }] })
-    }
-    // The decrypted export must leave voiceprints out: run it while the profile exists.
-    const folder = await ipc<{ path: string } | null>('window.notula.dataExport.chooseFolder()')
-    if (folder.ok && folder.value) {
-      const startedExport = await ipc<{ exportId: string }>(
-        `window.notula.dataExport.start({ folder: ${JSON.stringify(folder.value.path)}, include: { notes: false, transcripts: false, index: false, encryptedDb: false, decryptedDb: true }, includeTrash: false, confirmedPlaintext: true, confirmedDecryptedDb: true })`
-      )
-      check('decrypted export started', startedExport.ok, startedExport)
-      await new Promise((r) => setTimeout(r, 6_000))
-    }
-    const forgot = await ipc<{ ok: boolean }>('window.notula.voiceprint.forget()')
-    const st2 = await ipc<{ profile: { present: boolean } }>('window.notula.voiceprint.getStatus()')
-    check(
-      'Forget: present false and the rows are gone',
-      forgot.ok && st2.ok && !st2.value.profile.present && (await ctx.storage.getVoiceprint('wespeaker-en-voxceleb-resnet34')) === null,
-      st2
-    )
+    const roster = await ipc<{ personId?: string; isSelf: boolean }[]>('window.notula.speakerPeople.list({})')
+    const me = roster.ok ? roster.value.find((r) => r.isSelf)?.personId : undefined
+    const forgot = me ? await ipc<{ ok: boolean }>(`window.notula.speakerPeople.forgetVoice({ personId: ${JSON.stringify(me)}, reason: 'forget', confirmed: true })`) : null
+    const st2 = await ipc<{ self: { present: boolean } }>('window.notula.speakers.getStatus()')
+    check('Forget my voice: no self sample left', !!forgot?.ok && st2.ok && !st2.value.self.present, st2)
   } catch (err) {
     check('harness ran to the end', false, err instanceof Error ? err.stack : String(err))
   }
   const failed = checks.filter((c) => !c.ok).length
   writeFileSync(out, JSON.stringify({ passed: checks.length - failed, failed, checks }, null, 2))
   log('info', 'v-harness:done', { passed: checks.length - failed, failed })
-}
-
-function readdirCount(dir: string): number {
-  try {
-    return readdirSync(dir).length
-  } catch {
-    return 0
-  }
 }

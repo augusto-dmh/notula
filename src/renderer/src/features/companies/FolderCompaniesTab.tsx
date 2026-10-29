@@ -90,7 +90,7 @@ export function FolderCompaniesTab({ folderId }: { folderId: string }): JSX.Elem
             !q ||
             c.name.toLowerCase().includes(q) ||
             c.domain.includes(q) ||
-            c.people.some((p) => p.name.toLowerCase().includes(q) || p.email.toLowerCase().includes(q))
+            c.people.some((p) => p.name.toLowerCase().includes(q) || (p.email ?? '').toLowerCase().includes(q))
         )
       ),
     [rows, q, sorted]

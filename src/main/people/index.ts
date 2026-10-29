@@ -20,6 +20,7 @@ const MAX_ID = 200
 /** Note changes within this window coalesce into one rebuild request (inside the 5 s idle wait). */
 const SETTLE_MS = 1_000
 const NOTE_TABLES = ['documents', 'calendar_events']
+const SPEAKER_TABLES = ['speaker_people', 'speaker_exemplars']
 
 function bad(message: string): Error {
   return expected(notulaError('invalid-input', message))
@@ -29,7 +30,8 @@ function bad(message: string): Error {
 export function listQuery(raw: unknown): { filter: PeopleFilter; folderId?: string; query?: string } {
   const r = (raw ?? {}) as Record<string, unknown>
   const filter = r['filter'] ?? 'all'
-  if (filter !== 'all' && filter !== 'met') throw bad('filter must be all or met.')
+  // `voice`: people with a remembered voice.
+  if (filter !== 'all' && filter !== 'met' && filter !== 'voice') throw bad('filter must be all, met or voice.')
   const out: { filter: PeopleFilter; folderId?: string; query?: string } = { filter }
   if (r['folderId'] !== undefined && r['folderId'] !== null) {
     if (typeof r['folderId'] !== 'string' || !r['folderId'] || r['folderId'].length > MAX_ID) throw bad('folderId is invalid.')
@@ -84,7 +86,8 @@ export function registerPeople(ctx: MainContext): void {
 
   let folderTimer: ReturnType<typeof setTimeout> | null = null
   ctx.bus.on('storage:changed', (change) => {
-    if (change.tables.includes('people_maps')) pushPeopleChanged(ctx)
+    // A persisted speaker person or a voice changes the rows' `personId` and `hasVoice`.
+    if (change.tables.includes('people_maps') || change.tables.some((t) => SPEAKER_TABLES.includes(t))) pushPeopleChanged(ctx)
     if (change.tables.some((t) => NOTE_TABLES.includes(t))) schedule()
     if (change.tables.includes('folder_notes') && !folderTimer) {
       folderTimer = setTimeout(() => {

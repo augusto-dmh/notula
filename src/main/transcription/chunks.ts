@@ -144,8 +144,10 @@ export class ChunkStore {
   }
 
   /**
-   * Revised chunks of an earlier session (the diarization pass): written through
-   * storage at once and pushed as `transcript:changed`. A live copy is replaced too.
+   * Revised chunks of an earlier session: written through storage at once and pushed as
+   * `transcript:changed`. A live copy is replaced too. Speaker and position fields are
+   * revised only through the note's label-write queue (`speakers/label-queue.ts`), which
+   * calls this with the chunks it patched inside its turn.
    */
   async publishRevisions(noteId: string, rows: TranscriptChunk[]): Promise<void> {
     if (!rows.length) return

@@ -1,0 +1,354 @@
+{
+  "modelSha": "aa3cfc16963a10586a9393f5035d6d6b57e98d358b347f80c2a30bf4f00ceba2",
+  "reportHash": null,
+  "createdAt": "2026-10-29T00:00:00.000Z",
+  "benchVersion": 0,
+  "conditions": [
+    {
+      "channel": "mic",
+      "language": "pt",
+      "bucket": "<10s",
+      "autoEnabled": false,
+      "tauAuto": 0.97,
+      "tauSuggest": 0.85,
+      "margin": 0.1,
+      "tieMargin": 0.03,
+      "logistic": {
+        "a": 12,
+        "b": -6
+      },
+      "autoClusters": 0,
+      "wrongNames": 0,
+      "wrongNameUpper": null,
+      "coverage": null
+    },
+    {
+      "channel": "mic",
+      "language": "pt",
+      "bucket": "10-30s",
+      "autoEnabled": false,
+      "tauAuto": 0.97,
+      "tauSuggest": 0.8,
+      "margin": 0.1,
+      "tieMargin": 0.03,
+      "logistic": {
+        "a": 12,
+        "b": -6
+      },
+      "autoClusters": 0,
+      "wrongNames": 0,
+      "wrongNameUpper": null,
+      "coverage": null
+    },
+    {
+      "channel": "mic",
+      "language": "pt",
+      "bucket": ">=30s",
+      "autoEnabled": false,
+      "tauAuto": 0.97,
+      "tauSuggest": 0.75,
+      "margin": 0.1,
+      "tieMargin": 0.03,
+      "logistic": {
+        "a": 12,
+        "b": -6
+      },
+      "autoClusters": 0,
+      "wrongNames": 0,
+      "wrongNameUpper": null,
+      "coverage": null
+    },
+    {
+      "channel": "mic",
+      "language": "en",
+      "bucket": "<10s",
+      "autoEnabled": false,
+      "tauAuto": 0.97,
+      "tauSuggest": 0.85,
+      "margin": 0.1,
+      "tieMargin": 0.03,
+      "logistic": {
+        "a": 12,
+        "b": -6
+      },
+      "autoClusters": 0,
+      "wrongNames": 0,
+      "wrongNameUpper": null,
+      "coverage": null
+    },
+    {
+      "channel": "mic",
+      "language": "en",
+      "bucket": "10-30s",
+      "autoEnabled": false,
+      "tauAuto": 0.97,
+      "tauSuggest": 0.8,
+      "margin": 0.1,
+      "tieMargin": 0.03,
+      "logistic": {
+        "a": 12,
+        "b": -6
+      },
+      "autoClusters": 0,
+      "wrongNames": 0,
+      "wrongNameUpper": null,
+      "coverage": null
+    },
+    {
+      "channel": "mic",
+      "language": "en",
+      "bucket": ">=30s",
+      "autoEnabled": false,
+      "tauAuto": 0.97,
+      "tauSuggest": 0.75,
+      "margin": 0.1,
+      "tieMargin": 0.03,
+      "logistic": {
+        "a": 12,
+        "b": -6
+      },
+      "autoClusters": 0,
+      "wrongNames": 0,
+      "wrongNameUpper": null,
+      "coverage": null
+    },
+    {
+      "channel": "mic",
+      "language": "other",
+      "bucket": "<10s",
+      "autoEnabled": false,
+      "tauAuto": 0.97,
+      "tauSuggest": 0.85,
+      "margin": 0.1,
+      "tieMargin": 0.03,
+      "logistic": {
+        "a": 12,
+        "b": -6
+      },
+      "autoClusters": 0,
+      "wrongNames": 0,
+      "wrongNameUpper": null,
+      "coverage": null
+    },
+    {
+      "channel": "mic",
+      "language": "other",
+      "bucket": "10-30s",
+      "autoEnabled": false,
+      "tauAuto": 0.97,
+      "tauSuggest": 0.8,
+      "margin": 0.1,
+      "tieMargin": 0.03,
+      "logistic": {
+        "a": 12,
+        "b": -6
+      },
+      "autoClusters": 0,
+      "wrongNames": 0,
+      "wrongNameUpper": null,
+      "coverage": null
+    },
+    {
+      "channel": "mic",
+      "language": "other",
+      "bucket": ">=30s",
+      "autoEnabled": false,
+      "tauAuto": 0.97,
+      "tauSuggest": 0.75,
+      "margin": 0.1,
+      "tieMargin": 0.03,
+      "logistic": {
+        "a": 12,
+        "b": -6
+      },
+      "autoClusters": 0,
+      "wrongNames": 0,
+      "wrongNameUpper": null,
+      "coverage": null
+    },
+    {
+      "channel": "system",
+      "language": "pt",
+      "bucket": "<10s",
+      "autoEnabled": false,
+      "tauAuto": 0.97,
+      "tauSuggest": 0.85,
+      "margin": 0.1,
+      "tieMargin": 0.03,
+      "logistic": {
+        "a": 11,
+        "b": -6
+      },
+      "autoClusters": 0,
+      "wrongNames": 0,
+      "wrongNameUpper": null,
+      "coverage": null
+    },
+    {
+      "channel": "system",
+      "language": "pt",
+      "bucket": "10-30s",
+      "autoEnabled": false,
+      "tauAuto": 0.97,
+      "tauSuggest": 0.8,
+      "margin": 0.1,
+      "tieMargin": 0.03,
+      "logistic": {
+        "a": 11,
+        "b": -6
+      },
+      "autoClusters": 0,
+      "wrongNames": 0,
+      "wrongNameUpper": null,
+      "coverage": null
+    },
+    {
+      "channel": "system",
+      "language": "pt",
+      "bucket": ">=30s",
+      "autoEnabled": false,
+      "tauAuto": 0.97,
+      "tauSuggest": 0.75,
+      "margin": 0.1,
+      "tieMargin": 0.03,
+      "logistic": {
+        "a": 11,
+        "b": -6
+      },
+      "autoClusters": 0,
+      "wrongNames": 0,
+      "wrongNameUpper": null,
+      "coverage": null
+    },
+    {
+      "channel": "system",
+      "language": "en",
+      "bucket": "<10s",
+      "autoEnabled": false,
+      "tauAuto": 0.97,
+      "tauSuggest": 0.85,
+      "margin": 0.1,
+      "tieMargin": 0.03,
+      "logistic": {
+        "a": 11,
+        "b": -6
+      },
+      "autoClusters": 0,
+      "wrongNames": 0,
+      "wrongNameUpper": null,
+      "coverage": null
+    },
+    {
+      "channel": "system",
+      "language": "en",
+      "bucket": "10-30s",
+      "autoEnabled": false,
+      "tauAuto": 0.97,
+      "tauSuggest": 0.8,
+      "margin": 0.1,
+      "tieMargin": 0.03,
+      "logistic": {
+        "a": 11,
+        "b": -6
+      },
+      "autoClusters": 0,
+      "wrongNames": 0,
+      "wrongNameUpper": null,
+      "coverage": null
+    },
+    {
+      "channel": "system",
+      "language": "en",
+      "bucket": ">=30s",
+      "autoEnabled": false,
+      "tauAuto": 0.97,
+      "tauSuggest": 0.75,
+      "margin": 0.1,
+      "tieMargin": 0.03,
+      "logistic": {
+        "a": 11,
+        "b": -6
+      },
+      "autoClusters": 0,
+      "wrongNames": 0,
+      "wrongNameUpper": null,
+      "coverage": null
+    },
+    {
+      "channel": "system",
+      "language": "other",
+      "bucket": "<10s",
+      "autoEnabled": false,
+      "tauAuto": 0.97,
+      "tauSuggest": 0.85,
+      "margin": 0.1,
+      "tieMargin": 0.03,
+      "logistic": {
+        "a": 11,
+        "b": -6
+      },
+      "autoClusters": 0,
+      "wrongNames": 0,
+      "wrongNameUpper": null,
+      "coverage": null
+    },
+    {
+      "channel": "system",
+      "language": "other",
+      "bucket": "10-30s",
+      "autoEnabled": false,
+      "tauAuto": 0.97,
+      "tauSuggest": 0.8,
+      "margin": 0.1,
+      "tieMargin": 0.03,
+      "logistic": {
+        "a": 11,
+        "b": -6
+      },
+      "autoClusters": 0,
+      "wrongNames": 0,
+      "wrongNameUpper": null,
+      "coverage": null
+    },
+    {
+      "channel": "system",
+      "language": "other",
+      "bucket": ">=30s",
+      "autoEnabled": false,
+      "tauAuto": 0.97,
+      "tauSuggest": 0.75,
+      "margin": 0.1,
+      "tieMargin": 0.03,
+      "logistic": {
+        "a": 11,
+        "b": -6
+      },
+      "autoClusters": 0,
+      "wrongNames": 0,
+      "wrongNameUpper": null,
+      "coverage": null
+    }
+  ],
+  "farCosine": {
+    "mic": 0.3,
+    "system": 0.25
+  },
+  "fusion": {
+    "voice": {
+      "weight": 1,
+      "offset": 0
+    },
+    "app": {
+      "weight": 1,
+      "offset": 0
+    },
+    "conversation": {
+      "weight": 0.8,
+      "offset": 0
+    },
+    "elimination": {
+      "weight": 0.5,
+      "offset": 0
+    }
+  }
+}
