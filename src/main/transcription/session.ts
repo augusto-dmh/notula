@@ -15,6 +15,7 @@ import type { AsrProviderId, ProviderWord, TranscriptChunk } from '@shared/types
 import type { AudioRecorder, RecordedFile } from '../asr/diarize'
 import type { SessionRecorder } from '../recordings/service'
 import type { StorageIdentity } from '../storage/api'
+import { offRecordResult } from '../capture/off-record'
 import { log } from '../log'
 import { AwakeBudget, awakeTimer, withAwakeTimeout } from './awake'
 import type { ChunkStore } from './chunks'
@@ -587,6 +588,7 @@ class SourceStream {
     if (attribution && r.isFinal) chunk = this.session.attribution?.stamp(chunk) ?? chunk
     this.sanityCheck(chunk, startUnix, endUnix, conn.providerId)
     this.session.store.upsert(chunk)
+    offRecordResult(chunk, r, this.pending.size)
   }
 
   private sanityCheck(chunk: TranscriptChunk, startUnix: number, endUnix: number, provider: AsrProviderId): void {

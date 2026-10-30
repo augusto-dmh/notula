@@ -6,7 +6,7 @@ import { createElement, lazy, Suspense, useEffect, useMemo, type JSX } from 'rea
 import type { CaptureSystemState } from '@shared/types/capture'
 import type { SourceState, StopReason } from '@shared/types/common'
 import { AudioHealthBanner as HealthBanner } from './AudioHealthBanner'
-import { MeetingPrompts as Prompts } from './MeetingPrompts'
+import { MeetingBanners as Banners, MeetingPrompts as Prompts } from './MeetingPrompts'
 import {
   mountCapture,
   startTranscription as storeStart,
@@ -18,9 +18,14 @@ export { MeetingControls } from './MeetingControls'
 
 // ---------- prompts and audio health ----------
 
-/** Above the note dock: "Resume transcript?" and the inactivity card. */
+/** Above the note dock: the off-the-record choice, "Resume transcript?" and the inactivity card. */
 export function MeetingPrompts({ noteId }: { noteId: string }): JSX.Element | null {
   return createElement(Prompts, { noteId })
+}
+
+/** At the top of the note: the inactivity stop and the pause for privacy, each with Resume. */
+export function MeetingBanners({ noteId }: { noteId: string }): JSX.Element | null {
+  return createElement(Banners, { noteId })
 }
 
 /** At the top of the transcript panel: the audio-health warnings. */

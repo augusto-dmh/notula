@@ -62,9 +62,20 @@ export function bindUpdaterActions(a: UpdaterActions): void {
   actions = a
 }
 
-/** "Check for Updates…" (app menu, dock) and the tray's check row. */
+/** The source of a check the user started, until its first outcome is shown. */
+let manualCheck: string | null = null
+
+/** "Check for Updates…" (app menu, dock) and the tray's check row: a user-initiated check. */
 export function checkForUpdatesNow(source: string): void {
+  manualCheck = source
   actions.check(source)
+}
+
+/** Takes the user-initiated mark: the first outcome after it gets one message box. */
+export function takeManualCheck(): string | null {
+  const source = manualCheck
+  manualCheck = null
+  return source
 }
 
 /** The tray's install row and the sidebar's Install update: install at once ("manual"). */

@@ -75,6 +75,7 @@ export type LabsSettingKey =
   | 'integrations.pipedriveAshby.enabled'
   | 'sources.enabled'
   | 'capture.restartOnStillHere'
+  | 'capture.offRecordPrompt'
 
 export interface LabsFeature {
   key: LabsSettingKey
@@ -224,6 +225,14 @@ export const LABS_FEATURES: readonly LabsFeature[] = [
     description: 'If the transcript stalled, Notula reconnects transcription and restarts the meeting audio.',
     section: 'meetings',
     kind: 'switch'
+  },
+  {
+    key: 'capture.offRecordPrompt',
+    label: 'Off-the-record check',
+    description:
+      'When someone asks to keep what follows out of the notes, Notula checks with your AI provider (a fast model works best) and offers to erase it and pause.',
+    section: 'meetings',
+    kind: 'custom'
   },
   {
     key: 'sources.enabled',

@@ -76,6 +76,7 @@ import type {
   ToolCallUpdate
 } from './types/chat'
 import type { ConsentStatus } from './types/consent'
+import type { OffRecordAnswerRequest, OffRecordPaused, OffRecordPrompt } from './types/off-record'
 import type {
   CustomerCallsBacklogNote,
   CustomerCallsStatus,
@@ -691,7 +692,8 @@ export interface InvokeChannels {
   'consent:copy-message': [{ noteId?: string }, { ok: boolean }]
   /** Records `confirmed`. */
   'consent:mark-posted': [{ noteId: string }, ConsentStatus]
-  'consent:resolve-pending': [{ noteId: string; action: 'start-now' | 'cancel' }, void]
+  /** The off-the-record choice; a `promptId` that is not current is ignored (`ok: false`). */
+  'off-record:answer': [OffRecordAnswerRequest, { ok: boolean }]
   /**
    * Record my voice: resolves when `durationMs` of audio has arrived on
    * `voiceprint:sample-audio`, or on cancel. A sample that passes adds a self exemplar and
@@ -1157,6 +1159,9 @@ export interface PushChannels {
 
   // ---------- privacy, workflows, Labs and the meeting windows ----------
   'consent:status-changed': ConsentStatus
+  /** Every window target, the bubble included; null clears it. */
+  'off-record:prompt': OffRecordPrompt | null
+  'off-record:paused': OffRecordPaused | null
   'voiceprint:sample-progress': { sessionId: string; elapsedMs: number; level: number }
   'retention:changed': RetentionState
   /** The meeting-dock window. */
@@ -1764,7 +1769,11 @@ export interface NotulaApi {
     postNow: InvokeMember<'consent:post-now'>
     copyMessage: InvokeMember<'consent:copy-message'>
     markPosted: InvokeMember<'consent:mark-posted'>
-    resolvePending: InvokeMember<'consent:resolve-pending'>
+  }
+  offRecord: {
+    onPrompt: PushMember<'off-record:prompt'>
+    onPaused: PushMember<'off-record:paused'>
+    answer: InvokeMember<'off-record:answer'>
   }
   voiceprint: {
     recordSample: InvokeMember<'voiceprint:record-sample'>

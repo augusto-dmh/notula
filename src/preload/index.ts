@@ -1037,8 +1037,24 @@ const api: NotulaApi = {
     },
     postNow: (req) => ipcRenderer.invoke('consent:post-now' satisfies InvokeChannel, req),
     copyMessage: (req) => ipcRenderer.invoke('consent:copy-message' satisfies InvokeChannel, req),
-    markPosted: (req) => ipcRenderer.invoke('consent:mark-posted' satisfies InvokeChannel, req),
-    resolvePending: (req) => ipcRenderer.invoke('consent:resolve-pending' satisfies InvokeChannel, req)
+    markPosted: (req) => ipcRenderer.invoke('consent:mark-posted' satisfies InvokeChannel, req)
+  },
+  offRecord: {
+    onPrompt: (cb) => {
+      const listener = (_e: IpcRendererEvent, p: PushPayload<'off-record:prompt'>): void => cb(p)
+      ipcRenderer.on('off-record:prompt' satisfies PushChannel, listener)
+      return () => {
+        ipcRenderer.removeListener('off-record:prompt' satisfies PushChannel, listener)
+      }
+    },
+    onPaused: (cb) => {
+      const listener = (_e: IpcRendererEvent, p: PushPayload<'off-record:paused'>): void => cb(p)
+      ipcRenderer.on('off-record:paused' satisfies PushChannel, listener)
+      return () => {
+        ipcRenderer.removeListener('off-record:paused' satisfies PushChannel, listener)
+      }
+    },
+    answer: (req) => ipcRenderer.invoke('off-record:answer' satisfies InvokeChannel, req)
   },
   voiceprint: {
     recordSample: (req) => ipcRenderer.invoke('voiceprint:record-sample' satisfies InvokeChannel, req),

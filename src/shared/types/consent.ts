@@ -25,8 +25,6 @@ export interface ConsentStatus {
   status: ConsentStatusValue | null
   reason: ConsentReason | null
   at: IsoTime | null
-  /** Capture is held until the notice is handled. */
-  pending: boolean
   waitingFor: 'other-speaker' | 'chat-field' | 'draft' | null
 }
 
@@ -39,6 +37,5 @@ export const CONSENT_LIMITS = {
   budgetMs: 600_000,
   watchdogMs: 780_000,
   stopGraceMs: 5_000,
-  restoreClipboardMs: 750,
-  appGoneMs: 3_000
+  restoreClipboardMs: 750
 } as const

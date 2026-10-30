@@ -100,6 +100,8 @@ export interface Settings {
   'capture.llmAutoStop': boolean
   /** Labs: "I'm still here" on the inactivity warning also restarts transcription and audio. */
   'capture.restartOnStillHere': boolean
+  /** Labs: listen for a request to keep what follows out of the notes, and offer to pause. */
+  'capture.offRecordPrompt': boolean
   /** Word-level speaker turns ("Separate speakers (on-device)"). On by default: speaker profiles need it. */
   'transcription.diarization': boolean
   /** Labs: multi-language cloud transcription is told the OS preferred languages. */
@@ -268,7 +270,6 @@ export interface Settings {
   /** '' = CONSENT_DEFAULT_MESSAGE. */
   'consent.message': string
   'consent.waitForOtherSpeaker': boolean
-  'consent.deferTranscription': boolean
   /** Labs. */
   'transcriptReport.enabled': boolean
   /** Main-only (`retention:set`, `retention:cancel-pending`). */
@@ -434,6 +435,7 @@ export const DEFAULT_SETTINGS: Settings = {
   'capture.autoStopWhenMeetingAppCloses': true,
   'capture.llmAutoStop': false,
   'capture.restartOnStillHere': false,
+  'capture.offRecordPrompt': false,
   'transcription.diarization': true,
   'transcription.languageHints': false,
   'asr.deepgram.multilingualVersion': 'default',
@@ -526,7 +528,6 @@ export const DEFAULT_SETTINGS: Settings = {
   'consent.meet': true,
   'consent.message': '',
   'consent.waitForOtherSpeaker': true,
-  'consent.deferTranscription': false,
   'transcriptReport.enabled': false,
   'retention.transcriptHours': null,
   'retention.pendingHours': null,

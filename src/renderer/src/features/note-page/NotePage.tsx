@@ -24,9 +24,9 @@ import { ActionItemDrafts, ActionItemThumbs } from '../action-items'
 import { addNoteImages, AttachedLinks, ImageDropOverlay, isImageFile, NoteImages, useImageDrop } from '../attachments'
 import { PrepBriefCard } from '../briefs'
 import { NoteAttendees } from '../calendar'
-import { MeetingControls, MeetingPrompts, useCaptureState } from '../capture'
+import { MeetingBanners, MeetingControls, MeetingPrompts, useCaptureState } from '../capture'
 import { NoteChatPanel } from '../chat'
-import { ConsentNoteStatus, ConsentPendingBanner } from '../consent'
+import { ConsentNoteStatus } from '../consent'
 import { DemoNoteBar } from '../demo'
 import {
   EnhancedView,
@@ -521,8 +521,8 @@ function NoteView({ note, reveal: revealQuery }: { note: Note; reveal: string | 
           <div className="page__scroll note-scroll" ref={scrollRef}>
             <article className="note-column" onPaste={onPasteImages}>
               {trashed ? <TrashedBanner note={note} /> : null}
-              {/* The consent banner while capture waits on the notice, top of the page. */}
-              {trashed ? null : <ConsentPendingBanner noteId={note.id} />}
+              {/* The inactivity stop and the privacy pause, top of the page. */}
+              {trashed ? null : <MeetingBanners noteId={note.id} />}
               {/* The speaker-name suggestion banner, top of the page; the transcript panel carries it while open. */}
               {trashed || transcriptOpen ? null : <SpeakerNameBanner noteId={note.id} />}
               <header className="note-header" onKeyDown={onHeaderKeyDown}>

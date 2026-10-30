@@ -29,7 +29,9 @@ import {
 } from '@shared/types/enhance'
 import type { Note } from '@shared/types/notes'
 import type { Panel } from '@shared/types/panels'
+import { DELETED_CHUNK_MARKER } from '@shared/types/transcript'
 import type { MainContext } from '../context'
+import { expected } from '../ipc-expected'
 import { log } from '../log'
 import { enhanceError, EnhanceError, toEnhanceError } from './errors'
 import { buildPromptInputs, withTranscriptText } from './inputs'
@@ -216,6 +218,7 @@ export class Generator {
 
     const note = await this.ctx.storage.getNote(noteId)
     if (!note) throw notulaError('not-found', 'That note does not exist.')
+    if (!internal.transcriptText) await this.skipPurged(note, auto)
 
     if (panelId) {
       const existing = await this.ctx.storage.getPanel(panelId)
@@ -250,6 +253,21 @@ export class Generator {
       ...(internal.transcriptText ? { transcriptText: internal.transcriptText } : {})
     })
     return { panelId: panel.id }
+  }
+
+  /**
+   * A note whose transcript was deleted (retention) and has no live line left gets no panel and
+   * no model call. A note that never had a transcript is unaffected. The user's request gets
+   * the reason as its error; an automatic one only logs.
+   */
+  private async skipPurged(note: Note, auto: boolean): Promise<void> {
+    if (!note.transcript_purged_at) return
+    const chunks = await transcriptionControl(this.ctx).getTranscript(note.id)
+    if (chunks.some((c) => c.text !== DELETED_CHUNK_MARKER)) return
+    log('info', 'enhance:skipped-transcript-purged', { noteId: note.id })
+    throw expected(
+      notulaError('invalid-input', auto ? 'The transcript was deleted.' : 'This meeting’s transcript was deleted, so there’s nothing to summarize.')
+    )
   }
 
   /**

@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-// Above the note dock: the inactivity card and "Resume transcript?" after a sleep stop.
-// Main owns both states; this only draws them. The reload notice stays a toast.
+// Above the note dock: the off-the-record choice, the inactivity card and "Resume transcript?"
+// after a sleep stop. At the top of the note: the inactivity stop and the pause for privacy,
+// each with Resume and Dismiss. Main owns these states; this only draws them. The reload
+// notice stays a toast.
 
 import { useEffect, useState, type JSX } from 'react'
 import { answerResumePrompt, countdownText, useLiveSignals } from './live'
-import { startTranscription, useCaptureSnapshot } from './store'
+import { dismissOffRecordPaused, OffRecordCard, useOffRecord } from './OffRecordCard'
+import { dismissInactivityStop, inactivityStopText, startTranscription, useCaptureSnapshot, useInactivityStop, type StartResult } from './store'
 import './prompts.css'
 
 /** Re-renders once a second while `on`, for the countdown. */
@@ -103,6 +106,14 @@ function ResumePrompt({ noteId }: { noteId: string }): JSX.Element {
 export function MeetingPrompts({ noteId }: { noteId: string }): JSX.Element | null {
   const live = useLiveSignals()
   const capture = useCaptureSnapshot()
+  const offRecord = useOffRecord()
+  if (offRecord.prompt?.noteId === noteId && capture.transcribingNoteId === noteId) {
+    return (
+      <div className="nt-prompt-dock">
+        <OffRecordCard prompt={offRecord.prompt} />
+      </div>
+    )
+  }
   if (live.inactivity?.noteId === noteId && capture.transcribingNoteId === noteId) {
     return (
       <div className="nt-prompt-dock">
@@ -115,6 +126,71 @@ export function MeetingPrompts({ noteId }: { noteId: string }): JSX.Element | nu
       <div className="nt-prompt-dock">
         <ResumePrompt noteId={noteId} />
       </div>
+    )
+  }
+  return null
+}
+
+function resumeError(r: StartResult): string | null {
+  if (r.ok) return null
+  return r.reason === 'busy'
+    ? 'Another note is transcribing.'
+    : r.reason === 'no-asr'
+      ? 'Set up transcription in Settings first.'
+      : 'This note no longer exists.'
+}
+
+function NoteBanner({ title, body, onDismiss, noteId }: { title: string; body: string; onDismiss(): void; noteId: string }): JSX.Element {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const resume = async (): Promise<void> => {
+    setBusy(true)
+    setError(null)
+    const r = await startTranscription(noteId)
+    setBusy(false)
+    setError(resumeError(r))
+  }
+  return (
+    <div className="nt-banner" role="status">
+      <div className="nt-banner__text">
+        <strong>{title}</strong>
+        <span>{error ?? body}</span>
+      </div>
+      <div className="nt-banner__actions">
+        <button type="button" className="n-btn n-btn--sm n-btn--ghost" disabled={busy} onClick={onDismiss}>
+          Dismiss
+        </button>
+        <button type="button" className="n-btn n-btn--sm n-btn--primary" disabled={busy} onClick={() => void resume()}>
+          Resume
+        </button>
+      </div>
+    </div>
+  )
+}
+
+export function MeetingBanners({ noteId }: { noteId: string }): JSX.Element | null {
+  const capture = useCaptureSnapshot()
+  const { paused } = useOffRecord()
+  const stop = useInactivityStop()
+  if (capture.transcribingNoteId === noteId) return null
+  if (paused?.noteId === noteId) {
+    return (
+      <NoteBanner
+        noteId={noteId}
+        title="Transcription paused for privacy"
+        body="Notula erased what was said after the request to go off the record."
+        onDismiss={() => dismissOffRecordPaused(noteId)}
+      />
+    )
+  }
+  if (stop?.noteId === noteId) {
+    return (
+      <NoteBanner
+        noteId={noteId}
+        title={inactivityStopText(stop.minutes)}
+        body="Resume to keep transcribing this meeting."
+        onDismiss={() => dismissInactivityStop(noteId)}
+      />
     )
   }
   return null

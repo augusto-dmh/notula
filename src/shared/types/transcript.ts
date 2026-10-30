@@ -73,6 +73,11 @@ export interface TranscriptChunk {
   /** The attributed participant of a final system chunk, or null. */
   detectedSpeaker: DetectedSpeaker | null
   providerDetails?: ProviderDetails
+  /**
+   * Renderer pushes only: held back by an off-the-record check (in memory, not stored, not on
+   * the main bus) until the user's choice resolves.
+   */
+  held?: boolean
 }
 
 /** Coalesced per 100 ms. */

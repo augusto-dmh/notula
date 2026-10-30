@@ -11,12 +11,13 @@ import { AUDIO_SOURCES, type DesiredCaptureState, type InactivityAction } from '
 import type { AudioSource, StopReason } from '@shared/types/common'
 import type { CaptureQuery, MainContext } from '../context'
 import { log } from '../log'
-import { transcriptionControl } from '../transcription'
+import { transcriptionControl, transcriptStore } from '../transcription'
 import { CaptureController } from './controller'
 import { EngineLogLimiter, parseEngineEvent } from './events'
 import { AudioHealth } from './health'
 import { InactivityMonitor } from './inactivity'
 import { installMediaHandlers } from './media-handlers'
+import { registerOffRecord } from './off-record'
 import { pushStopRequested } from './push'
 
 const SHUTDOWN_FLUSH_CAP_MS = 10_000
@@ -41,7 +42,9 @@ const STOP_REASONS: readonly StopReason[] = [
   'start_cancelled',
   'recording_rule',
   // End of watching (content sources)
-  'source_ended'
+  'source_ended',
+  // Erase and pause after an off-the-record request
+  'off_record'
 ]
 
 const INACTIVITY_ACTIONS: readonly InactivityAction[] = ['keep', 'stop']
@@ -75,9 +78,17 @@ function parseAudioSources(v: unknown): AudioSource[] | null {
 export function registerCapture(ctx: MainContext): CaptureQuery {
   const transcription = transcriptionControl(ctx)
   const controller = new CaptureController(ctx, transcription)
-  const stopFromMain = (reason: StopReason): Promise<void> => controller.stopFromMain(reason)
+  const stopFromMain = (reason: StopReason): Promise<void> => {
+    // The renderer shows a banner on the stopped note when the main window shows it, else a toast.
+    const noteId = controller.currentNoteId()
+    if (reason === 'idle_timeout' && noteId) {
+      log('info', 'capture:inactivity-stop-notice', { surface: ctx.ui.viewingNoteId() === noteId ? 'banner' : 'toast' })
+    }
+    return controller.stopFromMain(reason)
+  }
   const health = new AudioHealth(ctx, () => controller.restart('system'))
   const inactivity = new InactivityMonitor(ctx, transcription, stopFromMain)
+  const offRecord = registerOffRecord(ctx, transcriptStore(ctx), stopFromMain)
 
   /**
    * "I'm still here" with recovery on: a fresh transcription session for the same note, then
@@ -101,14 +112,17 @@ export function registerCapture(ctx: MainContext): CaptureQuery {
     started: (noteId, sources) => {
       health.started(noteId, sources)
       inactivity.started(noteId, sources)
+      offRecord.started(noteId)
     },
     switched: (noteId, sources) => {
       health.switched(noteId, sources)
       inactivity.switched(noteId, sources)
+      offRecord.switched(noteId)
     },
     stopped: (noteId) => {
       health.stopped()
       inactivity.stopped(noteId)
+      offRecord.stopped(noteId)
     },
     systemBuffer: (pcm) => health.systemBuffer(pcm),
     micBuffer: (pcm) => health.micBuffer(pcm),

@@ -19,10 +19,11 @@ import {
 import type { AudioSource, IsoTime, SourceState, StopReason } from '@shared/types/common'
 import { DEFAULT_SETTINGS, type Settings } from '@shared/types/settings'
 import type { TranscriptionSessionInfo } from '@shared/types/transcript'
-import { navigate } from '../../app/navigation'
+import { currentRoute, navigate } from '../../app/navigation'
 import { dismissToast, showToast } from '../../app/toast'
 import { CaptureEngine } from './engine'
 import { clearResumePrompt } from './live'
+import { watchOffRecord } from './OffRecordCard'
 import { startBubbleDocument } from './bubble-document'
 import { sounds } from './sounds'
 
@@ -36,7 +37,7 @@ const MAX_KEYWORDS = 100
  */
 const RELOAD_STOP_KEY = 'notula.capture.stoppedByReload'
 const RELOAD_NOTICE_MAX_AGE_MS = 60_000
-/** The auto-stop toast stays up to 30 minutes. */
+/** The auto-stop notice: a banner on the note when the window shows it, else a toast for up to 30 minutes. */
 const INACTIVITY_TOAST_ID = 'capture-stopped-by-inactivity'
 const INACTIVITY_TOAST_MS = 30 * 60_000
 /** The meter: a peak floor of 200/32,767 and a 0.27 decay per update. */
@@ -117,9 +118,23 @@ const requestedAt = new Map<string, IsoTime>()
 /** Notes that capture system audio only (source notes), set when their start resolves. */
 const systemOnly = new Set<string>()
 const listeners = new Set<() => void>()
+/** The inactivity auto-stop banner on the stopped note, while this window showed it. */
+let inactivityStop: InactivityStop | null = null
+const stopListeners = new Set<() => void>()
+
+export interface InactivityStop {
+  noteId: string
+  minutes: number
+}
 
 function emit(): void {
   for (const l of listeners) l()
+}
+
+function setInactivityStop(next: InactivityStop | null): void {
+  if (inactivityStop === next) return
+  inactivityStop = next
+  for (const l of stopListeners) l()
 }
 
 /** The transcribing note's sources: main's word once it captures for it, else the start's. */
@@ -290,8 +305,9 @@ export async function startTranscription(noteId: string): Promise<StartResult> {
   if (pendingToken !== token || snapshot.transcribingNoteId) return finish({ ok: false, reason: 'busy' })
   pendingToken = null
   noteSetAt = Date.now()
-  // Starting any transcription dismisses the inactivity toast.
+  // Starting any transcription dismisses the inactivity notice, banner or toast.
   dismissToast(INACTIVITY_TOAST_ID)
+  setInactivityStop(null)
   update({ pendingStart: false, transcribingNoteId: noteId })
   if (prefs['capture.sounds']) {
     if (endedCount > 0) sounds.resume()
@@ -333,12 +349,29 @@ async function autoDeleteAfterIndicatorStop(noteId: string): Promise<void> {
   }
 }
 
-/** "Stopped transcribing due to N minutes of inactivity", with Resume, for 30 minutes. */
-function showInactivityStopToast(stoppedNoteId: string): void {
-  const n = Math.max(1, Math.round(prefs['capture.inactivityAutoStopMinutes'] ?? 0))
+/** "Transcription stopped after N minutes with no speech", N rounded and at least 1. */
+export function inactivityStopText(minutes: number): string {
+  return `Transcription stopped after ${minutes} minute${minutes === 1 ? '' : 's'} with no speech`
+}
+
+/**
+ * The auto-stop notice: a banner at the top of the stopped note when this window shows it,
+ * else a toast with Resume for 30 minutes. Main logs which (`capture:inactivity-stop-notice`).
+ */
+function showInactivityStopNotice(stoppedNoteId: string): void {
+  const minutes = Math.max(1, Math.round(prefs['capture.inactivityAutoStopMinutes'] ?? 0))
+  const route = currentRoute()
+  if (document.visibilityState === 'visible' && route.path.startsWith('/meeting/') && route.params['id'] === stoppedNoteId) {
+    setInactivityStop({ noteId: stoppedNoteId, minutes })
+    return
+  }
+  showInactivityStopToast(stoppedNoteId, minutes)
+}
+
+function showInactivityStopToast(stoppedNoteId: string, minutes: number): void {
   showToast({
     id: INACTIVITY_TOAST_ID,
-    title: `Stopped transcribing due to ${n} minute${n === 1 ? '' : 's'} of inactivity`,
+    title: inactivityStopText(minutes),
     durationMs: INACTIVITY_TOAST_MS,
     action: {
       label: 'Resume',
@@ -366,6 +399,20 @@ function showResumeFailed(reason: 'busy' | 'note-missing' | 'no-asr'): void {
           ? 'Add a Deepgram or AssemblyAI key in Settings to transcribe.'
           : 'This note no longer exists.'
   })
+}
+
+export function useInactivityStop(): InactivityStop | null {
+  return useSyncExternalStore(
+    (cb) => {
+      stopListeners.add(cb)
+      return () => stopListeners.delete(cb)
+    },
+    () => inactivityStop
+  )
+}
+
+export function dismissInactivityStop(noteId: string): void {
+  if (inactivityStop?.noteId === noteId) setInactivityStop(null)
 }
 
 export function getCaptureSnapshot(): CaptureSnapshot {
@@ -468,7 +515,7 @@ export function mountCapture(): () => void {
     api.capture.onStopRequested(({ reason }) => {
       const stopped = snapshot.transcribingNoteId
       stopTranscription(reason)
-      if (reason === 'idle_timeout' && stopped) showInactivityStopToast(stopped)
+      if (reason === 'idle_timeout' && stopped) showInactivityStopNotice(stopped)
     }),
     api.input.onStateChanged((input) => update({ input })),
     api.input.onDevicesChanged((devices) => update({ devices })),
@@ -480,6 +527,7 @@ export function mountCapture(): () => void {
     })
   ]
   engine.init()
+  watchOffRecord()
   // The bubble document is computed here, in the main window only.
   const stopBubble = startBubbleDocument()
 

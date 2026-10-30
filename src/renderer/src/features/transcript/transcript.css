@@ -314,3 +314,13 @@
   z-index: 2;
   background: var(--bg);
 }
+
+/* Lines an off-the-record check holds back until the user's choice resolves. */
+.nt-tr-held .nt-tr-text {
+  opacity: 0.55;
+}
+
+.nt-tr-held-mark {
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+}

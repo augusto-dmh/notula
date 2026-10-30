@@ -1,0 +1,62 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* The off-the-record choice above the note dock, and the banners at the top of a note: the
+   pause for privacy and the inactivity stop. Held lines in the live transcript are dimmed by
+   the transcript view from `held: true`. */
+
+.nt-offrecord__badge {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.nt-offrecord__quote {
+  margin: 8px 0 0;
+  padding: 6px 10px;
+  border-left: 2px solid var(--border);
+  color: var(--fg);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+.nt-offrecord__held {
+  margin: 6px 0 0;
+  padding: 0 10px;
+  color: var(--fg-3, var(--fg-2));
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  opacity: 0.7;
+  overflow-wrap: anywhere;
+}
+
+/* Top of the note page. */
+.nt-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--accent-soft);
+  font-size: var(--text-sm);
+}
+
+.nt-banner__text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  color: var(--fg-2);
+}
+
+.nt-banner__text strong {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.nt-banner__actions {
+  display: flex;
+  flex: none;
+  gap: 6px;
+}

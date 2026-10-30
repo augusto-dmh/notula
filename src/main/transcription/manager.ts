@@ -464,8 +464,9 @@ export class TranscriptionManager {
     return this.store.liveChunks(noteId)
   }
 
-  getTranscript(noteId: string): Promise<TranscriptChunk[]> {
-    return this.store.getTranscript(noteId)
+  /** `includeHeld`: the renderer's view, with chunks an off-the-record check holds back. */
+  getTranscript(noteId: string, opts: { includeHeld?: boolean } = {}): Promise<TranscriptChunk[]> {
+    return this.store.getTranscript(noteId, opts)
   }
 
   private pushSessionInfo(info: TranscriptionSessionInfo | null): void {

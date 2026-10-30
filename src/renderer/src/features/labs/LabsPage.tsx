@@ -13,6 +13,7 @@ import { LABS_FEATURES, LABS_SECTIONS, type LabsFeature, type LabsSettingKey } f
 import { DEFAULT_SETTINGS, MAIN_ONLY_SETTING_KEYS, type Settings } from '@shared/types/settings'
 import { navigateToSettings } from '../../app/navigation'
 import { isMac } from '../../app/platform'
+import { OffRecordLabsRow } from '../capture/OffRecordLabsRow'
 import { LiveContextLabsRow } from '../live-context'
 import { CompanionCliLabsRow } from '../companion-cli'
 import { ConsentLabsRow } from '../consent'
@@ -36,7 +37,8 @@ const CUSTOM_ROWS: Partial<Record<LabsSettingKey, () => JSX.Element | null>> = {
   'companionCli.enabled': CompanionCliLabsRow,
   'updates.channel': BetaLabsRow,
   'security.deviceLock': DeviceLockLabsRow,
-  'customerCalls.enabled': CustomerCallsLabsRow
+  'customerCalls.enabled': CustomerCallsLabsRow,
+  'capture.offRecordPrompt': OffRecordLabsRow
 }
 
 /**

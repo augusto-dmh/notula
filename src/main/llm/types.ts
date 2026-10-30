@@ -34,6 +34,7 @@ export type LlmPurpose =
   | 'user-context'
   | 'dispatch-classify'
   | 'dispatch-select'
+  | 'off-record-check'
 
 /** An image for a model that accepts images (base64 content blocks in the adapters). */
 export interface LlmImage {
@@ -188,7 +189,10 @@ export interface LlmProvider {
   acceptsImages(): Promise<boolean>
 }
 
-/** Output budgets: headroom for adaptive thinking on the long tasks. Never below 2,000. */
+/**
+ * Output budgets: headroom for adaptive thinking on the long tasks. Never below 2,000, except
+ * the off-the-record check: a one-line verdict inside a 3 s budget.
+ */
 export const MAX_TOKENS: Record<LlmPurpose, number> = {
   summary: 16_000,
   rewrite: 16_000,
@@ -213,7 +217,8 @@ export const MAX_TOKENS: Record<LlmPurpose, number> = {
   'template-feedback': 2_000,
   'user-context': 12_000,
   'dispatch-classify': 2_000,
-  'dispatch-select': 4_000
+  'dispatch-select': 4_000,
+  'off-record-check': 100
 }
 
 /** The Anthropic adapter's `output_config.effort` per purpose. */
@@ -241,5 +246,6 @@ export const PURPOSE_EFFORT: Record<LlmPurpose, 'low' | 'medium' | 'high'> = {
   'template-feedback': 'medium',
   'user-context': 'medium',
   'dispatch-classify': 'low',
-  'dispatch-select': 'medium'
+  'dispatch-select': 'medium',
+  'off-record-check': 'low'
 }

@@ -505,7 +505,8 @@ export function TranscriptPanel({ noteId, reveal, onClose, variant = 'note' }: T
                     'nt-tr-turn',
                     turn.source === 'microphone' ? 'nt-tr-me' : 'nt-tr-them',
                     highlight === turn.id ? 'nt-tr-highlight' : '',
-                    isSelected ? 'nt-tr-selected' : ''
+                    isSelected ? 'nt-tr-selected' : '',
+                    turn.held ? 'nt-tr-held' : ''
                   ].join(' ')}
                   onClickCapture={
                     picking
@@ -542,6 +543,7 @@ export function TranscriptPanel({ noteId, reveal, onClose, variant = 'note' }: T
                         turn.label && <span className="nt-tr-label">{turn.label}</span>
                       )}
                       {!timeless && <span className="nt-tr-time">{videoTime ?? formatElapsed(turn.startMs - origin)}</span>}
+                      {turn.held && <span className="nt-tr-held-mark">Held back</span>}
                     </div>
                     <div className="nt-tr-text">{highlighted(turn.text, turnMatches, active)}</div>
                   </div>

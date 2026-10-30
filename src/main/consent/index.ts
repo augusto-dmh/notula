@@ -12,9 +12,7 @@
 //   close stdin then kill 5 s later; stopping the transcript cancels it. Everything else, and every
 //   fallback, is the clipboard path with a "Notice copied" card.
 // - Records go to `consent_posts`, never the text. "Post again" is always user-initiated.
-// - Deferred start: a start gate that holds while a supported app is present, posts at once,
-//   and releases on `success`, `confirmed` or Start now. It ends on stop, quit, sleep, the app gone
-//   for 3 s, or another note's start.
+// - Transcription never waits for the notice.
 
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
@@ -41,7 +39,6 @@ import { BROWSER_IDS, MEET_PWA, TEAMS_ID, ZOOM_ID } from './apps'
 import helperSource from './chat-post.ps1?raw'
 
 const APP_LABEL: Record<ConsentChannel, string> = { zoom: 'Zoom', teams: 'Microsoft Teams', meet: 'Google Meet' }
-const PENDING_POLL_MS = 500
 
 type HelperEvent =
   | { event: 'waiting'; for: 'chat-field' | 'draft' }
@@ -65,7 +62,6 @@ export function registerConsent(ctx: MainContext): void {
   /** Notes an automatic post has started for in this app session (the DB record is the authority). */
   const started = new Set<string>()
   const waiting = new Map<string, ConsentStatus['waitingFor']>()
-  let pending: { noteId: string; channel: ConsentChannel; goneSince: number | null; timer: NodeJS.Timeout } | null = null
   let run: Run | null = null
 
   // ---------- status ----------
@@ -80,16 +76,14 @@ export function registerConsent(ctx: MainContext): void {
 
   async function status(noteId: string): Promise<ConsentStatus | null> {
     const r = await record(noteId)
-    const isPending = pending?.noteId === noteId
     const w = waiting.get(noteId) ?? null
-    if (!r && !isPending && !w) return null
+    if (!r && !w) return null
     return {
       noteId,
-      channel: r?.channel ?? (isPending ? pending!.channel : null),
+      channel: r?.channel ?? null,
       status: r?.status ?? null,
       reason: r?.reason ?? null,
       at: r?.completed_at ?? r?.attempted_at ?? null,
-      pending: isPending,
       waitingFor: w
     }
   }
@@ -101,7 +95,6 @@ export function registerConsent(ctx: MainContext): void {
       status: null,
       reason: null,
       at: null,
-      pending: false,
       waitingFor: null
     }
     for (const wc of ctx.windows.targets()) wc.send('consent:status-changed' satisfies PushChannel, st)
@@ -128,7 +121,6 @@ export function registerConsent(ctx: MainContext): void {
     if (value !== 'attempted') waiting.delete(noteId)
     log('info', 'consent:status', { noteId, channel, status: value, reason })
     await push(noteId)
-    if ((value === 'success' || value === 'confirmed') && pending?.noteId === noteId) release(noteId, value)
   }
 
   async function message(): Promise<string> {
@@ -161,13 +153,6 @@ export function registerConsent(ctx: MainContext): void {
       if (pwa || (ids.some((i) => BROWSER_IDS.has(i)) && (await hasMeetLink(noteId)))) out.push('meet')
     }
     return out
-  }
-
-  function appPresent(channel: ConsentChannel): boolean {
-    const ids = micApps.map((a) => a.appId)
-    if (channel === 'zoom') return ids.includes(ZOOM_ID)
-    if (channel === 'teams') return ids.includes(TEAMS_ID)
-    return ids.some((i) => BROWSER_IDS.has(i) || i.endsWith(MEET_PWA))
   }
 
   // ---------- the clipboard path ----------
@@ -392,7 +377,7 @@ export function registerConsent(ctx: MainContext): void {
     evaluating = true
     try {
       const noteId = ctx.capture.currentNoteId()
-      if (!noteId || !ctx.capture.isCapturing() || started.has(noteId) || pending) return
+      if (!noteId || !ctx.capture.isCapturing() || started.has(noteId)) return
       const s = await ctx.settings.getAll()
       if (!s['consent.enabled']) return
       if (await record(noteId)) {
@@ -448,69 +433,7 @@ export function registerConsent(ctx: MainContext): void {
     if (waiting.delete(e.noteId)) void push(e.noteId)
   })
 
-  // ---------- deferred start ----------
-
-  function endPending(why: string, cancelCapture: boolean): void {
-    const p = pending
-    if (!p) return
-    pending = null
-    clearInterval(p.timer)
-    log('info', 'consent:pending-ended', { noteId: p.noteId, why })
-    if (run && run.noteId === p.noteId) void finishRun(run, { event: 'result', status: 'cancelled' })
-    if (cancelCapture) ctx.capture.cancelHeldStart(p.noteId, 'start_cancelled')
-    void push(p.noteId)
-  }
-
-  function release(noteId: string, why: string): void {
-    const p = pending
-    if (!p || p.noteId !== noteId) return
-    pending = null
-    clearInterval(p.timer)
-    log('info', 'consent:pending-released', { noteId, why })
-    ctx.capture.releaseHeldStart(noteId)
-    void push(noteId)
-  }
-
-  ctx.capture.registerStartGate({
-    id: 'consent',
-    beforeStart: async ({ noteId }) => {
-      const s = await ctx.settings.getAll()
-      if (!s['consent.enabled'] || !s['consent.deferTranscription']) return { result: 'proceed' }
-      const prev = await record(noteId)
-      if (prev && (prev.status === 'success' || prev.status === 'confirmed')) return { result: 'proceed' }
-      const list = await channels(noteId)
-      if (!list.length) {
-        log('info', 'consent:defer-skipped', { noteId, reason: 'meeting_app_absent' })
-        return { result: 'proceed' }
-      }
-      if (pending && pending.noteId !== noteId) endPending('another-note', true)
-      const channel = list[0] as ConsentChannel
-      const timer = setInterval(() => {
-        const p = pending
-        if (!p) return
-        const held = ctx.capture.heldStart()
-        // A stop, or a start on another note, abandoned the held start.
-        if (!held || held.noteId !== p.noteId) {
-          endPending('superseded', false)
-          return
-        }
-        if (appPresent(p.channel)) p.goneSince = null
-        else if (p.goneSince === null) p.goneSince = Date.now()
-        else if (Date.now() - p.goneSince >= CONSENT_LIMITS.appGoneMs) endPending('meeting-ended', true)
-      }, PENDING_POLL_MS)
-      timer.unref()
-      pending = { noteId, channel, goneSince: null, timer }
-      started.add(noteId)
-      log('info', 'consent:pending', { noteId, channel })
-      // No speech can be waited for while nothing is captured: post at once.
-      setTimeout(() => void post(noteId, list).then(() => push(noteId)), 0)
-      return { result: 'hold' }
-    }
-  })
-
-  ctx.bus.on('power:suspended', () => endPending('sleep', true))
   app.on('before-quit', () => {
-    endPending('quit', false)
     if (run) {
       try {
         run.proc.kill()
@@ -567,17 +490,6 @@ export function registerConsent(ctx: MainContext): void {
       if (run && run.noteId === noteId) await finishRun(run, { event: 'result', status: 'cancelled' })
       await save(noteId, null, 'confirmed', null)
       return push(noteId)
-    }
-  )
-
-  ipcMain.handle(
-    'consent:resolve-pending' satisfies InvokeChannel,
-    async (_e, req: InvokeReq<'consent:resolve-pending'>): Promise<void> => {
-      const noteId = noteIdOf(req)
-      if (pending?.noteId !== noteId) return
-      if (req.action === 'start-now') release(noteId, 'start-now')
-      else if (req.action === 'cancel') endPending('cancel', true)
-      else throw expected(notulaError('invalid-input', 'Unknown action.'))
     }
   )
 }

@@ -24,6 +24,8 @@ export interface Turn {
   text: string
   startMs: number
   endMs: number
+  /** Held back by an off-the-record check until the user's choice resolves. */
+  held?: boolean
 }
 
 export function compareChunks(a: TranscriptChunk, b: TranscriptChunk): number {
@@ -84,7 +86,8 @@ export function groupTurns(input: TranscriptChunk[]): Turn[] {
       cur.speaker !== speaker ||
       cur.label !== label ||
       cur.lead !== lead ||
-      cur.session !== c.transcription_session_id
+      cur.session !== c.transcription_session_id ||
+      (cur.held === true) !== (c.held === true)
     if (!fresh && cur) {
       if (GAP_GROUPING) {
         fresh =
@@ -108,7 +111,8 @@ export function groupTurns(input: TranscriptChunk[]): Turn[] {
         speaker,
         lead,
         lastText: text,
-        session: c.transcription_session_id
+        session: c.transcription_session_id,
+        ...(c.held === true ? { held: true } : {})
       }
       turns.push(cur)
     } else {
@@ -118,14 +122,15 @@ export function groupTurns(input: TranscriptChunk[]): Turn[] {
       cur.lastText = text
     }
   }
-  return turns.map(({ id, source, label, chunkIds, text, startMs, endMs }) => ({
+  return turns.map(({ id, source, label, chunkIds, text, startMs, endMs, held }) => ({
     id,
     source,
     label,
     chunkIds,
     text,
     startMs,
-    endMs
+    endMs,
+    ...(held ? { held: true } : {})
   }))
 }
 

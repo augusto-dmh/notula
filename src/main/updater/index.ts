@@ -15,13 +15,16 @@
 //   Re-evaluated every 60 s after a download.
 // - Install: the "updating" mark (close stops hiding), the flag file, a 1 s wait, then
 //   quit into the installer. The next launch restores the window from the flag file.
+// - A check the user started (tray, menu, dock) gets one OS message box for its first outcome:
+//   blocked by policy, an update found and downloading, up to date, or failed. The periodic
+//   checks never show one, and unpackaged builds show none.
 //
 // Handlers and pushes write their channel literal.
 
 import { execFile } from 'node:child_process'
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { app, ipcMain, type Rectangle } from 'electron'
+import { app, dialog, ipcMain, type Rectangle } from 'electron'
 import { autoUpdater, type ProgressInfo, type UpdateInfo } from 'electron-updater'
 import { notulaError } from '@shared/errors'
 import type { InvokeChannel, InvokeRes, PushChannel, SendChannel } from '@shared/ipc'
@@ -30,7 +33,7 @@ import type { MainContext } from '../context'
 import { markInstallingUpdate, setStartupWindowPlan } from '../lifecycle'
 import { log } from '../log'
 import { egressBlocked, LOCAL_ONLY_REASON } from '../privacy'
-import { bindUpdaterActions, getUpdateState, onUpdateState, setUpdateState } from './state'
+import { bindUpdaterActions, getUpdateState, onUpdateState, setUpdateState, takeManualCheck } from './state'
 
 const CHECK_INTERVAL_MS = 10 * 60_000
 const FIRST_CHECK_DELAY_MS = 5_000
@@ -134,6 +137,44 @@ function restoreAfterUpdate(ctx: MainContext): void {
     visible: flag.wasVisible,
     focused: flag.wasFocused === true
   })
+}
+
+// ---------- feedback on a check the user started ----------
+
+type ManualOutcome = 'policy' | 'available' | 'up-to-date' | 'failed' | 'local-only'
+
+function manualMessage(outcome: ManualOutcome, version: string | null): { message: string; detail: string } {
+  switch (outcome) {
+    case 'policy':
+      return { message: 'Updates are turned off', detail: 'Your organization turned off updates for Notula on this computer.' }
+    case 'available':
+      return {
+        message: version ? `Notula ${version} is available` : 'An update is available',
+        detail: 'Notula is downloading it and installs it when you’re not in a meeting.'
+      }
+    case 'up-to-date':
+      return { message: 'Notula is up to date', detail: `You have version ${app.getVersion()}.` }
+    case 'local-only':
+      return { message: 'Notula didn’t check for updates', detail: 'Nothing leaves this machine is on, so Notula doesn’t check for updates.' }
+    case 'failed':
+      return { message: 'Couldn’t check for updates', detail: 'Try again when you’re online.' }
+  }
+}
+
+/** The first outcome of a user-initiated check: one message box, then the mark is cleared. */
+function manualFeedback(ctx: MainContext, outcome: ManualOutcome, version: string | null = null): void {
+  const source = takeManualCheck()
+  if (!source) return
+  if (!app.isPackaged) {
+    log('info', 'update:manual-feedback', { kind: source, outcome, shown: false })
+    return
+  }
+  log('info', 'update:manual-feedback', { kind: source, outcome, shown: true })
+  const { message, detail } = manualMessage(outcome, version)
+  const win = ctx.windows.main()
+  const opts = { type: outcome === 'failed' ? ('warning' as const) : ('info' as const), buttons: ['OK'], defaultId: 0, message, detail }
+  const shown = win && !win.isDestroyed() && win.isVisible() ? dialog.showMessageBox(win, opts) : dialog.showMessageBox(opts)
+  void shown.catch((err: unknown) => log('warn', 'update:manual-feedback-failed', { err }))
 }
 
 // ---------- registration ----------
@@ -244,19 +285,27 @@ export function registerUpdater(ctx: MainContext): void {
     if (paused !== getUpdateState().pausedByLocalOnly) setUpdateState({ pausedByLocalOnly: paused })
     if (paused) {
       log('info', 'update:check-skipped', { source, reason: LOCAL_ONLY_REASON })
+      manualFeedback(ctx, 'local-only')
       return
     }
     if (feed === 'none') {
       log('info', 'update:check-skipped', { source, reason: 'no feed' })
       setUpdateState({ lastCheck: { at: new Date().toISOString(), available: false, version: null } })
+      manualFeedback(ctx, 'up-to-date')
       return
     }
     const s = getUpdateState()
-    if (s.checking || s.download.state !== 'idle') return
+    // A check in flight answers the user's; a download in progress or done is its outcome.
+    if (s.checking) return
+    if (s.download.state !== 'idle') {
+      manualFeedback(ctx, 'available', s.download.version || null)
+      return
+    }
     const policyDisabled = await readPolicyDisabled()
     if (policyDisabled !== s.policyDisabled) setUpdateState({ policyDisabled })
     if (policyDisabled) {
       log('info', 'update:check-skipped', { source, reason: 'policy' })
+      manualFeedback(ctx, 'policy')
       return
     }
     log('info', 'update:check', { source })
@@ -340,9 +389,11 @@ export function registerUpdater(ctx: MainContext): void {
     availableVersion = info.version
     setUpdateState({ checking: false, lastCheck: { at: new Date().toISOString(), available: true, version: info.version } })
     log('info', 'update:available', { version: info.version })
+    manualFeedback(ctx, 'available', info.version)
   })
   autoUpdater.on('update-not-available', () => {
     setUpdateState({ checking: false, lastCheck: { at: new Date().toISOString(), available: false, version: null } })
+    manualFeedback(ctx, 'up-to-date')
   })
   autoUpdater.on('download-progress', (p: ProgressInfo) => {
     const percent = Math.max(0, Math.min(100, Math.round(p.percent)))
@@ -369,6 +420,7 @@ export function registerUpdater(ctx: MainContext): void {
       ...(d.state === 'downloading' ? { download: { state: 'idle' as const } } : {})
     })
     log('error', 'update:error', { message: err.message })
+    manualFeedback(ctx, 'failed')
   })
 
   setTimeout(() => void check('startup'), FIRST_CHECK_DELAY_MS)

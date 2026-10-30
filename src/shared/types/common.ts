@@ -30,6 +30,8 @@ export type StopReason =
   | 'recording_rule'
   /** A source note's video ended or stayed paused (content sources, end of watching). */
   | 'source_ended'
+  /** The user chose to erase and pause after an off-the-record request. */
+  | 'off_record'
 
 /** Pixels: a window's bounds, a display's work area, or a page region to capture. */
 export interface Rect {

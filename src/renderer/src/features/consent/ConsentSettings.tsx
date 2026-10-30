@@ -126,13 +126,6 @@ export function MeetingNoticeSettings(): JSX.Element {
             onChange={(v) => setPrefs({ 'consent.waitForOtherSpeaker': v })}
           />
         </Row>
-        <Row label="Start transcribing after the notice is posted" hint="Notula waits to transcribe until the notice is in the chat.">
-          <Switch
-            label="Start transcribing after the notice is posted"
-            checked={prefs['consent.deferTranscription']}
-            onChange={(v) => setPrefs({ 'consent.deferTranscription': v })}
-          />
-        </Row>
       </Group>
     </>
   )

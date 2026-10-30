@@ -6,6 +6,7 @@ import { EventEmitter } from 'node:events'
 import type { UpdateDelayReason } from '@shared/types/app'
 import type { AudioSource, IsoTime, StopReason } from '@shared/types/common'
 import type { MicApp } from '@shared/types/meetings'
+import type { OffRecordPrompt } from '@shared/types/off-record'
 import type { ExtCaptions, ExtensionSnapshot } from '@shared/types/extension-protocol'
 import type { SettingKey, Settings } from '@shared/types/settings'
 import type { CanonicalKey, MediaSession, Playback, PlaybackProviderId, SourceMark } from '@shared/types/sources'
@@ -24,7 +25,10 @@ export interface BusEvents {
     startedAt: IsoTime
     stoppedAt: IsoTime
   }
+  /** Held chunks never travel here; they follow once the off-the-record hold lifts. */
   'transcript:changed': TranscriptChanged
+  /** off-record → the bubble (shown unless the main window is focused on that note). */
+  'off-record:prompt': OffRecordPrompt | null
   'storage:changed': { tables: string[]; ids: string[] }
   'storage:status': StorageStatus
   'settings:changed': { keys: SettingKey[]; settings: Settings }

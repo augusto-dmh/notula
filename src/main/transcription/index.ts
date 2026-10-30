@@ -19,6 +19,7 @@ import { apiKeyProblem } from '../secrets'
 import { SPEAKER_LABELS_WAIT_MS } from '../asr/diarize'
 import { getLocalModels } from '../asr/instance'
 import type { SpeechApi, TranscriptionControl } from './api'
+import type { ChunkStore } from './chunks'
 import { getTranscriptionManager } from './manager'
 import { startSimulatedSession } from './simulated'
 import { createSpeechService } from './speech'
@@ -77,6 +78,11 @@ export function transcriptionControl(ctx: MainContext): TranscriptionControl {
   }
 }
 
+/** The live transcript store (the off-the-record hold in capture). */
+export function transcriptStore(ctx: MainContext): ChunkStore {
+  return getTranscriptionManager(ctx).store
+}
+
 /**
  * Recognizers over the transcription providers for dictation and chat voice input
  * (transcription/speech.ts).
@@ -111,7 +117,7 @@ export function registerTranscription(ctx: MainContext): TranscriptionService {
   const manager = getTranscriptionManager(ctx)
 
   ipcMain.handle('transcript:get' satisfies InvokeChannel, (_e, req: InvokeReq<'transcript:get'>): Promise<TranscriptChunk[]> =>
-    manager.getTranscript(noteId(req))
+    manager.getTranscript(noteId(req), { includeHeld: true })
   )
 
   ipcMain.handle('asr:set-key' satisfies InvokeChannel, async (_e, req: InvokeReq<'asr:set-key'>): Promise<void> => {
