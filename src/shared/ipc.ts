@@ -164,7 +164,12 @@ import type {
   McpServerInput,
   McpServerPatch,
   McpStdioConfig,
-  McpToolInfo
+  McpToolInfo,
+  McpConnectedApp,
+  McpInstallResult,
+  McpInstallTarget,
+  McpSnippet,
+  McpSnippetClient
 } from './types/mcp'
 import type { MeetingDetectionStatus, MicApp } from './types/meetings'
 import type { MeetingDockHistory, MeetingDockState, MeetingDockView } from './types/meeting-dock'
@@ -280,6 +285,8 @@ import type { RuleDecision, TranscriptionRule } from './types/transcription-rule
 import type {
   UserContextAgent,
   UserContextDraftEvent,
+  UserContextEntry,
+  UserContextEntryKind,
   UserContextSection,
   UserContextSectionId,
   UserContextState
@@ -650,6 +657,12 @@ export interface InvokeChannels {
   'mcp-server:get-stdio-config': [{ name: string }, McpStdioConfig]
   /** The last 50, memory only. */
   'mcp-server:get-activity': [void, McpLocalServerActivity[]]
+  /** Mints a token for the app and opens its install link; the token and link stay in main. */
+  'mcp-server:install': [{ target: McpInstallTarget }, McpInstallResult]
+  /** Every token as a connected app, with its calls over the last 30 days. */
+  'mcp-server:list-apps': [void, McpConnectedApp[]]
+  /** Mints a token and embeds it in the app's setup; the only time it is shown. `name` is for the generic entries. */
+  'mcp-server:get-snippet': [{ client: McpSnippetClient; name?: string }, McpSnippet]
   'dictation:get-status': [void, DictationStatus]
   /** Validates through `ctx.shortcuts`. */
   'dictation:set-shortcut': [{ accelerator: string | null }, { ok: boolean; error: string | null }]
@@ -744,6 +757,11 @@ export interface InvokeChannels {
   'user-context:set-names': [{ firstNames: string[] }, { firstNames: string[] }]
   /** Rejects `busy` while a run is in flight. */
   'user-context:draft': [{ sectionIds: UserContextSectionId[]; overwriteUser?: boolean }, { runId: string }]
+  /** Drafts the whole profile, sections and rows, keeping what the user wrote. Rejects `busy` too. */
+  'user-context:refresh': [void, { runId: string }]
+  /** Creates a row, or updates the row `id`; the row becomes the user's. */
+  'user-context:set-entry': [{ id?: string; kind: UserContextEntryKind; name: string; body: string; role?: string | null }, UserContextEntry]
+  'user-context:delete-entry': [{ id: string }, void]
   /** The profile as Markdown: returned for `copy`; written where the user picks for `save` (cancel: `saved: false`). */
   'user-context:export': [{ action: 'copy' | 'save' }, { markdown: string } | { saved: boolean; path?: string }]
   /** The MCP apps that have read the profile, newest read first. */
@@ -1680,6 +1698,9 @@ export interface NotulaApi {
     revokeToken: InvokeMember<'mcp-server:revoke-token'>
     getStdioConfig: InvokeMember<'mcp-server:get-stdio-config'>
     getActivity: InvokeMember<'mcp-server:get-activity'>
+    install: InvokeMember<'mcp-server:install'>
+    listApps: InvokeMember<'mcp-server:list-apps'>
+    getSnippet: InvokeMember<'mcp-server:get-snippet'>
     onChanged: PushMember<'mcp-server:changed'>
   }
   dictation: {
@@ -1847,6 +1868,9 @@ export interface NotulaApi {
     update: InvokeMember<'user-context:update'>
     setNames: InvokeMember<'user-context:set-names'>
     draft: InvokeMember<'user-context:draft'>
+    refresh: InvokeMember<'user-context:refresh'>
+    setEntry: InvokeMember<'user-context:set-entry'>
+    deleteEntry: InvokeMember<'user-context:delete-entry'>
     export: InvokeMember<'user-context:export'>
     agents: InvokeMember<'user-context:agents'>
     setAgentPaused: InvokeMember<'user-context:set-agent-paused'>

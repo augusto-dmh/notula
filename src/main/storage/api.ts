@@ -42,7 +42,7 @@ import type {
   IntegrationDestination,
   IntegrationProvider
 } from '@shared/types/integrations'
-import type { McpLocalServerToken, McpServerInfo } from '@shared/types/mcp'
+import type { McpInstallTarget, McpLocalServerToken, McpServerInfo } from '@shared/types/mcp'
 import type {
   AttachedLink,
   CalendarEvent,
@@ -136,7 +136,7 @@ import type { RetentionPreview, RetentionRun } from '@shared/types/retention'
 import type { SummaryFeedback, SummaryFeedbackDirection, SummaryFeedbackList } from '@shared/types/summary-feedback'
 import type { ManualTask, TasksList } from '@shared/types/tasks'
 import type { TranscriptReport } from '@shared/types/transcript-reports'
-import type { UserContextPerson, UserContextSection, UserContextSectionId } from '@shared/types/user-context'
+import type { UserContextEntry, UserContextEntryKind, UserContextPerson, UserContextSection, UserContextSectionId } from '@shared/types/user-context'
 import type { WebhookEndpoint } from '@shared/types/webhooks'
 import type { BlockExecution, WorkflowBlock } from '@shared/types/workflow-blocks'
 export interface StorageIdentity {
@@ -1323,10 +1323,15 @@ export interface StorageApi {
     name: string
     kind: McpLocalServerToken['kind']
     token_hash: string
+    install_target?: McpInstallTarget | null
   }): Promise<McpLocalServerToken>
   findMcpServerToken(tokenHash: string): Promise<(McpLocalServerToken & { token_hash: string }) | null>
   touchMcpServerToken(id: string, at: IsoTime): Promise<void>
   deleteMcpServerToken(id: string): Promise<void>
+  /** One tool call for the token on a local `YYYY-MM-DD` day; failed calls also count an error. */
+  recordMcpUsage(u: { tokenId: string; day: string; error: boolean; at: IsoTime }): Promise<void>
+  mcpUsageSince(since: string): Promise<{ tokenId: string; calls: number; errors: number }[]>
+  pruneMcpUsage(before: string): Promise<number>
 
   // dictation
   createDictationAttempt(a: {
@@ -1427,7 +1432,19 @@ export interface StorageApi {
   listUserContextSections(): Promise<UserContextSection[]>
   upsertUserContextSection(s: { section_id: UserContextSectionId; content: string; origin: 'user' | 'drafted'; drafted_at: IsoTime | null }): Promise<UserContextSection>
   userContextPeople(q: { decayDays: number; limit: number; myEmails: string[] }): Promise<UserContextPerson[]>
-  userContextDraftInputs(q: { since: IsoTime; notes: number; chars: number }): Promise<{ noteId: string; title: string | null; date: IsoTime; text: string }[]>
+  userContextDraftInputs(q: { since: IsoTime; changedSince?: IsoTime | null; notes: number; chars: number }): Promise<{ noteId: string; title: string | null; date: IsoTime; text: string }[]>
+  listUserContextEntries(): Promise<UserContextEntry[]>
+  setUserContextEntry(e: {
+    id?: string
+    kind: UserContextEntryKind
+    name: string
+    body: string
+    role: string | null
+    origin: 'user' | 'drafted'
+    drafted_at: IsoTime | null
+  }): Promise<UserContextEntry>
+  deleteUserContextEntry(id: string): Promise<UserContextEntry | null>
+  replaceDraftedUserContextEntries(q: { kind: UserContextEntryKind; rows: { name: string; body: string; role: string | null }[]; drafted_at: IsoTime; skip: string[] }): Promise<number>
   /** The user's own notes with a transcript, demo notes aside, counted up to `cap`. */
   userContextRecordedNotes(q: { cap: number }): Promise<number>
 

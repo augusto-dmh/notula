@@ -491,3 +491,37 @@ p.mcp-steps__note {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* One-click installs and setup snippets. */
+
+.mcp-install,
+.mcp-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.mcp-picker__select {
+  width: auto;
+  min-width: 220px;
+  padding-block: 3px;
+  font-size: var(--text-sm);
+}
+
+.mcp-steps__note.is-error {
+  color: var(--danger);
+}
+
+.mcp-snippet {
+  max-height: 220px;
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font: 12px/1.5 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: all;
+}

@@ -1,14 +1,51 @@
 // SPDX-License-Identifier: Apache-2.0
 // Settings ▸ Connectors ▸ MCP: Notula's own local MCP
-// server. The main switch and the two transport switches, a status line, the Claude Desktop
-// steps ("Copy the configuration"), HTTP tokens (shown once) and Recent activity.
+// server. The main switch and the two transport switches, a status line, one-click installs for
+// Cursor and VS Code, setup snippets for other local apps (each with a new key, shown once), the
+// connected apps with their use over 30 days, and Recent activity.
 
-import { useEffect, useState, type JSX } from 'react'
+import { useCallback, useEffect, useState, type JSX } from 'react'
 import { parseError } from '@shared/errors'
-import type { McpLocalServerActivity, McpLocalServerStatus, McpLocalServerToken } from '@shared/types/mcp'
+import type {
+  McpConnectedApp,
+  McpInstallResult,
+  McpInstallTarget,
+  McpLocalServerActivity,
+  McpLocalServerStatus,
+  McpSnippet,
+  McpSnippetClient
+} from '@shared/types/mcp'
+import { navigate } from '../../app/navigation'
 import { showToast } from '../../app/toast'
 import { Modal } from '../folders/Modal'
 import { Switch } from '../settings/controls'
+import { confirmDialog } from '../templates/confirm'
+
+const INSTALL_APPS: { target: McpInstallTarget; name: string }[] = [
+  { target: 'cursor', name: 'Cursor' },
+  { target: 'vscode', name: 'VS Code' }
+]
+
+function installMessage(name: string, r: McpInstallResult): { text: string; error: boolean } {
+  if (r === 'opened') return { text: `Opened ${name}. Confirm the install there.`, error: false }
+  if (r === 'no-app') return { text: `${name} isn’t installed on this computer. Use a setup below instead.`, error: true }
+  if (r === 'server-off') return { text: 'Turn on the server first.', error: true }
+  return { text: `Couldn’t open ${name}. Try again, or use a setup below.`, error: true }
+}
+
+const SNIPPET_CLIENTS: { id: McpSnippetClient; label: string; needs: 'stdio' | 'http' | 'any'; steps: string }[] = [
+  {
+    id: 'claude-desktop',
+    label: 'Claude Desktop',
+    needs: 'stdio',
+    steps: 'In Claude Desktop, open Settings ▸ Developer ▸ Edit Config, add the entry under “mcpServers”, save, and restart Claude Desktop.'
+  },
+  { id: 'claude-code', label: 'Claude Code', needs: 'any', steps: 'Run this command in a terminal.' },
+  { id: 'cursor', label: 'Cursor', needs: 'any', steps: 'Add the entry under “mcpServers” in Cursor’s mcp.json, then reload Cursor.' },
+  { id: 'vscode', label: 'VS Code', needs: 'any', steps: 'In VS Code, run “MCP: Open User Configuration” and add the entry under “servers”.' },
+  { id: 'program', label: 'Another app that launches a program', needs: 'stdio', steps: 'Give the app this command, its arguments and its environment.' },
+  { id: 'url', label: 'Another app that connects by URL', needs: 'http', steps: 'Give the app this address and the Authorization header.' }
+]
 
 function statusLine(s: McpLocalServerStatus): { text: string; error: boolean } {
   if (s.error === 'local-only') return { text: 'Off while Notula keeps everything on this computer (local-only mode).', error: false }
@@ -58,7 +95,7 @@ function NameDialog({ title, onDone }: { title: string; onDone(name: string | nu
             Cancel
           </button>
           <button type="submit" className="n-btn n-btn--primary" disabled={!name.trim()}>
-            Create token
+            Create key
           </button>
         </div>
       </form>
@@ -68,27 +105,33 @@ function NameDialog({ title, onDone }: { title: string; onDone(name: string | nu
 
 export function LocalServerCard(): JSX.Element {
   const [status, setStatus] = useState<McpLocalServerStatus | null>(null)
-  const [tokens, setTokens] = useState<McpLocalServerToken[]>([])
+  const [apps, setApps] = useState<McpConnectedApp[]>([])
   const [activity, setActivity] = useState<McpLocalServerActivity[]>([])
   const [naming, setNaming] = useState(false)
-  const [fresh, setFresh] = useState<{ id: string; token: string } | null>(null)
+  const [client, setClient] = useState<McpSnippetClient>('claude-desktop')
+  const [snippet, setSnippet] = useState<McpSnippet | null>(null)
+  const [installing, setInstalling] = useState<McpInstallTarget | null>(null)
+  const [installed, setInstalled] = useState<{ target: McpInstallTarget; result: McpInstallResult } | null>(null)
   const [portDraft, setPortDraft] = useState('')
 
-  const readTokens = (): void => {
-    void window.notula.mcpServer.listTokens().then(setTokens).catch(() => undefined)
-  }
+  const readApps = useCallback((): void => {
+    void window.notula.mcpServer.listApps().then(setApps).catch(() => undefined)
+  }, [])
   useEffect(() => {
     void window.notula.mcpServer.getStatus().then(setStatus).catch(() => undefined)
-    readTokens()
     const readActivity = (): void => void window.notula.mcpServer.getActivity().then(setActivity).catch(() => undefined)
-    readActivity()
-    const t = setInterval(readActivity, 5_000)
+    const read = (): void => {
+      readActivity()
+      readApps()
+    }
+    read()
+    const t = setInterval(read, 5_000)
     const off = window.notula.mcpServer.onChanged((s) => setStatus(s))
     return () => {
       clearInterval(t)
       off()
     }
-  }, [])
+  }, [readApps])
 
   if (!status) return <div className="settings-card mcp-local" />
 
@@ -98,14 +141,47 @@ export function LocalServerCard(): JSX.Element {
   }
   const line = statusLine(status)
   const localOnly = status.error === 'local-only'
+  const serverOn = status.enabled && status.listening && (status.stdio || status.http)
+  const clients = SNIPPET_CLIENTS.filter((c) => (c.needs === 'stdio' ? status.stdio : c.needs === 'http' ? status.http : status.stdio || status.http))
+  const picked = clients.find((c) => c.id === client) ?? clients[0]
+  const installedMsg = installed ? installMessage(INSTALL_APPS.find((x) => x.target === installed.target)?.name ?? '', installed.result) : null
 
-  const copyConfig = async (): Promise<void> => {
+  const install = async (target: McpInstallTarget): Promise<void> => {
+    setInstalling(target)
+    setInstalled(null)
     try {
-      const cfg = await window.notula.mcpServer.getStdioConfig({ name: 'Claude Desktop' })
-      await copy(cfg.configJson, 'Configuration copied')
-      readTokens()
+      const result = await window.notula.mcpServer.install({ target })
+      setInstalled({ target, result })
+      readApps()
     } catch (err) {
-      showToast({ kind: 'error', title: parseError(err).message || 'Couldn’t create the configuration.' })
+      showToast({ kind: 'error', title: parseError(err).message || 'Couldn’t add the app.' })
+    } finally {
+      setInstalling(null)
+    }
+  }
+
+  const createSnippet = async (id: McpSnippetClient, name?: string): Promise<void> => {
+    try {
+      setSnippet(await window.notula.mcpServer.getSnippet({ client: id, ...(name ? { name } : {}) }))
+      readApps()
+    } catch (err) {
+      showToast({ kind: 'error', title: parseError(err).message || 'Couldn’t create the setup.' })
+    }
+  }
+
+  const remove = async (a: McpConnectedApp): Promise<void> => {
+    const ok = await confirmDialog({
+      title: `Remove ${a.name}?`,
+      body: 'Its key stops working, so it can no longer read your notes. To use it again, add it here again.',
+      confirmLabel: 'Remove app',
+      danger: true
+    })
+    if (!ok) return
+    try {
+      await window.notula.mcpServer.revokeToken({ id: a.id })
+      readApps()
+    } catch (err) {
+      showToast({ kind: 'error', title: 'Couldn’t remove the app', description: parseError(err).message })
     }
   }
 
@@ -169,75 +245,99 @@ export function LocalServerCard(): JSX.Element {
           </div>
         ) : null}
 
-        {status.enabled && status.stdio ? (
-          <div className="mcp-steps">
-            <div className="mcp-steps__head">Claude Desktop</div>
-            <ol>
-              <li>
-                <button type="button" className="n-btn n-btn--sm" onClick={() => void copyConfig()}>
-                  Copy the configuration
-                </button>
-                <span className="mcp-steps__note">Each copy creates its own token, listed below.</span>
-              </li>
-              <li>In Claude Desktop, open Settings ▸ Developer ▸ Edit Config, add the entry under “mcpServers”, save, and restart Claude Desktop.</li>
-            </ol>
+        <div className="mcp-steps">
+          <div className="mcp-steps__head">Add to an app</div>
+          <div className="mcp-install">
+            {INSTALL_APPS.map((x) => (
+              <button
+                key={x.target}
+                type="button"
+                className="n-btn n-btn--sm"
+                disabled={!serverOn || installing !== null}
+                onClick={() => void install(x.target)}
+              >
+                {installing === x.target ? <span className="n-spinner" aria-hidden="true" /> : null}
+                Add to {x.name}
+              </button>
+            ))}
           </div>
-        ) : null}
-
-        {status.enabled && status.http ? (
-          <div className="mcp-steps">
-            <div className="mcp-steps__head">Other apps (HTTP)</div>
-            <p className="mcp-steps__text">
-              Connect to{' '}
-              <button type="button" className="mcp-chip" onClick={() => void copy(`http://127.0.0.1:${status.port}/mcp`, 'Link copied')}>
-                http://127.0.0.1:{status.port}/mcp
-              </button>{' '}
-              and send the token as <code>Authorization: Bearer &lt;token&gt;</code>.
+          {!serverOn ? (
+            <p className="mcp-steps__note">Turn on the server above to add an app.</p>
+          ) : installedMsg ? (
+            <p className={`mcp-steps__note${installedMsg.error ? ' is-error' : ''}`} role="status">
+              {installedMsg.text}
             </p>
-            {fresh ? (
+          ) : null}
+          <p className="mcp-steps__note">Each app gets a private key to Notula’s server, kept in its own settings. Removing the app here cuts it off.</p>
+        </div>
+
+        {status.enabled && picked ? (
+          <div className="mcp-steps">
+            <div className="mcp-steps__head">Set up another app</div>
+            {snippet ? (
               <div className="mcp-fresh">
-                <div className="mcp-fresh__label">Copy this token now. Notula won’t show it again.</div>
+                <div className="mcp-fresh__label">Copy this setup now. It holds a key Notula won’t show again.</div>
+                <pre className="mcp-snippet">{snippet.text}</pre>
+                <p className="mcp-steps__text">{SNIPPET_CLIENTS.find((c) => c.id === snippet.client)?.steps}</p>
                 <div className="mcp-fresh__row">
-                  <code className="mcp-fresh__token">{fresh.token}</code>
-                  <button type="button" className="n-btn n-btn--sm" onClick={() => void copy(fresh.token)}>
-                    Copy
+                  <button type="button" className="n-btn n-btn--sm" onClick={() => void copy(snippet.text, 'Setup copied')}>
+                    Copy setup
                   </button>
-                  <button type="button" className="n-btn n-btn--ghost n-btn--sm" onClick={() => setFresh(null)}>
+                  <button type="button" className="n-btn n-btn--ghost n-btn--sm" onClick={() => setSnippet(null)}>
                     Done
                   </button>
                 </div>
               </div>
             ) : (
-              <button type="button" className="n-btn n-btn--sm" onClick={() => setNaming(true)}>
-                Create token
-              </button>
+              <div className="mcp-picker">
+                <select className="n-input mcp-picker__select" aria-label="App to set up" value={picked.id} onChange={(e) => setClient(e.target.value as McpSnippetClient)}>
+                  {clients.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.label}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="n-btn n-btn--sm"
+                  onClick={() => (picked.id === 'program' || picked.id === 'url' ? setNaming(true) : void createSnippet(picked.id))}
+                >
+                  Create key
+                </button>
+              </div>
             )}
           </div>
         ) : null}
 
-        {tokens.length ? (
-          <div className="mcp-tokens">
-            <div className="mcp-steps__head">Tokens</div>
+        <div className="mcp-tokens">
+          <div className="mcp-steps__head">Connected apps</div>
+          {apps.length ? (
             <ul>
-              {tokens.map((t) => (
-                <li key={t.id} className="mcp-tokens__row">
-                  <span className="mcp-tokens__name">{t.name}</span>
-                  <span className="mcp-badge">{t.kind === 'stdio' ? 'stdio' : 'HTTP'}</span>
-                  <span className="mcp-tokens__meta">
-                    Created {new Date(t.createdAt).toLocaleDateString()} · Last used {ago(t.lastUsedAt)}
+              {apps.map((a) => (
+                <li key={a.id} className="mcp-tokens__row">
+                  <span className="mcp-tokens__name" title={a.clientName && a.clientName !== a.name ? a.clientName : undefined}>
+                    {a.name}
                   </span>
-                  <button
-                    type="button"
-                    className="n-btn n-btn--ghost n-btn--sm"
-                    onClick={() => void window.notula.mcpServer.revokeToken({ id: t.id }).then(readTokens)}
-                  >
-                    Revoke
+                  <span className="mcp-badge">{a.kind === 'stdio' ? 'stdio' : 'HTTP'}</span>
+                  <span className="mcp-tokens__meta">
+                    {a.lastUsedAt ? `Last used ${ago(a.lastUsedAt).toLowerCase()}` : 'Not used yet'} · {a.calls30d}{' '}
+                    {a.calls30d === 1 ? 'request' : 'requests'} in 30 days
+                  </span>
+                  {a.readProfile ? (
+                    <button type="button" className="mcp-chip" onClick={() => navigate('/wiki')}>
+                      {a.profilePaused ? 'Profile paused' : 'Reads your profile'}
+                    </button>
+                  ) : null}
+                  <button type="button" className="n-btn n-btn--ghost n-btn--sm" onClick={() => void remove(a)}>
+                    Remove…
                   </button>
                 </li>
               ))}
             </ul>
-          </div>
-        ) : null}
+          ) : (
+            <p className="mcp-steps__note">No apps yet. Add one above to use your notes there.</p>
+          )}
+        </div>
 
         {status.enabled ? (
           <div className="mcp-tokens">
@@ -260,19 +360,12 @@ export function LocalServerCard(): JSX.Element {
           </div>
         ) : null}
       </div>
-      {naming ? (
+      {naming && picked ? (
         <NameDialog
-          title="Create token"
+          title="Name this app"
           onDone={(name) => {
             setNaming(false)
-            if (!name) return
-            void window.notula.mcpServer.createToken({ name }).then(
-              (r) => {
-                setFresh(r)
-                readTokens()
-              },
-              (err: unknown) => showToast({ kind: 'error', title: parseError(err).message })
-            )
+            if (name) void createSnippet(picked.id, name)
           }}
         />
       ) : null}

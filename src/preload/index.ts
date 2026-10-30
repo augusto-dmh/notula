@@ -853,6 +853,9 @@ const api: NotulaApi = {
     revokeToken: (req) => ipcRenderer.invoke('mcp-server:revoke-token' satisfies InvokeChannel, req),
     getStdioConfig: (req) => ipcRenderer.invoke('mcp-server:get-stdio-config' satisfies InvokeChannel, req),
     getActivity: () => ipcRenderer.invoke('mcp-server:get-activity' satisfies InvokeChannel),
+    install: (req) => ipcRenderer.invoke('mcp-server:install' satisfies InvokeChannel, req),
+    listApps: () => ipcRenderer.invoke('mcp-server:list-apps' satisfies InvokeChannel),
+    getSnippet: (req) => ipcRenderer.invoke('mcp-server:get-snippet' satisfies InvokeChannel, req),
     onChanged: (cb) => {
       const listener = (_e: IpcRendererEvent, p: PushPayload<'mcp-server:changed'>): void => cb(p)
       ipcRenderer.on('mcp-server:changed' satisfies PushChannel, listener)
@@ -1170,6 +1173,9 @@ const api: NotulaApi = {
     update: (req) => ipcRenderer.invoke('user-context:update' satisfies InvokeChannel, req),
     setNames: (req) => ipcRenderer.invoke('user-context:set-names' satisfies InvokeChannel, req),
     draft: (req) => ipcRenderer.invoke('user-context:draft' satisfies InvokeChannel, req),
+    refresh: () => ipcRenderer.invoke('user-context:refresh' satisfies InvokeChannel),
+    setEntry: (req) => ipcRenderer.invoke('user-context:set-entry' satisfies InvokeChannel, req),
+    deleteEntry: (req) => ipcRenderer.invoke('user-context:delete-entry' satisfies InvokeChannel, req),
     export: (req) => ipcRenderer.invoke('user-context:export' satisfies InvokeChannel, req),
     agents: () => ipcRenderer.invoke('user-context:agents' satisfies InvokeChannel),
     setAgentPaused: (req) => ipcRenderer.invoke('user-context:set-agent-paused' satisfies InvokeChannel, req),

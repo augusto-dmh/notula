@@ -1,23 +1,24 @@
 // SPDX-License-Identifier: Apache-2.0
 // MCP connections and local server tokens: `mcp_connections` and `mcp_server_tokens`
-// (SHA-256 hashes only).
+// (SHA-256 hashes only), and `mcp_token_usage`, the calls per token and local day.
 //
 // Connection secrets (bearer token, environment values) never come here: they live in
 // safeStorage under `mcp.token.<id>` / `mcp.env.<id>`. A token row holds only
 // the hash of its token, so nothing in this file can give a token back.
 
 import type { IsoTime } from '@shared/types/common'
-import type { McpLocalServerToken, McpServerPolicy, McpToolPolicy, McpTransport } from '@shared/types/mcp'
+import type { McpInstallTarget, McpLocalServerToken, McpServerPolicy, McpToolPolicy, McpTransport } from '@shared/types/mcp'
 import type { McpConnectionRow } from './api'
 import { nowIso, parseJson } from './rows'
 import { invalid, notFound, type StoreCtx } from './store'
 
 const CONN_COLS =
   'id, name, transport_type, url, command, args, cwd, env_names, allow_private_network, enabled, tool_policy, server_policy, created_at, updated_at'
-const TOKEN_COLS = 'id, name, kind, created_at, last_used_at'
+const TOKEN_COLS = 'id, name, kind, created_at, last_used_at, install_target'
 const TRANSPORTS: readonly McpTransport[] = ['http', 'sse', 'stdio']
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const HASH = /^[0-9a-f]{64}$/
+const DAY = /^\d{4}-\d{2}-\d{2}$/
 
 function strings(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
@@ -51,7 +52,8 @@ function toToken(r: Record<string, unknown>): McpLocalServerToken {
     name: String(r['name']),
     kind: r['kind'] === 'http' ? 'http' : 'stdio',
     createdAt: String(r['created_at']),
-    lastUsedAt: typeof r['last_used_at'] === 'string' ? r['last_used_at'] : null
+    lastUsedAt: typeof r['last_used_at'] === 'string' ? r['last_used_at'] : null,
+    installTarget: r['install_target'] === 'cursor' || r['install_target'] === 'vscode' ? r['install_target'] : null
   }
 }
 
@@ -112,17 +114,22 @@ export function listMcpServerTokens(s: StoreCtx): McpLocalServerToken[] {
   return rows.map(toToken)
 }
 
-export function createMcpServerToken(s: StoreCtx, t: { id: string; name: string; kind: McpLocalServerToken['kind']; token_hash: string }): McpLocalServerToken {
+export function createMcpServerToken(
+  s: StoreCtx,
+  t: { id: string; name: string; kind: McpLocalServerToken['kind']; token_hash: string; install_target?: McpInstallTarget | null }
+): McpLocalServerToken {
   if (!t || typeof t.id !== 'string' || !UUID.test(t.id)) throw invalid('token id must be a UUID')
   if (typeof t.name !== 'string' || !t.name.trim() || t.name.length > 200) throw invalid('name is required')
   if (t.kind !== 'stdio' && t.kind !== 'http') throw invalid('kind must be stdio or http')
   if (typeof t.token_hash !== 'string' || !HASH.test(t.token_hash)) throw invalid('token_hash must be a SHA-256 hex digest')
+  const target = t.install_target ?? null
+  if (target !== null && target !== 'cursor' && target !== 'vscode') throw invalid('install_target must be cursor or vscode')
   s.db
     .prepare(
-      `INSERT INTO mcp_server_tokens (id, workspace_id, owner_id, name, kind, token_hash, created_at, last_used_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`
+      `INSERT INTO mcp_server_tokens (id, workspace_id, owner_id, name, kind, token_hash, created_at, last_used_at, install_target)
+       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)`
     )
-    .run(t.id, s.identity.workspaceId, s.identity.ownerId, t.name.trim(), t.kind, t.token_hash, nowIso())
+    .run(t.id, s.identity.workspaceId, s.identity.ownerId, t.name.trim(), t.kind, t.token_hash, nowIso(), target)
   return toToken(s.db.prepare(`SELECT ${TOKEN_COLS} FROM mcp_server_tokens WHERE id = ?`).get(t.id) as Record<string, unknown>)
 }
 
@@ -141,4 +148,31 @@ export function touchMcpServerToken(s: StoreCtx, id: string, at: IsoTime): void 
 export function deleteMcpServerToken(s: StoreCtx, id: string): void {
   const r = s.db.prepare(`DELETE FROM mcp_server_tokens WHERE id = ?`).run(id)
   if (!r.changes) throw notFound('mcp server token', id)
+}
+
+/** One tool call on `day` (local `YYYY-MM-DD`). A call for a token revoked meanwhile is dropped. */
+export function recordMcpUsage(s: StoreCtx, u: { tokenId: string; day: string; error: boolean; at: IsoTime }): void {
+  if (typeof u.tokenId !== 'string' || typeof u.day !== 'string' || !DAY.test(u.day)) throw invalid('tokenId and day are required')
+  s.db
+    .prepare(
+      `INSERT INTO mcp_token_usage (token_id, day, calls, errors, last_call_at)
+       SELECT id, ?, 1, ?, ? FROM mcp_server_tokens WHERE id = ?
+       ON CONFLICT (token_id, day) DO UPDATE SET calls = calls + 1, errors = errors + excluded.errors, last_call_at = excluded.last_call_at`
+    )
+    .run(u.day, u.error ? 1 : 0, u.at, u.tokenId)
+}
+
+/** Calls and errors per token on `since` (local `YYYY-MM-DD`) and later. */
+export function mcpUsageSince(s: StoreCtx, since: string): { tokenId: string; calls: number; errors: number }[] {
+  if (typeof since !== 'string' || !DAY.test(since)) throw invalid('since must be a day')
+  const rows = s.db
+    .prepare(`SELECT token_id, sum(calls) AS calls, sum(errors) AS errors FROM mcp_token_usage WHERE day >= ? GROUP BY token_id`)
+    .all(since) as Record<string, unknown>[]
+  return rows.map((r) => ({ tokenId: String(r['token_id']), calls: Number(r['calls'] ?? 0), errors: Number(r['errors'] ?? 0) }))
+}
+
+/** Deletes the usage rows before `before` (local `YYYY-MM-DD`). */
+export function pruneMcpUsage(s: StoreCtx, before: string): number {
+  if (typeof before !== 'string' || !DAY.test(before)) throw invalid('before must be a day')
+  return s.db.prepare(`DELETE FROM mcp_token_usage WHERE day < ?`).run(before).changes
 }

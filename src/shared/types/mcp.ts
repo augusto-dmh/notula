@@ -79,6 +79,42 @@ export interface McpLocalServerToken {
   kind: 'stdio' | 'http'
   createdAt: IsoTime
   lastUsedAt: IsoTime | null
+  /** Set when a one-click install minted the token. */
+  installTarget: McpInstallTarget | null
+}
+
+/** The apps `mcp-server:install` can add Notula to, through their own install link. */
+export type McpInstallTarget = 'cursor' | 'vscode'
+
+/** `server-off`: the switch or both transports are off, or local-only mode stopped the server. */
+export type McpInstallResult = 'opened' | 'no-app' | 'failed' | 'server-off'
+
+/** `mcp-server:list-apps`: one token, with its use over the last 30 days. */
+export interface McpConnectedApp {
+  id: string
+  name: string
+  kind: 'stdio' | 'http'
+  createdAt: IsoTime
+  lastUsedAt: IsoTime | null
+  calls30d: number
+  errors30d: number
+  /** The client name from the last MCP handshake since Notula started, else null. */
+  clientName: string | null
+  readProfile: boolean
+  profilePaused: boolean
+}
+
+/** The local apps `mcp-server:get-snippet` writes a setup for. `url` needs HTTP on. */
+export type McpSnippetClient = 'claude-desktop' | 'claude-code' | 'cursor' | 'vscode' | 'program' | 'url'
+
+/** A setup snippet with a new token in it, shown once. */
+export interface McpSnippet {
+  client: McpSnippetClient
+  tokenId: string
+  token: string
+  transport: 'stdio' | 'http'
+  format: 'json' | 'shell'
+  text: string
 }
 
 /** `mcp-server:get-stdio-config`: how an AI app launches the `notula-mcp` shim. */
@@ -120,7 +156,8 @@ export const MCP_LIMITS = {
   bodyMaxBytes: 1_048_576,
   concurrentPerToken: 4,
   activityMax: 50,
-  shimStartMs: 15_000
+  shimStartMs: 15_000,
+  usageDays: 30
 } as const
 
 export const MCP_TOKEN_PREFIX = 'ntl_mcp_'

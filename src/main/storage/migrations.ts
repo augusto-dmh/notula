@@ -1499,12 +1499,85 @@ INSERT OR IGNORE INTO settings (owner_id, key, value, updated_at)
 DELETE FROM settings WHERE key = 'voiceprint.passive';
 `
 
+/**
+ * Version 15: About me tables and the `teams` section. Terms and projects rows live in
+ * `user_context_entries`; names are unique ignoring case (main also checks beyond ASCII).
+ * `user_context_sections` is rebuilt only to widen its `section_id` CHECK; every row is
+ * copied as it is.
+ */
+const USER_CONTEXT_ENTRIES = `
+CREATE TABLE user_context_entries (
+  rid INTEGER PRIMARY KEY,
+  id TEXT NOT NULL UNIQUE,
+  workspace_id TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('term', 'project')),
+  name TEXT NOT NULL,
+  body TEXT NOT NULL DEFAULT '',
+  role TEXT,
+  origin TEXT NOT NULL CHECK (origin IN ('user', 'drafted')),
+  position INTEGER NOT NULL DEFAULT 0,
+  drafted_at TEXT,
+  updated_at TEXT NOT NULL,
+  UNIQUE (owner_id, kind, name COLLATE NOCASE)
+);
+
+CREATE INDEX user_context_entries_owner_idx ON user_context_entries (owner_id, kind, position);
+
+CREATE TABLE user_context_sections_new (
+  rid INTEGER PRIMARY KEY,
+  id TEXT NOT NULL UNIQUE,
+  workspace_id TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  section_id TEXT NOT NULL CHECK (
+    section_id IN (
+      'identity', 'current-work', 'relationships', 'teams', 'work-habits', 'communication', 'calendar', 'reference',
+      'assistant-guide'
+    )
+  ),
+  content TEXT NOT NULL DEFAULT '',
+  origin TEXT NOT NULL CHECK (origin IN ('user', 'drafted')),
+  drafted_at TEXT,
+  updated_at TEXT NOT NULL,
+  UNIQUE (owner_id, section_id)
+);
+
+INSERT INTO user_context_sections_new (rid, id, workspace_id, owner_id, section_id, content, origin, drafted_at, updated_at)
+  SELECT rid, id, workspace_id, owner_id, section_id, content, origin, drafted_at, updated_at FROM user_context_sections;
+
+DROP TABLE user_context_sections;
+
+ALTER TABLE user_context_sections_new RENAME TO user_context_sections;
+`
+
+/**
+ * Version 16: MCP usage per token and local calendar day (counts only: no tool names,
+ * arguments or results), deleted with its token. `install_target` marks a token minted by a
+ * one-click install.
+ */
+const MCP_USAGE = `
+CREATE TABLE mcp_token_usage (
+  token_id TEXT NOT NULL REFERENCES mcp_server_tokens (id) ON DELETE CASCADE,
+  day TEXT NOT NULL,
+  calls INTEGER NOT NULL DEFAULT 0,
+  errors INTEGER NOT NULL DEFAULT 0,
+  last_call_at TEXT,
+  PRIMARY KEY (token_id, day)
+);
+
+CREATE INDEX mcp_token_usage_day_idx ON mcp_token_usage (day);
+
+ALTER TABLE mcp_server_tokens ADD install_target TEXT CHECK (install_target IN ('cursor', 'vscode'));
+`
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: BASELINE_VERSION, name: 'baseline', sql: BASELINE },
   { version: 9, name: 'sources-and-imports', sql: SOURCES_AND_IMPORTS },
   { version: 10, name: 'dictation-usage', sql: DICTATION_USAGE },
   { version: 11, name: 'action-item-drafts', sql: ACTION_ITEM_DRAFTS },
-  { version: 12, name: 'speaker-profiles', sql: SPEAKER_PROFILES }
+  { version: 12, name: 'speaker-profiles', sql: SPEAKER_PROFILES },
+  { version: 15, name: 'user-context-entries', sql: USER_CONTEXT_ENTRIES },
+  { version: 16, name: 'mcp-usage', sql: MCP_USAGE }
 ]
 
 /**

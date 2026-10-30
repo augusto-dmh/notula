@@ -300,6 +300,10 @@ export interface Settings {
   'userContext.pausedAgentTokens': string[]
   /** MCP token id → the last time it read the profile. Main-only. */
   'userContext.agentReads': Record<string, IsoTime>
+  /** The last successful refresh of the profile. Main-only. */
+  'userContext.lastRefreshAt': IsoTime | null
+  /** Drafted rows the user deleted, as `<kind>:<lower-cased name>`; never drafted again. Main-only. */
+  'userContext.dismissedEntries': string[]
   'dispatcher.enabled': boolean
   'dispatcher.morningRun': boolean
   'dispatcher.morningHour': number
@@ -548,6 +552,8 @@ export const DEFAULT_SETTINGS: Settings = {
   'userContext.shareWithAgents': false,
   'userContext.pausedAgentTokens': [],
   'userContext.agentReads': {},
+  'userContext.lastRefreshAt': null,
+  'userContext.dismissedEntries': [],
   'dispatcher.enabled': false,
   'dispatcher.morningRun': true,
   'dispatcher.morningHour': 7,
@@ -636,6 +642,8 @@ export const MAIN_ONLY_SETTING_KEYS = [
   'userContext.nameDictionary',
   'userContext.pausedAgentTokens',
   'userContext.agentReads',
+  'userContext.lastRefreshAt',
+  'userContext.dismissedEntries',
   'localApi.enabled',
   'ui.appIcon',
   'nux.dismissed',

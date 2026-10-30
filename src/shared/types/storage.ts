@@ -71,6 +71,7 @@ export type StoreTable =
   | 'manual_tasks'
   | 'summary_feedback'
   | 'user_context_sections'
+  | 'user_context_entries'
   | 'dispatch_todos'
   | 'dispatches'
   | 'dispatch_runs'
