@@ -46,6 +46,11 @@ export interface PairEvidence {
   /** Fused log-odds and P(correct). */
   fused: number
   p: number
+  /**
+   * The fused log-odds without voice that can't name this candidate automatically; null when no
+   * other signal is left. The assignment that picks who may be named automatically reads it.
+   */
+  autoFused: number | null
   source: SpeakerCandidateSource
 }
 

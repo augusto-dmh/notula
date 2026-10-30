@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // The decision module: evidence per (cluster, candidate), fusion
-// from the calibration, a one-to-one assignment with an unknown option per cluster, and the
-// bands. Pure: no I/O and no logging, so the job, relabel and the benchmark all drive it.
-// Its inputs and outputs never leave main.
+// from the calibration, a one-to-one assignment with an unknown option per cluster (autos take
+// theirs from one that only voice able to name automatically can steer), and the bands. Pure:
+// no I/O and no logging, so the job, relabel and the benchmark all drive it. Its inputs and
+// outputs never leave main.
 
 import type {
   SpeakerAutoSource,
@@ -145,6 +146,8 @@ interface ClusterState {
   intros: PairEvidence[]
   mappings: DecideLlmMapping[]
   assigned: DecideCandidate | null
+  /** The assignment on `autoFused`: the only candidate this cluster may be named after automatically. */
+  autoAssigned: DecideCandidate | null
 }
 
 /** The same input gives the same result whatever the order of clusters or candidates. */
@@ -178,6 +181,7 @@ export function decide(input: DecideInput, calibration: SpeakerCalibrationState)
       const conversation = cues.length > 0 && !elimination
       const f = fuse({ voice, app, conversation, elimination }, opts.fusion)
       if (!f) continue
+      const own = voice && !voiceMayName(c, j, input) ? fuse({ voice: null, app, conversation, elimination }, opts.fusion) : f
       pairs.set(j.id, {
         id: j.id,
         candidate: j,
@@ -188,6 +192,7 @@ export function decide(input: DecideInput, calibration: SpeakerCalibrationState)
         elimination,
         fused: f.fused,
         p: sigmoid(f.fused),
+        autoFused: own?.fused ?? null,
         source: f.source
       })
     }
@@ -209,34 +214,42 @@ export function decide(input: DecideInput, calibration: SpeakerCalibrationState)
         elimination: false,
         fused: f.fused,
         p: sigmoid(f.fused),
+        autoFused: null,
         source: 'conversation'
       })
     }
     intros.sort((a, b) => compare(a.id, b.id))
-    return { cluster: c, cond, pairs, intros, mappings, assigned: null }
+    return { cluster: c, cond, pairs, intros, mappings, assigned: null, autoAssigned: null }
   })
 
   // One-to-one assignment, with one unknown option per cluster scored at its floor.
   const floorOdds = (s: ClusterState): number => Math.log(s.cond.floor / (1 - s.cond.floor))
-  const weight = states.map((s) =>
-    candidates.map((j) => {
-      const e = s.pairs.get(j.id)
-      if (!e) return null
-      const w = e.fused - floorOdds(s)
-      return w > 0 ? w : null
-    })
-  )
-  const columns = assignOneToOne(weight, candidates.length)
+  const assign = (score: (e: PairEvidence) => number | null): (DecideCandidate | null)[] => {
+    const weight = states.map((s) =>
+      candidates.map((j) => {
+        const e = s.pairs.get(j.id)
+        const x = e ? score(e) : null
+        if (x === null) return null
+        const w = x - floorOdds(s)
+        return w > 0 ? w : null
+      })
+    )
+    return assignOneToOne(weight, candidates.length).map((col) => candidates[col] ?? null)
+  }
+  const assigned = assign((e) => e.fused)
+  // Autos come from an assignment that voice which can't name automatically doesn't steer:
+  // otherwise a non-attendee's voice could move their tile onto a cluster the app rule then names.
+  const steered = states.some((s) => [...s.pairs.values()].some((e) => e.autoFused !== e.fused))
+  const autoAssigned = steered ? assign((e) => e.autoFused) : assigned
   states.forEach((s, i) => {
-    s.assigned = candidates[columns[i] as number] ?? null
+    s.assigned = assigned[i] ?? null
+    s.autoAssigned = autoAssigned[i] ?? null
   })
-  const assignedTo = new Map<string, string>()
-  for (const s of states) if (s.assigned) assignedTo.set(s.assigned.id, s.cluster.key)
 
   // Auto rows first, in the table's order.
   const autos = new Map<string, { j: DecideCandidate; src: SpeakerAutoSource }>()
   for (const s of states) {
-    const j = s.assigned
+    const j = s.autoAssigned
     if (!j) continue
     const app = appAuto(s, j)
     const voice = voiceAuto(s, j, states, input, voiceOn)
@@ -250,6 +263,13 @@ export function decide(input: DecideInput, calibration: SpeakerCalibrationState)
     byName.set(k, [...(byName.get(k) ?? []), key])
   }
   for (const keys of byName.values()) if (keys.length > 1) for (const key of keys) autos.delete(key)
+  // An auto takes its person; any other cluster keeps the person it was assigned, unless that
+  // person is named automatically elsewhere.
+  const assignedTo = new Map<string, string>()
+  for (const [key, a] of autos) assignedTo.set(a.j.id, key)
+  for (const s of states) {
+    if (s.assigned && !autos.has(s.cluster.key) && !assignedTo.has(s.assigned.id)) assignedTo.set(s.assigned.id, s.cluster.key)
+  }
 
   const decisions = new Map<string, ClusterDecision>()
   for (const s of states) {
@@ -313,13 +333,7 @@ function voiceAuto(
   const c = s.cluster
   const e = s.pairs.get(j.id)
   if (!voiceOn || !e?.voice || e.voice.crossChannel || !e.voice.space) return false
-  if (j.isSelf) {
-    if (!input.selfVoice || c.channel !== 'mic') return false
-  } else {
-    // Without a linked event, voice auto-names nobody but self.
-    if (!input.voices || !j.hasAgreement || !j.attendee || !input.hasLinkedEvent) return false
-  }
-  if (!j.autoRecognize) return false
+  if (!voiceMayName(c, j, input)) return false
   if (c.cleanMs < L.autoMinSpeechMs) return false
   if (e.voice.space.confirmations < L.autoMinConfirmations) return false
   if (!s.cond.autoEnabled) return false
@@ -346,6 +360,14 @@ function voiceAuto(
   // … or an accepted LLM mapping to another candidate.
   if (s.mappings.some((m) => !mappingRefersTo(m, j))) return false
   return true
+}
+
+/** Whose voice may name them automatically: self on the mic, or an attendee with an agreement. */
+function voiceMayName(c: DecideCluster, j: DecideCandidate, input: DecideInput): boolean {
+  if (!j.autoRecognize) return false
+  if (j.isSelf) return input.selfVoice && c.channel === 'mic'
+  // Without a linked event, voice auto-names nobody but self.
+  return input.voices && j.hasAgreement && j.attendee && input.hasLinkedEvent
 }
 
 function clearsMargin(diff: number, cond: DecideCondition): boolean {

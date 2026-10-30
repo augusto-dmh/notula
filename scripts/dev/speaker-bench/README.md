@@ -125,7 +125,7 @@ The app reads the key from that environment variable and stores it in the run pr
 |---|---|---|
 | A1 | every dump | no two auto clusters of a note with the same person |
 | A2 | evaluate | voice-only decisions: no candidate above the floor ⇒ `none` |
-| A3 | scenarios | held-out people removed from the events, rerun; then enrolled, rerun: no cluster rises to auto |
+| A3 | scenarios | held-out people removed from the events, rerun; then enrolled, rerun: no cluster rises to auto. `bySource` counts the rises per auto source; the run's `app.log` names each one (`speaker-bench:a3-rise`) |
 | A4 | evaluate + scenarios | `decide` on shuffled clusters, candidates, gallery and mappings; reruns with shuffled attendees: identical bands |
 | A5 | evaluate | no space for a foreign model id; no voice band under a foreign model's calibration. One extractor is installed, so the switch is simulated |
 | A6 | scenarios | `confirmed_*` hash around every rerun and relabel; relabel makes no LLM call (mock count) and lowers no auto |

@@ -1290,7 +1290,7 @@ class Bench {
         await this.writeAttendees(n.noteId, att.filter((a) => !step.heldOut.includes(a)))
         await this.rerun(n.noteId, a6)
       }
-      const before = new Map<string, Map<string, { band: SpeakerBand }>>()
+      const before = new Map<string, Awaited<ReturnType<Bench['bands']>>>()
       for (const n of live) before.set(n.noteId, await this.bands(n.noteId))
       let enrolled = 0
       for (const h of step.heldOutEnroll) {
@@ -1305,16 +1305,25 @@ class Bench {
         if (r.named) enrolled++
       }
       if (enrolled) await sleep(UNDO_WAIT_MS)
+      const bySource: Record<string, number> = {}
+      let heldOutNamed = 0
       for (const n of live) {
         await this.rerun(n.noteId, a6)
         const after = await this.bands(n.noteId)
-        for (const [k, b] of before.get(n.noteId) ?? new Map<string, { band: SpeakerBand }>()) {
+        for (const [k, b] of before.get(n.noteId) ?? new Map()) {
           compared++
-          if (b.band !== 'auto' && after.get(k)?.band === 'auto') rose++
+          const a = after.get(k)
+          if (b.band === 'auto' || a?.band !== 'auto') continue
+          rose++
+          bySource[a.src ?? 'none'] = (bySource[a.src ?? 'none'] ?? 0) + 1
+          const heldOut = !!a.person && step.heldOut.includes(a.person)
+          if (heldOut) heldOutNamed++
+          // The run's log (in the bench home) says which cluster rose; the report keeps the counts.
+          log('info', 'speaker-bench:a3-rise', { note: n.tag, cluster: k.slice(k.lastIndexOf(':') + 1), was: b.band, src: a.src, heldOut })
         }
         await this.writeAttendees(n.noteId, saved.get(n.noteId) ?? [])
       }
-      this.check('A3', enrolled && compared ? (rose ? 'fail' : 'pass') : 'n/a', { heldOutEnrolled: enrolled, clusters: compared, roseToAuto: rose })
+      this.check('A3', enrolled && compared ? (rose ? 'fail' : 'pass') : 'n/a', { heldOutEnrolled: enrolled, clusters: compared, roseToAuto: rose, bySource, heldOutNamed })
     }
 
     // A7 (app removed, contradicting LLM), A12 (no-show, extra guest) and A15: re-feeds.

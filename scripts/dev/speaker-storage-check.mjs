@@ -243,6 +243,57 @@ function benchChecks(NEW) {
     check('A7: a mapping to someone else takes the automatic name away', contradicted.band !== 'auto' && contradicted.name === null, contradicted)
   }
 
+  // A3: only attendees are named automatically by voice. Carla isn't on the event; her tile is
+  // stamped on her long turn (r1, 80 % of it, enough for the app rule) and on a 10 s cluster (r2,
+  // all of it). One-to-one, her tile goes to r2, which is too short to be named automatically, so
+  // r1 gets no name. Her voice, once remembered, agrees with r1: it may give r1 a suggestion,
+  // never an automatic name. Such a tile, moved by a held-out person's voice, is how A3 saw one
+  // cluster rise on a real run.
+  {
+    const voiceOf = (i) => Float32Array.from({ length: 8 }, (_, k) => (k === i ? 1 : 0.05))
+    const cluster = (label, speechMs, tiles, vector) => ({
+      key: `r:p1:${label}`, label, channel: 'system', language: 'pt', speechMs, cleanMs: speechMs, vector, tiles, coverage: 1
+    })
+    const tile = (share, name = 'Carla Dias') => ({ participantId: name, name, share, kind: 'individual' })
+    const carla = (attendee) => ({
+      id: 'carla', personId: 'carla', name: 'Carla Dias', isSelf: false, attendee, known: !attendee, tileIds: ['Carla Dias'],
+      stampedOnSystem: true, hasAgreement: true, autoRecognize: true
+    })
+    const bruno = { id: 'bruno', personId: 'bruno', name: 'Bruno Lima', isSelf: false, attendee: true, known: false, tileIds: [], stampedOnSystem: false, hasAgreement: true, autoRecognize: true }
+    const conditions = ['<10s', '10-30s', '>=30s'].map((bucket) => ({
+      channel: 'system', language: 'pt', bucket, autoEnabled: bucket === '>=30s', tauAuto: 0.97, tauSuggest: 0.75, margin: 0.1, tieMargin: 0.03, logistic: { a: 11, b: -6 }
+    }))
+    const calibration = { voice: true, file: { modelSha: 'm', reportHash: null, createdAt: '2026-10-30T00:00:00.000Z', benchVersion: 0, conditions } }
+    const space = (personId, i) => ({ personId, channel: 'system', confirmations: 3, exemplars: [voiceOf(i)] })
+    const run = (attendee, gallery) =>
+      new Map(
+        NEW.decide.decide({
+          noteId: 'n', passId: 'p1', modelId: 'm', voices: true, selfVoice: true, hasLinkedEvent: true,
+          clusters: [
+            cluster('r1', 90_000, [tile(0.8), tile(0.1, 'Bruno Lima')], voiceOf(1)),
+            cluster('r2', 10_000, [tile(1)], voiceOf(5)),
+            cluster('r3', 60_000, [], voiceOf(2))
+          ],
+          candidates: [carla(attendee), bruno], gallery, negatives: [], llm: []
+        }, calibration).clusters.map((d) => [d.key.slice(5), d])
+      )
+    const before = run(false, [space('bruno', 2)])
+    const after = run(false, [space('bruno', 2), space('carla', 1)])
+    const attending = run(true, [space('bruno', 2), space('carla', 1)])
+    const bands = (m) => Object.fromEntries([...m].map(([k, d]) => [k, `${d.band}${d.personId ? `:${d.personId}/${d.autoSrc}` : ''}`]))
+    check('A3 (fixture): without her voice, Carla\'s tile goes to r2, r1 gets no name and Bruno is named by voice', before.get('r1').band === 'none' && before.get('r2').band === 'suggest' && before.get('r3').band === 'auto' && before.get('r3').personId === 'bruno', bands(before))
+    check('A3: a non-attendee\'s remembered voice turns no suggestion automatic, not even one her tile agrees with', [...before].every(([k, d]) => d.band === 'auto' || after.get(k).band !== 'auto'), { before: bands(before), after: bands(after) })
+    check('A3: her voice still suggests her on her own turn', after.get('r1').band === 'suggest' && after.get('r1').candidates[0]?.personId === 'carla' && after.get('r1').voiceMatched.includes('carla'), bands(after))
+    check('A3: as an attendee, her voice names r1 automatically', attending.get('r1').band === 'auto' && attending.get('r1').personId === 'carla', bands(attending))
+    // The app rule alone, with no one remembered: a dominant tile on one cluster stays automatic.
+    const alone = new Map(NEW.decide.decide({
+      noteId: 'n', passId: 'p1', modelId: 'm', voices: true, selfVoice: true, hasLinkedEvent: true,
+      clusters: [cluster('r1', 90_000, [tile(0.8), tile(0.1, 'Bruno Lima')], voiceOf(1))],
+      candidates: [carla(false), bruno], gallery: [space('carla', 1)], negatives: [], llm: []
+    }, calibration).clusters.map((d) => [d.key.slice(5), d]))
+    check('A3: a tile that passes the app rule on its own stays automatic for a non-attendee', alone.get('r1').band === 'auto' && alone.get('r1').autoSrc === 'app', bands(alone))
+  }
+
   // A7, the bench's mock reply. A meeting with two candidates and four lettered clusters: a
   // split of the user's voice and an unlabelled cluster appear first, on the mic.
   {
