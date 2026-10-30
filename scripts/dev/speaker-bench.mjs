@@ -24,7 +24,7 @@ import { join, resolve } from 'node:path'
 import { assertBuilt, linkModels, runApp } from './speaker-bench/electron.mjs'
 import { composeStress, dryFixture, findFfmpeg, T3_VARIANTS, t2Variants } from './speaker-bench/fixtures.mjs'
 import { assertPrivatePath, BENCH_DIR, loadManifest, ROOT } from './speaker-bench/manifest.mjs'
-import { a1, clusterRows, coverageDrops, cpuSummary, derSummary, finalCalibration, fitCandidate, summarize, t2Summary, verification } from './speaker-bench/metrics.mjs'
+import { a1, clusterRows, coverageDrops, cpuSummary, derSummary, finalCalibration, micEchoSummary, fitCandidate, summarize, t2Summary, verification } from './speaker-bench/metrics.mjs'
 import { compareModels } from './speaker-bench/models.mjs'
 import { basePlan, BENCH_VERSION, benchSettings, feedMeeting, heldOutPeople, schedule } from './speaker-bench/protocol.mjs'
 import { writeReport } from './speaker-bench/report.mjs'
@@ -238,6 +238,7 @@ async function run(args) {
     byCondition: candidate.byCondition,
     verification: verification(rows2),
     der: derSummary(baselineFeeds, ctx),
+    micEcho: micEchoSummary(baselineFeeds, ctx),
     cpu: cpuSummary(baselineFeeds),
     t2: t2Summary(r1.feeds, ctx),
     t3: candidate.composed,

@@ -349,6 +349,46 @@ export function derSummary(feeds, ctx) {
   return out
 }
 
+/**
+ * The mic's echo of the system channel, over the baseline feeds of meetings with system speech:
+ * mic words that repeat system words (`micWords`' flag), the self's mic words and the share of
+ * self speech they cover, and the mic clusters beyond the people labelled on the mic.
+ */
+export function micEchoSummary(feeds, ctx) {
+  const t = { meetings: 0, micWords: 0, repeated: 0, selfWords: 0, selfMs: 0, selfCoveredMs: 0, micClusters: 0, extraMicClusters: 0 }
+  for (const f of feeds) {
+    const m = ctx.meetingOfTag(f.tag)
+    if (!m || m.composed || f.tag.startsWith('t2:') || !f.micWords) continue
+    if (!m.labels.some((l) => l.channel === 'system')) continue
+    t.meetings++
+    const self = m.labels.filter((l) => l.channel === 'mic' && l.person === ctx.selfId)
+    const inSelf = (ms) => self.some((l) => ms >= l.startMs && ms < l.endMs)
+    for (const [s, e, rep] of f.micWords) {
+      t.micWords++
+      t.repeated += rep
+      if (inSelf((s + e) / 2)) t.selfWords++
+    }
+    for (const l of self) {
+      t.selfMs += l.endMs - l.startMs
+      const cover = f.micWords.map(([s, e]) => [Math.max(s, l.startMs), Math.min(e, l.endMs)]).filter(([s, e]) => e > s).sort((a, b) => a[0] - b[0])
+      let end = l.startMs
+      for (const [s, e] of cover) {
+        if (e > end) t.selfCoveredMs += e - Math.max(s, end)
+        end = Math.max(end, e)
+      }
+    }
+    const mic = f.clusters.filter((c) => c.channel === 'mic').length
+    t.micClusters += mic
+    t.extraMicClusters += Math.max(0, mic - new Set(m.labels.filter((l) => l.channel === 'mic').map((l) => l.person)).size)
+  }
+  return {
+    ...t,
+    repeatedRate: t.micWords ? round(t.repeated / t.micWords) : null,
+    selfCoverage: t.selfMs ? round(t.selfCoveredMs / t.selfMs) : null,
+    extraMicClustersPerMeeting: t.meetings ? round(t.extraMicClusters / t.meetings, 2) : null
+  }
+}
+
 /** CPU of the pass per hour of audio (cumulative CPU of each utility process, and the pass's wall time). */
 export function cpuSummary(feeds) {
   let audioMs = 0

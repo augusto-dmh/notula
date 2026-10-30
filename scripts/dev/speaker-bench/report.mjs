@@ -53,6 +53,11 @@ export function renderMarkdown(r) {
   out.push(table(['channel', 'genuine', 'impostor', 'FAR', 'threshold'], Object.entries(r.verification).map(([k, v]) => [k, v.genuine, v.impostor, v.farAtFrr5, v.threshold])))
   out.push('## DER (frame level, word-timed hypotheses)', '')
   out.push(table(['channel', 'meetings', 'reference s', 'DER'], Object.entries(r.der).map(([k, v]) => [k, v.meetings, v.refSeconds, v.der])))
+  if (r.micEcho) {
+    const e = r.micEcho
+    out.push('## Mic echo (meetings with system speech)', '')
+    out.push(table(['', 'value'], [['meetings', e.meetings], ['mic words', e.micWords], ['mic words repeating system words', e.repeated], ['repeated rate', e.repeatedRate], ['self mic words', e.selfWords], ['self speech covered by mic words', e.selfCoverage], ['mic clusters', e.micClusters], ['extra mic clusters per meeting', e.extraMicClustersPerMeeting]]))
+  }
   out.push('## CPU', '')
   out.push(table(['', 'value'], [['audio hours', r.cpu.audioHours], ['passes', r.cpu.passes], ['pass wall s per audio hour', r.cpu.passWallSecondsPerAudioHour], ...Object.entries(r.cpu.cpuSecondsPerAudioHour).map(([k, v]) => [`CPU s per audio hour: ${k}`, v])]))
   out.push('## Platform replay (T2, the app rule; does not gate voice)', '')

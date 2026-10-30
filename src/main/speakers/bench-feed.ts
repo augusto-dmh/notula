@@ -213,6 +213,8 @@ interface NoteDump {
   cpuSeconds: Record<string, number>
   uiaRecords: number
   clusters: ClusterDump[]
+  /** Every final mic word on the meeting's timeline, and 1 when it repeats system words (`echoWords`). No text. */
+  micWords: [number, number, 0 | 1][]
   enrolled: { person: string; clusters: number; agreement: boolean }[]
 }
 
@@ -304,6 +306,32 @@ function pcmFromWav(path: string): Buffer {
     i += 8 + size + (size % 2)
   }
   throw new Error(`no data chunk: ${path}`)
+}
+
+const ECHO_WORD_EARLY_MS = 1_000
+const ECHO_WORD_LATE_MS = 400
+
+const foldWord = (w: string): string => foldName(w).replace(/[^\p{L}\p{N}]/gu, '')
+
+/**
+ * The final mic words on the meeting's timeline, each flagged 1 when it repeats the system
+ * channel: a system word with the same folded text starts up to 1 s before it (or 0.4 s after,
+ * for timestamp jitter), and so does its mic neighbour on either side. A pair keeps chance
+ * matches of short common words out.
+ */
+function echoWords(final: readonly TranscriptChunk[], feedStartMs: number): [number, number, 0 | 1][] {
+  const words = (source: AudioSource): { t: string; s: number; e: number }[] =>
+    final
+      .filter((c) => c.source === source && c.providerDetails)
+      .flatMap((c) => {
+        const d = c.providerDetails as NonNullable<TranscriptChunk['providerDetails']>
+        return d.words.map((w) => ({ t: foldWord(w.w), s: d.wallClockAnchorMs + w.s_ms - feedStartMs, e: d.wallClockAnchorMs + w.e_ms - feedStartMs }))
+      })
+      .sort((a, b) => a.s - b.s)
+  const mic = words('microphone')
+  const sys = words('system')
+  const hit = mic.map((m) => !!m.t && sys.some((x) => x.t === m.t && x.s >= m.s - ECHO_WORD_EARLY_MS && x.s <= m.s + ECHO_WORD_LATE_MS))
+  return mic.map((m, i) => [Math.round(m.s), Math.round(m.e), hit[i] && (hit[i - 1] || hit[i + 1]) ? 1 : 0])
 }
 
 /** The person of each cluster: the label person holding most of its word time (≥ 50 %), else null. */
@@ -828,6 +856,7 @@ class Bench {
       cpuSeconds,
       uiaRecords: records.length,
       clusters,
+      micWords: echoWords(final, feedStartMs),
       enrolled: []
     }
     if (step.enroll?.length && passId) dump.enrolled = await this.enroll(noteId, passId, clusters, m.labels, step.enroll, m.language)
