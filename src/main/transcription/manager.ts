@@ -8,7 +8,9 @@
 // a local session whose model is
 // missing downloads it first; with diarization
 // on, sessions tee their audio and the note gets one diarization pass when its
-// capture stops.
+// capture stops. A note that captures both sources runs its mic through the echo gate
+// (echo-gate.ts) before the session, so ASR and the tee never hear the remote voices
+// twice; the gate outlives a swap.
 
 import type { PushChannel } from '@shared/ipc'
 import type { AudioSource, IsoTime } from '@shared/types/common'
@@ -24,6 +26,7 @@ import { getAttribution } from '../speakers/attribution'
 import type { StorageIdentity } from '../storage/api'
 import type { SourceStateListener, StartOptions } from './api'
 import { ChunkStore } from './chunks'
+import { EchoGate } from './echo-gate'
 import { cleanKeywords } from './keywords'
 import { assemblyMultiModel, deepgramMultiModel } from './languages'
 import { LOCAL_ASR_MODEL, localCovers } from './providers/local'
@@ -75,6 +78,8 @@ export class TranscriptionManager {
   private readonly stops = new Map<string, Set<Promise<unknown>>>()
   private sourceListener: SourceStateListener = () => undefined
   private identity: StorageIdentity | null = null
+  /** The mic's echo gate per note capturing both sources. */
+  private readonly echoGates = new Map<string, EchoGate>()
   /** Sessions whose boot threw; the user's Retry boots them again. */
   private readonly bootFailed = new Map<TranscriptionSession, StartOptions>()
   /** `start` is synchronous, so the settings it needs are mirrored here. */
@@ -167,6 +172,9 @@ export class TranscriptionManager {
     )
     this.active.set(opts.noteId, session)
     this.requested.set(opts.noteId, { asr: opts.asr, language: opts.language })
+    if (session.sources.length === 2 && !this.echoGates.has(opts.noteId)) {
+      this.echoGates.set(opts.noteId, new EchoGate((pcm, captureTimeMs) => this.active.get(opts.noteId)?.feed('microphone', pcm, captureTimeMs)))
+    }
     this.launch(session, { ...opts, language })
     return { sessionId: session.id, startedAt: session.startedAt }
   }
@@ -252,7 +260,11 @@ export class TranscriptionManager {
   }
 
   feed(noteId: string, source: AudioSource, pcm: Buffer, captureTimeMs: number): void {
+    const gate = this.echoGates.get(noteId)
+    if (gate && source === 'microphone') return gate.mic(pcm, captureTimeMs)
     this.active.get(noteId)?.feed(source, pcm, captureTimeMs)
+    // After the session has the system audio: the gate may release mic audio it held for it.
+    if (gate) gate.system(pcm, captureTimeMs)
   }
 
   updateKeywords(noteId: string, keywords: string[]): void {
@@ -349,6 +361,13 @@ export class TranscriptionManager {
   stop(noteId: string, reason: string): Promise<{ sessionId: string; startedAt: IsoTime } | null> {
     const session = this.active.get(noteId)
     if (!session) return Promise.resolve(null)
+    // The mic audio the gate still holds (at most 300 ms) goes to the session before its drain.
+    const gate = this.echoGates.get(noteId)
+    if (gate) {
+      gate.flush()
+      this.echoGates.delete(noteId)
+      log('info', 'asr:echo-gate', { noteId, ...gate.stats })
+    }
     this.active.delete(noteId)
     this.requested.delete(noteId)
     this.bootFailed.delete(session)
