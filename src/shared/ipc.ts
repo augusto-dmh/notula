@@ -267,6 +267,7 @@ import type {
   SpeakerMatchRow,
   SpeakerMergePreview,
   SpeakerNoticeLanguage,
+  SpeakerPendingSpeaker,
   SpeakerPersonView,
   SpeakerRosterRow,
   SpeakerSampleRow,
@@ -466,8 +467,12 @@ export interface InvokeChannels {
     { chunksNamed: number; undoToken: string | null }
   ]
   'speaker-names:undo': [{ undoToken: string }, { ok: boolean }]
+  /** The note's pending requests, each resolved to the speaker its span picks now. */
+  'speaker-names:pending': [{ noteId: string }, SpeakerPendingSpeaker[]]
   /** A WAV of up to 8 s for one speaker; played from memory, never stored. */
   'speaker-names:clip': [{ noteId: string; identityKey: string }, { wav: Uint8Array | null; reason?: 'no-audio' }]
+  /** Whether the note has audio a clip can come from (the diarization temp audio or kept recordings). */
+  'speaker-names:has-clip': [{ noteId: string }, { available: boolean }]
   // Speaker profiles: status, notices and the post-meeting job (refused while locked)
   'speakers:get-status': [void, SpeakersStatus]
   /** Rejects `invalid-input` without `confirmed`. `keepSelf`: the user's own voice stays (Recognize voices off). */
@@ -482,6 +487,11 @@ export interface InvokeChannels {
   'speaker-people:list': [{ query?: string; noteId?: string }, SpeakerRosterRow[]]
   /** Rejects `not-found`. */
   'speaker-people:get': [{ personId: string }, SpeakerPersonView]
+  /**
+   * The person a name (or an attendee's email) names, created when Notula doesn't know it yet, so
+   * the agreement sheet and Not <name> have a person before any naming. No voice is linked.
+   */
+  'speaker-people:ensure': [{ name: string; email?: string }, { personId: string }]
   'speaker-people:matches': [{ personId: string }, SpeakerMatchRow[]]
   'speaker-people:samples': [{ personId: string }, SpeakerSampleRow[]]
   'speaker-people:remove-sample': [{ sampleId: string }, { undoToken: string | null }]
@@ -1471,7 +1481,9 @@ export interface NotulaApi {
     askFirst: InvokeMember<'speaker-names:ask-first'>
     namePending: InvokeMember<'speaker-names:name-pending'>
     undo: InvokeMember<'speaker-names:undo'>
+    pending: InvokeMember<'speaker-names:pending'>
     clip: InvokeMember<'speaker-names:clip'>
+    hasClip: InvokeMember<'speaker-names:has-clip'>
     onChanged: PushMember<'speaker-names:changed'>
   }
   speakers: {
@@ -1487,6 +1499,7 @@ export interface NotulaApi {
   speakerPeople: {
     list: InvokeMember<'speaker-people:list'>
     get: InvokeMember<'speaker-people:get'>
+    ensure: InvokeMember<'speaker-people:ensure'>
     matches: InvokeMember<'speaker-people:matches'>
     samples: InvokeMember<'speaker-people:samples'>
     removeSample: InvokeMember<'speaker-people:remove-sample'>

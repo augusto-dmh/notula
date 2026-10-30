@@ -13,8 +13,8 @@ import { expected } from '../ipc-expected'
 import { log } from '../log'
 import { maybeRunSpeechHarness } from '../transcription/harness'
 import { getAttribution } from './attribution'
-import { speakerClip } from './clip'
-import { acceptName, acceptRequest, askFirst, namePending, notPerson, skipSpeaker } from './naming'
+import { speakerClip, speakerClipAvailable } from './clip'
+import { acceptName, acceptRequest, askFirst, ensurePerson, namePending, notPerson, pendingInNote, skipSpeaker } from './naming'
 import { getSpeakerNames } from './names'
 import { flushAll, hasPendingUndo, undo } from './undo'
 
@@ -96,9 +96,27 @@ export function registerSpeakerTags(ctx: MainContext): void {
     }
   )
 
+  // With the naming paths, because the agreement sheet asks for it before a naming.
+  ipcMain.handle(
+    'speaker-people:ensure' satisfies InvokeChannel,
+    (_e, req: InvokeReq<'speaker-people:ensure'>): Promise<InvokeRes<'speaker-people:ensure'>> => ensurePerson(ctx, req)
+  )
+
+  ipcMain.handle(
+    'speaker-names:pending' satisfies InvokeChannel,
+    (_e, req: InvokeReq<'speaker-names:pending'>): Promise<InvokeRes<'speaker-names:pending'>> => pendingInNote(ctx, noteIdOf(req))
+  )
+
   ipcMain.handle(
     'speaker-names:clip' satisfies InvokeChannel,
     (_e, req: InvokeReq<'speaker-names:clip'>): Promise<InvokeRes<'speaker-names:clip'>> => speakerClip(ctx, noteIdOf(req), identityKeyOf(req))
+  )
+
+  ipcMain.handle(
+    'speaker-names:has-clip' satisfies InvokeChannel,
+    async (_e, req: InvokeReq<'speaker-names:has-clip'>): Promise<InvokeRes<'speaker-names:has-clip'>> => ({
+      available: await speakerClipAvailable(ctx, noteIdOf(req))
+    })
   )
 
   // Quit inside an Undo window: the deferred effects run now, before storage closes.

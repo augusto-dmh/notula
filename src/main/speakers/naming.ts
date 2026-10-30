@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // The user's naming paths: `speaker-names:accept`,
-// `reject` (Skip), `not-person`, `ask-first`, `name-pending` and `undo`.
+// `reject` (Skip), `not-person`, `ask-first`, `name-pending` and `undo`, with the reads that
+// serve them: `speaker-names:pending` and `speaker-people:ensure` (a person before the agreement sheet).
 //
 // - Every path but `undo` is refused with `busy` while the note's job runs and
 //   with `stale` when the renderer's pass (or the identity key's) isn't the note's current one.
@@ -27,7 +28,7 @@
 import { notulaError, type ErrorCode } from '@shared/errors'
 import type { PushChannel } from '@shared/ipc'
 import { identityPassId, sameSpeakerName, speakerIdentities, wordIdentityKeys, type SpeakerIdentity } from '@shared/lib/speakers'
-import { SPEAKER_JOB_BUSY, SPEAKER_PROFILE_LIMITS, type SpeakerChannel, type SpeakerSampleVia } from '@shared/types/speakers'
+import { SPEAKER_JOB_BUSY, SPEAKER_PROFILE_LIMITS, type SpeakerChannel, type SpeakerPendingSpeaker, type SpeakerSampleVia } from '@shared/types/speakers'
 import type { ProviderWord, SpeakerNameAccept, SpeakerNameAcceptResult, SpeakerNameSuggestion, TranscriptChunk } from '@shared/types/transcript'
 import { speakerIdModelId } from '../asr/manifest'
 import type { MainContext } from '../context'
@@ -308,22 +309,47 @@ export interface AcceptOptions {
   pendingIds?: string[]
 }
 
+/** The person an attendee's email names, created when there's none yet. */
+async function personByEmail(ctx: MainContext, rawEmail: string, name: string): Promise<SpeakerPersonRow> {
+  const email = rawEmail.trim().toLowerCase()
+  const found = await ctx.storage.findSpeakerPersonByEmail(email)
+  if (found) return found
+  try {
+    return await ctx.storage.createSpeakerPerson({ displayName: name, email })
+  } catch (err) {
+    const again = await ctx.storage.findSpeakerPersonByEmail(email)
+    if (again) return again
+    throw err
+  }
+}
+
+/**
+ * `speaker-people:ensure`: the person behind a name before any naming, for the agreement sheet
+ * and Not <name>. An email finds or creates by email; a name alone finds the one person (not
+ * the user) of that name, else creates one. Nothing about a voice is linked here.
+ */
+export async function ensurePerson(ctx: MainContext, raw: unknown): Promise<{ personId: string }> {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+  const name = str(r['name'], 'A name', 200).trim()
+  const email = r['email'] === undefined || r['email'] === null ? undefined : str(r['email'], 'email', 320)
+  if (email !== undefined && !/^[^\s@]+@[^\s@]+$/.test(email.trim())) fail('invalid-input', 'email is not an email address.')
+  if (email) {
+    const p = await personByEmail(ctx, email, name)
+    pushSpeakerPeopleChanged(ctx, p.id)
+    return { personId: p.id }
+  }
+  const same = (await ctx.storage.listSpeakerPeople({ query: name, limit: 20 })).filter((p) => !p.isSelf && !p.mergedInto && sameSpeakerName(p.displayName, name))
+  if (same.length === 1) return { personId: (same[0] as SpeakerPersonRow).id }
+  const created = await ctx.storage.createSpeakerPerson({ displayName: name, email: null })
+  pushSpeakerPeopleChanged(ctx, created.id)
+  return { personId: created.id }
+}
+
 /** Who the request names: a person (found or created), or nobody (a free-text name). */
 async function personFor(ctx: MainContext, req: SpeakerNameAccept, name: string): Promise<SpeakerPersonRow | null> {
   if (req.self) return ctx.storage.ensureSelfPerson((await ctx.settings.get('profile.name')).trim() || null)
   if (req.personId) return personOf(ctx, req.personId)
-  if (req.email) {
-    const email = req.email.trim().toLowerCase()
-    const found = await ctx.storage.findSpeakerPersonByEmail(email)
-    if (found) return found
-    try {
-      return await ctx.storage.createSpeakerPerson({ displayName: name, email })
-    } catch (err) {
-      const again = await ctx.storage.findSpeakerPersonByEmail(email)
-      if (again) return again
-      throw err
-    }
-  }
+  if (req.email) return personByEmail(ctx, req.email, name)
   if (req.newName) return ctx.storage.createSpeakerPerson({ displayName: req.newName.trim(), email: null })
   return null
 }
@@ -376,7 +402,8 @@ export async function acceptName(ctx: MainContext, req: SpeakerNameAccept, opts:
         person,
         // Condition 4, and condition 3 as it stood when the user named (re-checked at apply).
         learn: !turn && req.remember && agreed,
-        via: opts.via ?? (req.edited ? 'rename' : 'confirm'),
+        // A rename replaces a name the speaker had; a typed name on an unnamed speaker is a first naming.
+        via: opts.via ?? (req.edited && t.identity.state !== 'unnamed' ? 'rename' : 'confirm'),
         clusterEffects: !turn && !superseded,
         // The consent sheet may still follow: the vector stays for the naming that records it.
         keepVector: needsAgreement,
@@ -638,6 +665,28 @@ export async function namePending(ctx: MainContext, noteId: string, identityKey:
     { via: 'agreement', pendingIds: resolved.filter((r) => r.key === key || !r.key).map((r) => r.p.id) }
   )
   return { chunksNamed: r.chunksNamed, undoToken: r.undoToken }
+}
+
+/**
+ * `speaker-names:pending`: the note's requests, each with the speaker its span picks now, so the
+ * pill and the who's-who row of that speaker say "Waiting for <name>’s reply" whatever its guess.
+ */
+export async function pendingInNote(ctx: MainContext, noteId: string): Promise<SpeakerPendingSpeaker[]> {
+  const requests = await ctx.storage.listSpeakerPending({ noteId })
+  if (!requests.length) return []
+  const chunks = await chunksOf(ctx, noteId)
+  const passId = currentPassId(chunks)
+  const identities = new Map(speakerIdentities(chunks, { live: false }).identities.map((i) => [i.key, i]))
+  const out: SpeakerPendingSpeaker[] = []
+  for (const p of requests) {
+    const person = await ctx.storage.getSpeakerPerson(p.personId, { resolveMerged: true }).catch(() => null)
+    if (!person) continue
+    const key = identityForSpan(chunks, p)
+    const identity = key ? identities.get(key) : undefined
+    const canName = !!identity && (await hasActiveAgreement(ctx, person.id)) && !!(await clusterVector(ctx, noteId, passId, identity))
+    out.push({ identityKey: key, personId: person.id, name: person.displayName, canName })
+  }
+  return out
 }
 
 // ---------- request validation ----------

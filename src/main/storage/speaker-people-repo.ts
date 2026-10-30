@@ -368,7 +368,10 @@ export function deleteSpeakerPerson(s: StoreCtx, id: string): void {
 
 // ---------- the job's candidates ----------
 
-/** Matched since `since`, plus the people of the series; at most `limit` by recency. */
+/**
+ * Matched since `since`, plus the people of the series and those named or ruled out (Not <name>)
+ * in the note, so a meeting-app name maps back to the person a negative holds; at most `limit`.
+ */
 export function knownSpeakerPeople(
   s: StoreCtx,
   q: { noteId: string; since: IsoTime; recurringEventId: string | null; limit: number }
@@ -385,7 +388,8 @@ export function knownSpeakerPeople(
          (@rec IS NOT NULL AND EXISTS (SELECT 1 FROM speaker_matches m JOIN documents d ON d.id = m.note_id
             WHERE m.person_id = p.id AND d.deleted_at IS NULL AND json_valid(d.linked_event)
               AND json_extract(d.linked_event, '$.recurringEventId') = @rec)) AS same_series,
-         EXISTS (SELECT 1 FROM speaker_matches m WHERE m.person_id = p.id AND m.note_id = @note) AS in_note
+         (EXISTS (SELECT 1 FROM speaker_matches m WHERE m.person_id = p.id AND m.note_id = @note)
+           OR EXISTS (SELECT 1 FROM speaker_negatives n WHERE n.person_id = p.id AND n.note_id = @note)) AS in_note
        FROM speaker_people p
        WHERE p.owner_id = @owner AND p.merged_into IS NULL
        ORDER BY last_at IS NULL, last_at DESC, p.rid`
@@ -495,8 +499,12 @@ export function speakerPersonView(s: StoreCtx, q: { personId: string; modelId: s
   else state = 'none'
   const clock = p.lastMatchedAt ?? (active ? agreement.attestedAt : null) ?? ex.first
   const expiresAt = ex.n > 0 && clock ? new Date(Date.parse(clock) + L.voiceExpiryDays * DAY_MS).toISOString() : null
+  // Recognized means named by voice: a naming by hand or from a meeting app doesn't count.
   const recognized = (s.db
-    .prepare(`SELECT count(DISTINCT m.note_id) AS n FROM speaker_matches m JOIN documents d ON d.id = m.note_id WHERE m.person_id = ? AND d.deleted_at IS NULL`)
+    .prepare(
+      `SELECT count(DISTINCT m.note_id) AS n FROM speaker_matches m JOIN documents d ON d.id = m.note_id
+       WHERE m.person_id = ? AND m.kind = 'auto_voice' AND d.deleted_at IS NULL`
+    )
     .get(p.id) as { n: number }).n
   const hasRecord = !!s.db.prepare(`SELECT 1 FROM speaker_agreements WHERE person_id = ? LIMIT 1`).get(p.id)
   const offer = mergeOffer(s, p)

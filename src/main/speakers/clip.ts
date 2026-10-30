@@ -167,6 +167,12 @@ function wav(pcm: Buffer): Uint8Array {
   return new Uint8Array(Buffer.concat([header, pcm]))
 }
 
+/** `speaker-names:has-clip`: the note has audio a clip can come from; without it the interface shows lines, not Play. */
+export async function speakerClipAvailable(ctx: MainContext, noteId: string): Promise<boolean> {
+  if (getTranscriptionManager(ctx).diarizer.tempAudioFor(noteId)?.length) return true
+  return (await ctx.storage.listRecordings({ noteId }).catch(() => [])).length > 0
+}
+
 export async function speakerClip(ctx: MainContext, noteId: string, identityKey: string): Promise<ClipResult> {
   const chunks = (await getTranscriptionManager(ctx).store.getTranscript(noteId)).filter((c) => c.is_final)
   const at = clipSpan(chunks, identityKey)

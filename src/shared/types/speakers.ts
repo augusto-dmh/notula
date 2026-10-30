@@ -137,6 +137,15 @@ export interface SpeakerPendingMeeting {
   canName: boolean
 }
 
+/** `speaker-names:pending`: one request in a note, with the speaker its span picks now (null: none). */
+export interface SpeakerPendingSpeaker {
+  identityKey: string | null
+  personId: string
+  name: string
+  /** The agreement exists and the speaker still has its voice sample. */
+  canName: boolean
+}
+
 /** `speaker-people:get`. */
 export interface SpeakerPersonView {
   person: SpeakerPerson

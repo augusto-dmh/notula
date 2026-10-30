@@ -514,7 +514,9 @@ const api: NotulaApi = {
     askFirst: (req) => ipcRenderer.invoke('speaker-names:ask-first' satisfies InvokeChannel, req),
     namePending: (req) => ipcRenderer.invoke('speaker-names:name-pending' satisfies InvokeChannel, req),
     undo: (req) => ipcRenderer.invoke('speaker-names:undo' satisfies InvokeChannel, req),
+    pending: (req) => ipcRenderer.invoke('speaker-names:pending' satisfies InvokeChannel, req),
     clip: (req) => ipcRenderer.invoke('speaker-names:clip' satisfies InvokeChannel, req),
+    hasClip: (req) => ipcRenderer.invoke('speaker-names:has-clip' satisfies InvokeChannel, req),
     onChanged: (cb) => {
       const listener = (_e: IpcRendererEvent, p: PushPayload<'speaker-names:changed'>): void => cb(p)
       ipcRenderer.on('speaker-names:changed' satisfies PushChannel, listener)
@@ -548,6 +550,7 @@ const api: NotulaApi = {
   speakerPeople: {
     list: (req) => ipcRenderer.invoke('speaker-people:list' satisfies InvokeChannel, req),
     get: (req) => ipcRenderer.invoke('speaker-people:get' satisfies InvokeChannel, req),
+    ensure: (req) => ipcRenderer.invoke('speaker-people:ensure' satisfies InvokeChannel, req),
     matches: (req) => ipcRenderer.invoke('speaker-people:matches' satisfies InvokeChannel, req),
     samples: (req) => ipcRenderer.invoke('speaker-people:samples' satisfies InvokeChannel, req),
     removeSample: (req) => ipcRenderer.invoke('speaker-people:remove-sample' satisfies InvokeChannel, req),
