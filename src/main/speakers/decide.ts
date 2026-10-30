@@ -41,6 +41,11 @@ export interface DecideTile {
   share: number
   /** Room tiles, the user's own tile and screen-share audio give no naming evidence. */
   kind: 'individual' | 'room' | 'self' | 'screen-share'
+  /**
+   * Part of its share came from one-remote chunks stamped while the meeting's participant count
+   * was unknown: the app rule can't name automatically from it, so it reaches at most suggest.
+   */
+  uncounted?: boolean
 }
 
 /** One unconfirmed cluster of the pass. Confirmed clusters (> 50 % `confirmed_spk`) are left out by the caller. */
@@ -316,6 +321,8 @@ function appAuto(s: ClusterState, j: DecideCandidate): boolean {
   const tiles = [...c.tiles].sort((a, b) => b.share - a.share || compare(a.participantId, b.participantId))
   const top = tiles[0]
   if (!top || top.kind !== 'individual' || top.share < L.appTileShare) return false
+  // One-remote evidence names automatically only where the app stated a count of two.
+  if (top.uncounted) return false
   if ((tiles[1]?.share ?? 0) > L.appNextTileMax) return false
   if (!j.tileIds.includes(top.participantId)) return false
   // The LLM has no accepted mapping of this cluster to a different candidate.

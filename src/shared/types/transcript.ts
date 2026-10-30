@@ -206,6 +206,13 @@ export interface DetectedSpeaker {
   participantId: string
   participantName: string
   source: AttributionSource | 'diarization'
+  /**
+   * Set when the name came from the one-remote rule (the user and exactly one other person in
+   * the call), not from a lit tile. Absent on timeline stamps and on older chunks.
+   */
+  via?: 'one-remote'
+  /** With `via`: the meeting's participant count when the chunk was stamped (2), or null when the app gave none. */
+  peopleCount?: 2 | null
 }
 
 export type AttributionState = 'off' | 'waiting' | 'active' | 'blind' | 'unavailable' | 'failed'
@@ -254,6 +261,14 @@ export const ATTRIBUTION_LIMITS = {
   padAfterMs: 300,
   padWeight: 0.25,
   fallbackFreshMs: 10_000,
+  /** One-remote rule: the same name unseen for longer restarts its clock. */
+  oneRemoteRestartMs: 7_000,
+  /** One-remote rule: once a second other person has been seen, a candidate holds this long first. */
+  oneRemoteSettleMs: 15_000,
+  /** Zoom state log: a state is logged after it held this long. */
+  zoomStateHoldMs: 9_000,
+  /** Zoom state log: a longer gap between records drops a pending change and caps the time counted. */
+  zoomStateGapMs: 10_000,
   healthLogMs: 30_000,
   restartDelayMs: 1_000,
   maxRestarts: 5,

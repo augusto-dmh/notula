@@ -11,12 +11,15 @@
 //   `unavailable` come from the worker.
 // - Records → events: self tiles are excluded; the record's speaker becomes an event
 //   with the app's detection lag; the user speaking (`selfActive`, or their name)
-//   clears instead. A speaker inferred from the lit tiles, when no tile is unnamed, is kept
-//   only as the chunk fallback.
+//   clears instead. The one-remote rule (one-remote.ts: the user and exactly one other person)
+//   gives the chunk fallback, never an event; Teams and Meet withhold it while a tile is unnamed.
 // - Stamping: final system chunks get `detectedSpeaker`, `detected_speaker_name` and word
-//   `att` from the timeline, through the session's `SystemAttribution` hook.
-// - Health: blind after 10 s without a record that sees tiles; a health line every 30 s,
-//   local log only. Names stay on local chunks.
+//   `att` from the timeline, through the session's `SystemAttribution` hook. A chunk named by
+//   the fallback is marked `via: 'one-remote'` with the count; while Zoom shows an incoming
+//   share there is no fallback.
+// - Health: blind after 10 s without a record that sees tiles; a health line every 30 s, the
+//   rule's reason when it changes, and Zoom's reader states (zoom-state.ts), local log only.
+//   Names stay on local chunks.
 
 import { join, basename, dirname } from 'node:path'
 import { app, utilityProcess, type UtilityProcess } from 'electron'
@@ -39,7 +42,9 @@ import { resourcePath } from '../lifecycle/resources'
 import { log } from '../log'
 import type { SystemAttribution } from '../transcription/session'
 import type { MainToUia, UiaReaderState, UiaToMain } from '../uia/protocol'
+import { normName as norm, OneRemoteRule } from './one-remote'
 import { SpeakerTimeline, type Winner } from './timeline'
+import { ZoomStateLog, zoomStateOf } from './zoom-state'
 
 const APPS: readonly AttributionApp[] = ['zoom', 'teams', 'meet']
 const SOURCE: Record<AttributionApp, AttributionSource> = { zoom: 'zoom-uia', teams: 'teams-uia', meet: 'meet-uia' }
@@ -87,15 +92,15 @@ interface Detector {
   speakers: Set<string>
   /** The last record that saw tiles (ms). */
   lastSeenTilesAt: number
-  /** The detector's "current speaker", the chunk fallback. */
-  fallback: { id: string; name: string; at: number } | null
+  /** The one-remote rule's name, the chunk fallback, with the count it was accepted under. */
+  fallback: { id: string; name: string; at: number; peopleCount: 2 | null } | null
+  oneRemote: OneRemoteRule
+  /** Zoom reports an incoming screen share: no one-remote fallback meanwhile. */
+  shareIncoming: boolean
+  zoomLog: ZoomStateLog
   /** Zoom's revealed self name. */
   selfName: string | null
   lastSpeaker: string | null
-}
-
-function norm(name: string | null | undefined): string {
-  return (name ?? '').replace(/\s*\((you|me)\)\s*$/i, '').trim().toLowerCase()
 }
 
 function str(v: unknown): string | null {
@@ -146,6 +151,9 @@ export class AttributionService implements SystemAttribution {
       speakers: new Set(),
       lastSeenTilesAt: 0,
       fallback: null,
+      oneRemote: new OneRemoteRule(),
+      shareIncoming: false,
+      zoomLog: new ZoomStateLog(),
       selfName: null,
       lastSpeaker: null
     })
@@ -278,8 +286,8 @@ export class AttributionService implements SystemAttribution {
     const d = this.detectors[app]
     d.reader = null
     d.lastSeenTilesAt = 0
-    d.fallback = null
     d.lastSpeaker = null
+    this.endCall(d)
     const proc = this.ensureProc()
     if (!proc) {
       d.stuck = 'failed'
@@ -302,10 +310,22 @@ export class AttributionService implements SystemAttribution {
 
   private stopReader(app: AttributionApp): void {
     const d = this.detectors[app]
-    d.fallback = null
+    this.endCall(d)
     if (d.lastSpeaker !== null) this.pushActiveSpeaker(null)
     d.lastSpeaker = null
     this.proc?.postMessage({ type: 'stop', app } satisfies MainToUia)
+  }
+
+  /** A reader started or stopped: Zoom's state summary for the call, then the rule's state goes. */
+  private endCall(d: Detector): void {
+    const summary = d.zoomLog.summary()
+    if (summary) log('info', 'attribution:zoom-summary', { times: summary.times, maxPeople: summary.maxPeople })
+    d.zoomLog.reset()
+    d.oneRemote.reset()
+    d.fallback = null
+    d.shareIncoming = false
+    // The rule may count Zoom's own name as knowing the user only once this reader has shown it.
+    d.selfName = null
   }
 
   private ensureProc(): UtilityProcess | null {
@@ -325,6 +345,7 @@ export class AttributionService implements SystemAttribution {
           const app = this.owner
           this.owner = null
           this.timeline.clearAll()
+          this.endCall(this.detectors[app])
           this.detectors[app].state = 'blind'
           setTimeout(() => this.reconcile('worker-exit'), ATTRIBUTION_LIMITS.restartDelayMs).unref()
         }
@@ -379,6 +400,7 @@ export class AttributionService implements SystemAttribution {
       if (this.owner === app) {
         this.owner = null
         this.timeline.clearAll()
+        this.endCall(d)
         if (d.lastSpeaker !== null) this.pushActiveSpeaker(null)
         d.lastSpeaker = null
       }
@@ -412,6 +434,10 @@ export class AttributionService implements SystemAttribution {
       log('debug', 'attribution:reader-error', { app, message: str(r['message']) ?? '' })
       return
     }
+    if (event === 'zoom-refusal-detail') {
+      log('debug', 'attribution:zoom-refusal-detail', { refusal: str(r['refusal']) ?? '', detail: str(r['detail']) ?? '' })
+      return
+    }
     if (event !== ROSTER[app]) return
     const now = Date.now()
     const ts = typeof r['timestamp'] === 'number' && Number.isFinite(r['timestamp']) ? (r['timestamp'] as number) : now
@@ -427,13 +453,10 @@ export class AttributionService implements SystemAttribution {
     const windowPresent = r['hasMeetingWindow'] !== false
     const tiles = parts.filter((p) => p['isSelf'] !== true && !this.isSelf(d, str(p['name'])))
     if (tiles.length && windowPresent) d.lastSeenTilesAt = now
-    // The lit-tile speaker is kept for the fallback, only when no tile is unnamed.
-    const unnamed = tiles.some((p) => !str(p['name']))
-    const lit = tiles.filter((p) => p['active'] === true && str(p['name']))
-    const litName = str(lit[0]?.['name'])
-    d.fallback = !unnamed && litName ? { id: litName, name: litName, at: now } : null
+    this.oneRemote(app, d, r, windowPresent ? parts : [], tiles, now)
 
     const speaker = windowPresent ? str(r['participantName']) : null
+    if (app === 'zoom') this.zoomState(d, r, speaker, now)
     const selfActive = r['selfActive'] === true || (speaker !== null && this.isSelf(d, speaker))
     if (!speaker || selfActive) {
       if (selfActive) log('debug', 'attribution:active-speaker-self-filtered-by-id', { app })
@@ -453,6 +476,45 @@ export class AttributionService implements SystemAttribution {
     // Every accepted non-self event, a refresh included, is pushed.
     this.pushActiveSpeaker(speaker)
     this.refreshState(d, now)
+  }
+
+  /** The one-remote rule on one record: its name becomes the chunk fallback. */
+  private oneRemote(
+    app: AttributionApp,
+    d: Detector,
+    r: Record<string, unknown>,
+    parts: Record<string, unknown>[],
+    tiles: Record<string, unknown>[],
+    now: number
+  ): void {
+    const count = r['participantCount']
+    const before = d.oneRemote.reason
+    const { name, reason } = d.oneRemote.update({
+      participants: parts.map((p) => ({ name: str(p['name']), isSelf: p['isSelf'] === true })),
+      ...(typeof count === 'number' ? { count } : {}),
+      profileName: this.settings['profile.name'] ?? '',
+      ownName: d.selfName,
+      at: now
+    })
+    if (reason !== before) log('info', 'attribution:one-remote', { app, reason: reason ?? 'named' })
+    d.shareIncoming = app === 'zoom' && r['shareIncoming'] === true
+    // Teams and Meet: an unnamed tile could be the one talking.
+    const withheld = app !== 'zoom' && tiles.some((p) => !str(p['name']))
+    d.fallback = name && !withheld ? { id: name, name, at: now, peopleCount: d.oneRemote.count === 2 ? 2 : null } : null
+  }
+
+  /** Zoom's reader state for the local log: a change once it held 9 s, the times at the call's end. */
+  private zoomState(d: Detector, r: Record<string, unknown>, speaker: string | null, now: number): void {
+    const state = zoomStateOf({
+      speaker: speaker !== null,
+      speakerIsSelf: speaker !== null && this.isSelf(d, speaker),
+      method: str(r['method']),
+      refusal: str(r['refusal']),
+      oneRemote: speaker === null && d.fallback !== null && !d.shareIncoming
+    })
+    const count = r['participantCount']
+    const change = d.zoomLog.record(state, now, typeof count === 'number' && Number.isFinite(count) ? count : null)
+    if (change) log('info', 'attribution:zoom-state', { from: change.from ?? '', to: change.to, layout: str(r['layout']) ?? '' })
   }
 
   private refreshState(d: Detector, now: number): void {
@@ -541,9 +603,15 @@ export class AttributionService implements SystemAttribution {
     const end = Date.parse(chunk.end_timestamp)
     if (!Number.isFinite(start) || !Number.isFinite(end)) return chunk
     let winner: Winner | null = this.timeline.chunkSpeaker(start, end, now)
+    let oneRemote: { peopleCount: 2 | null } | null = null
     if (!winner) {
-      const f = this.detectors[app].fallback
-      if (f && now - f.at <= ATTRIBUTION_LIMITS.fallbackFreshMs) winner = { participantId: f.id, participantName: f.name, source: SOURCE[app] }
+      const d = this.detectors[app]
+      const f = d.fallback
+      // An incoming share's audio can't be told from the remote's voice.
+      if (f && !d.shareIncoming && now - f.at <= ATTRIBUTION_LIMITS.fallbackFreshMs) {
+        winner = { participantId: f.id, participantName: f.name, source: SOURCE[app] }
+        oneRemote = { peopleCount: f.peopleCount }
+      }
     }
     const details = chunk.providerDetails
     let words: ProviderWord[] | undefined = details?.words
@@ -565,7 +633,12 @@ export class AttributionService implements SystemAttribution {
       ...chunk,
       detected_speaker_name: winner?.participantName ?? null,
       detectedSpeaker: winner
-        ? { participantId: winner.participantId, participantName: winner.participantName, source: winner.source }
+        ? {
+            participantId: winner.participantId,
+            participantName: winner.participantName,
+            source: winner.source,
+            ...(oneRemote ? { via: 'one-remote' as const, peopleCount: oneRemote.peopleCount } : {})
+          }
         : null,
       ...(details && words ? { providerDetails: { ...details, words } } : {})
     }
@@ -623,6 +696,7 @@ export class AttributionService implements SystemAttribution {
       const system = chunks.filter((c) => c.source === 'system')
       const systemChars = system.reduce((n, c) => n + c.text.length, 0)
       const attributedChars = system.filter((c) => c.detected_speaker_name).reduce((n, c) => n + c.text.length, 0)
+      const oneRemoteChars = system.filter((c) => c.detectedSpeaker?.via === 'one-remote').reduce((n, c) => n + c.text.length, 0)
       const totalChars = chunks.reduce((n, c) => n + c.text.length, 0)
       const ratio = systemChars ? attributedChars / systemChars : 0
       const sources = new Set(system.map((c) => c.detectedSpeaker?.source).filter(Boolean))
@@ -633,6 +707,7 @@ export class AttributionService implements SystemAttribution {
         ratio: Math.round(ratio * 100) / 100,
         systemChars,
         attributedChars,
+        oneRemoteChars,
         source: sources.size > 1 ? 'mixed' : ([...sources][0] ?? '')
       })
     } catch (err) {

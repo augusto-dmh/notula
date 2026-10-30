@@ -12,6 +12,22 @@
 #   {"event":"uia-unavailable","reason":...} and exit with code 3 (no restarts).
 # - It exits when stdin closes (main's stop) or when its owner process is gone.
 #
+# Zoom names the current speaker by the first of three methods that names someone: a marker
+# element the window uses for whoever is talking, the tiles' speaking label, then a fixed slot (the
+# large tile of the focus layout). When the window's state makes them unreliable it names nobody
+# and reports one refusal class instead:
+#   sparse    too little of the tree: the walk stopped early, or only buttons were exposed;
+#   mismatch  the numbers don't add up (no or an implausible count, unnamed tiles, more tiles
+#             than people) or two parts of the view point at different speakers;
+#   layout    a layout it can't trust: tiles inside tiles, non-video participants hidden, a share
+#             whose content can't be found, or a layout it doesn't recognise;
+#   self      the user's own view sits apart or is hidden;
+#   window    not the main meeting view (a mini or stand-in window): the marker still counts;
+#   version   fixed slot on a Zoom version not in $checkedZoomVersions;
+#   idle      the view was read and nobody is talking (a muted first tile counts here).
+# The cause goes into a zoom-refusal-detail line, which main logs at debug level only.
+# The record's participantCount is the meeting's total as Zoom states it, or absent.
+#
 # Chromium-based windows (Meet in Chrome, new Teams' WebView2) build their web accessibility
 # tree only once an assistive-technology client uses it. The reader asks for it with one MSAA
 # hit test into the page area (IAccessible::accHitTest, the call a screen reader makes); that
@@ -151,6 +167,17 @@ $cache.AutomationElementMode = [System.Windows.Automation.AutomationElementMode]
 $cache.Add($AE::NameProperty)
 $cache.Add($AE::ClassNameProperty)
 $cache.Add($AE::ControlTypeProperty)
+# Zoom's layout comes from the tiles' sizes.
+if ($App -eq 'zoom') { $cache.Add($AE::BoundingRectangleProperty) }
+
+# Zoom's whole window, read twice a second for the marker, the count and the share banner.
+$viewCache = New-Object System.Windows.Automation.CacheRequest
+$viewCache.TreeScope = $TS::Subtree
+$viewCache.TreeFilter = [System.Windows.Automation.Automation]::RawViewCondition
+$viewCache.AutomationElementMode = [System.Windows.Automation.AutomationElementMode]::None
+$viewCache.Add($AE::NameProperty)
+$viewCache.Add($AE::ClassNameProperty)
+$viewCache.Add($AE::ControlTypeProperty)
 
 # A second request that keeps live references, for the periodic scan that finds the tiles.
 $scanCache = New-Object System.Windows.Automation.CacheRequest
@@ -173,6 +200,9 @@ $state = @{
   windows = @()
   lastLine = ''
   lastLineMs = 0
+  view = $null          # Zoom: the last whole-window read (Zoom-View)
+  lastViewMs = -100000
+  lastDetail = ''
 }
 $clock = [System.Diagnostics.Stopwatch]::StartNew()
 
@@ -206,6 +236,8 @@ function Reset-Target([IntPtr]$h) {
   $state.nextScanMs = 0
   $state.scanBackoffMs = 2500
   $state.lastTriggerMs = -100000
+  $state.view = $null
+  $state.lastViewMs = -100000
 }
 
 # Chromium: one MSAA hit test in the page area so the web tree exists, then the document.
@@ -390,6 +422,131 @@ function Heuristic-Parse($tile) {
   return @{ name = $name; active = [bool]$speaking; isSelf = [bool]$isSelf; handRaised = ($rest -match '(?i)hand (is )?raised') }
 }
 
+# ---------- Zoom: the three methods and their refusals ----------
+
+# Fixed slot names only on versions it was checked against in a live window. Add a version here
+# after that check; until then fixed slot refuses with `version`.
+$checkedZoomVersions = @()
+$zoomVersion = ''
+$viewCap = 4000
+$zoomMarker = '^(?i)\s*(talking|speaking|active speaker)\s*:\s*(?<name>[^,]{1,80}?)\s*$'
+$zoomCount = '(?i)\bpartic(i)?pants?\b\D{0,24}?(?<n>\d{1,4})\b|\b(?<n>\d{1,4})\s+partic(i)?pants?\b'
+$zoomShare = "(?i)\byou are viewing\b.{1,80}\bscreen\b|\bis sharing (the |their |a )?screen\b"
+$zoomShareContent = '(?i)\b(shared (screen|content)|screen share content|share content)\b'
+$zoomNonVideo = '(?i)\b(show|hide) non-video participants\b|\bnon-video participants (are )?hidden\b'
+
+# The whole window, read once: the marker names, Zoom's own participant total, the share banner
+# and content, and whether the read is too thin to trust.
+function Zoom-View($root) {
+  $v = @{ truncated = $false; namedOther = 0; count = $null; markers = New-Object System.Collections.Generic.List[string]
+    share = $false; shareContent = $false; nonVideoHidden = $false; selfTiles = 0 }
+  $fresh = $root.GetUpdatedCache($viewCache)
+  $stack = New-Object System.Collections.Generic.Stack[object]
+  $stack.Push($fresh)
+  $n = 0
+  while ($stack.Count -gt 0) {
+    if (++$n -gt $viewCap) { $v.truncated = $true; break }
+    $e = $stack.Pop()
+    $name = $e.Cached.Name
+    $ct = $e.Cached.ControlType
+    if ($name) {
+      if ($ct -ne $CT::Button -and $ct -ne $CT::MenuItem -and $ct -ne $CT::TitleBar -and $ct -ne $CT::Window) { $v.namedOther++ }
+      if ($name -match $zoomMarker) { $m = $Matches['name'].Trim(); if ($m -and -not ($v.markers | Where-Object { Same-Name $_ $m })) { $v.markers.Add($m) } }
+      elseif ($null -eq $v.count -and ($ct -eq $CT::Button -or $ct -eq $CT::MenuItem -or $ct -eq $CT::TabItem -or $ct -eq $CT::Text) -and $name -match $zoomCount) { $v.count = [int]$Matches['n'] }
+      if ($name -match $zoomShare) { $v.share = $true }
+      elseif ($name -match $zoomShareContent) { $v.shareContent = $true }
+      if ($name -match $zoomNonVideo -and $name -notmatch '(?i)^hide') { $v.nonVideoHidden = $true }
+      if ($name -match $tileName -and $Matches['tag'] -match '(?i)^(you|me)$') { $v.selfTiles++ }
+    }
+    $kids = $e.CachedChildren
+    if ($null -ne $kids) { foreach ($k in $kids) { $stack.Push($k) } }
+  }
+  return $v
+}
+
+# A tile with another tile under it: the speaking label can't tell whose it is.
+function Has-Nested($tile) {
+  $stack = New-Object System.Collections.Generic.Stack[object]
+  $kids = $tile.CachedChildren
+  if ($null -ne $kids) { foreach ($k in $kids) { $stack.Push($k) } }
+  while ($stack.Count -gt 0) {
+    $e = $stack.Pop()
+    if (Is-Tile $e) { return $true }
+    $kids = $e.CachedChildren
+    if ($null -ne $kids) { foreach ($k in $kids) { $stack.Push($k) } }
+  }
+  return $false
+}
+
+function Zoom-Parse($tile) {
+  $p = Heuristic-Parse $tile
+  $r = $tile.Cached.BoundingRectangle
+  $p.area = if ($r.IsEmpty) { 0 } else { $r.Width * $r.Height }
+  $p.muted = [bool]($tile.Cached.Name -match '(?i)\b(audio |mic(rophone)? )?muted\b|\bmic(rophone)? off\b')
+  $p.nested = Has-Nested $tile
+  return $p
+}
+
+# grid: tiles of about one size; focus: one tile at least three times the next; share: a share is coming in.
+function Zoom-Layout($parts, $view) {
+  if ($view.share) { return 'share' }
+  $areas = @($parts | Where-Object { $_.area -gt 0 } | ForEach-Object { $_.area } | Sort-Object -Descending)
+  if ($areas.Count -eq 0) { return 'unknown' }
+  if ($areas.Count -eq 1 -or $areas[0] -ge 3 * $areas[1]) { return 'focus' }
+  if ($areas[0] -le 1.6 * $areas[$areas.Count - 1]) { return 'grid' }
+  return 'unknown'
+}
+
+# The main meeting view: the meeting window at a usable size, not a mini or stand-in window.
+function Is-MainView([IntPtr]$h) {
+  $r = [NotulaUiaNative]::Rect($h)
+  $title = [NotulaUiaNative]::Title($h)
+  return ($r[2] - $r[0]) -ge 480 -and ($r[3] - $r[1]) -ge 320 -and ($title -match 'Zoom Meeting|Zoom Webinar|Zoom Workplace' -or [NotulaUiaNative]::ClassOf($h) -eq 'ZPContentViewWndClass')
+}
+
+function Refuse($z, [string]$class, [string]$detail) { $z.refusal = $class; $z.detail = $detail; return $z }
+
+# Fixed slot: the one place the layout always puts the current speaker. Null when it doesn't apply.
+function Zoom-Slot($z, $parts, $view, [IntPtr]$h) {
+  if ($z.layout -eq 'grid') { return $z }
+  if (-not (Is-MainView $h)) { return (Refuse $z 'window' 'not the main meeting view') }
+  if ($checkedZoomVersions -notcontains $zoomVersion) { return (Refuse $z 'version' 'fixed slot not checked on this version') }
+  if ($null -eq $view.count) { return (Refuse $z 'mismatch' 'no participant count') }
+  if ($view.count -lt 1 -or $view.count -gt 1000) { return (Refuse $z 'mismatch' 'implausible participant count') }
+  if (@($parts | Where-Object { -not $_.name }).Count -gt 0) { return (Refuse $z 'mismatch' 'a tile without a name') }
+  if ($parts.Count -gt $view.count) { return (Refuse $z 'mismatch' 'more tiles than participants') }
+  if ($view.nonVideoHidden) { return (Refuse $z 'layout' 'non-video participants hidden') }
+  $video = @($parts | Where-Object { $_.area -gt 0 } | Sort-Object -Property { $_.area } -Descending)
+  if ($z.layout -eq 'share') {
+    if (-not $view.shareContent) { return (Refuse $z 'layout' 'share content not found') }
+    if ($video.Count -ne 1) { return (Refuse $z 'layout' 'share view with several video tiles') }
+  } elseif ($z.layout -ne 'focus') { return (Refuse $z 'layout' 'layout not recognised') }
+  if ($z.selfView -ne 'shown') { return (Refuse $z 'self' "self view $($z.selfView)") }
+  $main = $video[0]
+  if ($null -eq $main) { return (Refuse $z 'layout' 'no video tile') }
+  if ($main.muted) { return (Refuse $z 'idle' 'first tile muted') }
+  if (-not $main.isSelf -and $main.name) { $z.method = 'slot'; $z.speaker = $main.name }
+  return $z
+}
+
+# The three methods in order; the first that names someone wins. Conflicts and a thin read name nobody.
+function Zoom-Speaker($parts, $view, [IntPtr]$h) {
+  $z = @{ method = $null; speaker = $null; refusal = $null; detail = ''; count = $view.count; shareIncoming = [bool]$view.share; layout = 'unknown'; selfView = 'hidden' }
+  $z.layout = Zoom-Layout $parts $view
+  $z.selfView = if (@($parts | Where-Object { $_.isSelf }).Count -gt 0) { 'shown' } elseif ($view.selfTiles -gt 0) { 'separate' } else { 'hidden' }
+  if ($view.truncated) { return (Refuse $z 'sparse' 'tree walk stopped early') }
+  if ($view.namedOther -eq 0) { return (Refuse $z 'sparse' 'only buttons exposed') }
+  $label = $null
+  foreach ($p in $parts) { if ($p.active -and -not $p.isSelf -and $p.name) { $label = $p.name; break } }
+  if ($view.markers.Count -gt 1) { return (Refuse $z 'mismatch' 'markers name different people') }
+  $marker = if ($view.markers.Count -eq 1) { $view.markers[0] } else { $null }
+  if ($marker -and $label -and -not (Same-Name $marker $label)) { return (Refuse $z 'mismatch' 'marker and speaking label disagree') }
+  if ($marker) { $z.method = 'marker'; $z.speaker = $marker; return $z }
+  if (@($parts | Where-Object { $_.nested }).Count -gt 0) { return (Refuse $z 'layout' 'tiles inside tiles') }
+  if ($label) { $z.method = 'label'; $z.speaker = $label; return $z }
+  return (Zoom-Slot $z $parts $view $h)
+}
+
 # ---------- one poll ----------
 function Poll {
   $now = Now-Unix
@@ -443,6 +600,16 @@ function Poll {
     $state.nextScanMs = 0
     return (Roster @() $null $false $true 'no-tiles' $now)
   }
+  if ($App -eq 'zoom') {
+    $parts = @(foreach ($t in $tiles) { Zoom-Parse $t })
+    if ($null -eq $state.view -or $clock.ElapsedMilliseconds - $state.lastViewMs -ge 500) {
+      $state.lastViewMs = $clock.ElapsedMilliseconds
+      $state.view = Zoom-View $state.root
+    }
+    $z = Zoom-Speaker $parts $state.view $h
+    Zoom-Detail $z
+    return (Roster $parts $z.speaker $false $true $null $now $z)
+  }
   $parts = @(foreach ($t in $tiles) { if ($App -eq 'meet') { Meet-Parse $t } else { Heuristic-Parse $t } })
   $speaker = $null
   $selfActive = $false
@@ -453,7 +620,16 @@ function Poll {
   return (Roster $parts $speaker $selfActive $true $null $now)
 }
 
-function Roster($parts, $speaker, [bool]$selfActive, [bool]$windowPresent, $blindReason, [int64]$ts) {
+# The refusal's cause, once per change: main logs it at debug level only. Fixed phrases, no names.
+function Zoom-Detail($z) {
+  $key = "$($z.refusal)|$($z.detail)"
+  if ($key -eq $state.lastDetail) { return }
+  $state.lastDetail = $key
+  if ($z.refusal) { Write-Record ('{"event":"zoom-refusal-detail","refusal":"' + (Esc $z.refusal) + '","detail":"' + (Esc $z.detail) + '"}') }
+}
+
+# $zoom: Zoom-Speaker's result; null on a blind record (nothing read: `sparse`).
+function Roster($parts, $speaker, [bool]$selfActive, [bool]$windowPresent, $blindReason, [int64]$ts, $zoom = $null) {
   $items = New-Object System.Collections.Generic.List[string]
   $n = 0
   foreach ($p in $parts) {
@@ -478,7 +654,14 @@ function Roster($parts, $speaker, [bool]$selfActive, [bool]$windowPresent, $blin
       $selfLine = ''
       foreach ($p in $parts) { if ($p.isSelf -and $p.name) { $selfLine = '"' + (Esc $p.name) + '"'; break } }
       if (-not $selfLine) { $selfLine = 'null' }
-      return '{"event":"zoom-roster","participants":' + $list + ',"participantName":' + $sp + ',"ownName":' + $selfLine + ',"hasMeetingWindow":' + $wp + ',"participantCount":' + $parts.Count + $blind + ',"timestamp":' + $ts + '}'
+      if ($null -eq $zoom) { $zoom = @{ method = $null; refusal = 'sparse'; count = $null; shareIncoming = $false; layout = 'unknown'; selfView = 'hidden' } }
+      # Zoom's own total, never the tiles on screen (a gallery shows one page of them).
+      $count = if ($null -ne $zoom.count) { ',"participantCount":' + [int]$zoom.count } else { '' }
+      $method = if ($zoom.method) { '"' + $zoom.method + '"' } else { 'null' }
+      $refusal = if ($zoom.refusal) { '"' + $zoom.refusal + '"' } else { 'null' }
+      $share = if ($zoom.shareIncoming) { 'true' } else { 'false' }
+      return '{"event":"zoom-roster","participants":' + $list + ',"participantName":' + $sp + ',"ownName":' + $selfLine + ',"hasMeetingWindow":' + $wp + $count +
+        ',"method":' + $method + ',"layout":"' + $zoom.layout + '","selfView":"' + $zoom.selfView + '","shareIncoming":' + $share + ',"refusal":' + $refusal + $blind + ',"timestamp":' + $ts + '}'
     }
     'teams' { return '{"event":"teams-roster","participants":' + $list + ',"participantName":' + $sp + ',"selfActive":' + $sa + ',"hasMeetingWindow":' + $wp + $blind + ',"timestamp":' + $ts + '}' }
     'meet' { return '{"event":"meet-roster","participants":' + $list + ',"participantName":' + $sp + ',"selfActive":' + $sa + $blind + ',"timestamp":' + $ts + '}' }
@@ -492,7 +675,10 @@ function Version-Of([string]$processName) {
   }
   return ''
 }
-if ($App -eq 'zoom') { Write-Record ('{"event":"zoom-speaker-monitor-version","zoomVersion":"' + (Esc (Version-Of 'Zoom')) + '"}') }
+if ($App -eq 'zoom') {
+  $zoomVersion = Version-Of 'Zoom'
+  Write-Record ('{"event":"zoom-speaker-monitor-version","zoomVersion":"' + (Esc $zoomVersion) + '"}')
+}
 if ($App -eq 'teams') { Write-Record ('{"event":"teams-speaker-monitor-version","teamsVersion":"' + (Esc (Version-Of 'ms-teams')) + '"}') }
 
 # ---------- the loop ----------

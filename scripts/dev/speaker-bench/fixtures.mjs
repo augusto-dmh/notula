@@ -132,7 +132,8 @@ function place(target, piece, atMs, gain = 1) {
 /**
  * Five synthetic people (the user and four others) and four short meetings, all tones: the
  * user on the mic, two others taking turns on the system channel with a Meet-shaped record
- * stream. Writes the WAVs, the streams, the labels and a manifest under `dir`.
+ * stream. Also a 1:1 call (`oneToOne`) that only T2's `unlit` variant replays. Writes the WAVs,
+ * the streams, the labels and a manifest under `dir`.
  */
 export function dryFixture(dir, { meetingMs = 6_000 } = {}) {
   mkdirSync(dir, { recursive: true })
@@ -191,7 +192,47 @@ export function dryFixture(dir, { meetingMs = 6_000 } = {}) {
       labels
     }
   })
-  const manifest = { version: 1, people, meetings, stress: { sources: people.slice(1, 4).map((p, i) => ({ corpus: 'dry-tone', speaker: p.id, tone: i + 1 })) }, models: [] }
+  // A 1:1 call (the user and Alex), replayed by T2's `unlit` variant only, so the one-remote path runs.
+  const oneToOne = (() => {
+    const id = 'm1to1'
+    const mic = new Float32Array(Math.round((meetingMs / 1000) * RATE))
+    const sys = new Float32Array(mic.length)
+    const labels = []
+    const records = []
+    const turn = 2_000
+    for (let t = 0, i = 0; t + turn <= meetingMs; t += turn, i++) {
+      place(sys, renderTone(toneVoice(1), turn - 200, 700 + i), t)
+      labels.push({ channel: 'system', startMs: t, endMs: t + turn - 200, person: 'p01' })
+      for (let r = t; r < t + turn; r += 300) {
+        records.push({ tMs: r, event: 'meet-roster', hasMeetingWindow: true, participantName: 'p01', selfActive: false, participants: [{ name: 'p01', active: true, isSelf: false }] })
+      }
+    }
+    writeWav(join(dir, `${id}-mic.wav`), mic)
+    writeWav(join(dir, `${id}-system.wav`), sys)
+    writeFileSync(join(dir, `${id}-uia.jsonl`), records.map((r) => JSON.stringify(r)).join('\n'))
+    return {
+      id,
+      set: 'dry',
+      date: '2026-10-05',
+      language: 'en',
+      title: 'Dry bench 1:1',
+      audio: [
+        { channel: 'mic', path: join(dir, `${id}-mic.wav`), offsetMs: 0 },
+        { channel: 'system', path: join(dir, `${id}-system.wav`), offsetMs: 0 }
+      ],
+      attendees: ['p01'],
+      uia: { app: 'meet', path: join(dir, `${id}-uia.jsonl`) },
+      labels
+    }
+  })()
+  const manifest = {
+    version: 1,
+    people,
+    meetings,
+    oneToOne: [oneToOne],
+    stress: { sources: people.slice(1, 4).map((p, i) => ({ corpus: 'dry-tone', speaker: p.id, tone: i + 1 })) },
+    models: []
+  }
   writeFileSync(join(dir, 'manifest.json'), JSON.stringify(manifest, null, 1))
   return manifest
 }
@@ -209,18 +250,32 @@ function readStream(path) {
 
 /**
  * The T2 variants of one stream: lag shifts, dropped records, a stuck speaker,
- * a room tile and blind stretches. Each variant is a new JSON-lines file.
+ * a room tile, blind stretches and unlit tiles. Each variant is a new JSON-lines file. `only`
+ * keeps the named variants.
  */
-export function t2Variants(streamPath, outDir, { lags = T2_LAGS_MS, seed = 1 } = {}) {
+export function t2Variants(streamPath, outDir, { lags = T2_LAGS_MS, seed = 1, selfId = null, only = null } = {}) {
   mkdirSync(outDir, { recursive: true })
   const base = readStream(streamPath)
   const end = Math.max(0, ...base.map((r) => r.tMs))
   const out = []
   const write = (name, records) => {
+    if (only && !only.includes(name)) return
     const path = join(outDir, `${basename(streamPath, '.jsonl')}-${name}.jsonl`)
     writeFileSync(path, records.map((r) => JSON.stringify(r)).join('\n'))
     out.push({ variant: name, path })
   }
+  // Unlit: no tile ever lights and no record names a speaker, but each states the meeting's
+  // count (its tiles and the user) and shows the user's own tile: the one-remote rule's case.
+  write(
+    'unlit',
+    base.map((r) => {
+      const parts = (r.participants ?? []).map((p) => ({ ...p, active: false }))
+      const others = parts.filter((p) => !p.isSelf && p.name && p.name !== selfId).length
+      const self = selfId && !parts.some((p) => p.isSelf || p.name === selfId) ? [{ name: selfId, active: false, isSelf: true }] : []
+      // A record that sees nobody (a blind one) states no count.
+      return { ...r, participantName: null, selfActive: false, participants: [...parts, ...self], ...(others ? { participantCount: others + 1 } : {}) }
+    })
+  )
   for (const lag of lags) write(`lag${lag}`, base.map((r) => ({ ...r, tMs: r.tMs + lag })))
   const rand = rng(seed)
   write('drop30', base.filter(() => rand() >= 0.3))

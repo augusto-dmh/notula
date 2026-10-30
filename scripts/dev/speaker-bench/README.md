@@ -109,6 +109,8 @@ The app reads the key from that environment variable and stores it in the run pr
    - the protocol's confirmations through the real `speaker-names:accept` and `speaker-people:record-agreement` handlers. Each enrolled person gets an agreement, Remember voice is on, and the 10 s Undo window is waited out.
 
    Then come the T2 replays and the T3 mixtures. A missing model is never downloaded: a meeting whose ASR isn't installed gets no session.
+
+   T2 replays each stream with lag shifts, dropped records, a stuck speaker, a room tile, blind stretches and `unlit`. `unlit` lights no tile and names no speaker. Each record states a count (its tiles plus the user) and shows the user's own tile, which is the one-remote rule's case. In a 1:1 call the rule names the other person; with more people it stays silent. `--dry` also replays a 1:1 tone call in `unlit` only. The report gives the one-remote autos on a line of their own: the app autos of system clusters the rule stamped, over every feed, with their wrong-name rate. That line gates nothing.
 2. **Launch 2 (evaluate).** For every stored pass, the production `decide` runs on the stored inputs:
    - per signal set (voice, app, LLM, fused);
    - per gallery scope (attendees, everyone);

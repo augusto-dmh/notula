@@ -62,6 +62,8 @@ export function renderMarkdown(r) {
   out.push(table(['', 'value'], [['audio hours', r.cpu.audioHours], ['passes', r.cpu.passes], ['pass wall s per audio hour', r.cpu.passWallSecondsPerAudioHour], ...Object.entries(r.cpu.cpuSecondsPerAudioHour).map(([k, v]) => [`CPU s per audio hour: ${k}`, v])]))
   out.push('## Platform replay (T2, the app rule; does not gate voice)', '')
   out.push(table(['variant', 'replays', 'system clusters', 'app auto', 'precision', 'coverage'], Object.entries(r.t2).map(([k, v]) => [k, v.replays, v.systemClusters, v.appAuto, v.precision, v.coverage])))
+  const one = r.oneRemote ?? { autos: 0, wrong: 0, wrongRate: null }
+  out.push(`One-remote autos (no lit tile; every feed; gates nothing): ${one.autos} auto-named, ${one.wrong} wrong, wrong-name rate ${one.wrongRate ?? '—'}.`, '')
   out.push('## Stress (T3, composed; never counts toward the gate)', '')
   out.push(table(['variant', 'set', 'clusters', 'auto', 'wrong', 'coverage'], Object.entries(r.t3).flatMap(([k, v]) => Object.entries(v).map(([s, t]) => [k, s, t.clusters, t.auto, t.wrong, t.coverage]))))
   if (r.t3Skipped) out.push(`Skipped: ${r.t3Skipped}`, '')

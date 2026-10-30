@@ -412,6 +412,25 @@ export function cpuSummary(feeds) {
   return { audioHours: round(hours, 3), passes, passWallSecondsPerAudioHour: hours && passes ? round(passMs / 1000 / hours, 1) : null, cpuSecondsPerAudioHour: perHour }
 }
 
+/**
+ * The one-remote rule's autos on their own: app autos of system clusters some of whose speech
+ * the rule stamped (no lit tile), over every feed, and how many name the wrong person. Reported
+ * apart; it gates nothing.
+ */
+export function oneRemoteSummary(feeds, ctx) {
+  const t = { autos: 0, correct: 0, outsider: 0, wrong: 0 }
+  for (const f of feeds) {
+    const meeting = ctx.meetingOfTag(f.tag)
+    if (!meeting) continue
+    for (const c of f.clusters) {
+      if (c.channel !== 'system' || !c.oneRemote || c.band !== 'auto' || !c.auto?.src?.includes('app')) continue
+      t.autos++
+      t[autoOutcome(c.auto.person, labelOf(c.segments, c.channel, meeting.labels))]++
+    }
+  }
+  return { ...t, wrongRate: t.autos ? round(t.wrong / t.autos) : null }
+}
+
 /** T2: the app rule's outcomes per platform variant (production bands of the replays). */
 export function t2Summary(feeds, ctx) {
   const out = {}

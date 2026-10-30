@@ -194,6 +194,8 @@ interface ClusterDump {
   /** Auto: the manifest id behind `auto_pid` (or the name match), else `other`. */
   auto: { person: string; src: SpeakerAutoSource | null } | null
   candidates: { person: string; source: string }[]
+  /** Some of its system speech was stamped by the one-remote rule (no lit tile). */
+  oneRemote: boolean
   /** Word time on the meeting's timeline, merged. */
   segments: [number, number][]
 }
@@ -697,6 +699,7 @@ class Bench {
         band,
         auto: s.auto ? { person: this.manifestOf(s.auto.personId, s.auto.name), src: s.auto.src } : null,
         candidates: band === 'auto' ? [] : (row?.candidates ?? []).map((c) => ({ person: this.manifestOf(c.personId, c.name), source: c.source })),
+        oneRemote: s.remote.size > 0,
         segments: segs.get(s.key) ?? []
       })
     }
@@ -783,7 +786,10 @@ class Bench {
       detectors: Record<string, { state: string; lastSeenTilesAt: number }>
       timeline: { clearAll(): void }
       onWorker(msg: unknown): void
+      endCall(d: unknown): void
     }
+    // Each replay is its own call: the one-remote rule starts with nobody seen.
+    if (m.uia) attribution.endCall(attribution.detectors[m.uia.app])
     const cpu = new Map<number, { service: string; base: number; cpu: number }>()
     this.cpuSample(cpu, true)
     const feedStartMs = Date.now()
@@ -821,6 +827,7 @@ class Bench {
     if (m.uia) {
       attribution.owner = null
       attribution.timeline.clearAll()
+      attribution.endCall(attribution.detectors[m.uia.app])
     }
     // The pass and the job (the pass awaits the job's write), bounded as enhance bounds it.
     const sampler = setInterval(() => this.cpuSample(cpu), 1_000)

@@ -16,6 +16,7 @@ import type { SpeakerPendingRow, SpeakerPersonRow } from '../storage/api'
 import type { DecideCandidate, DecideCluster, DecideTile } from './decide'
 import { foldName } from './decide/evidence'
 import type { JobLlmCandidate } from './names'
+import { oneRemoteOf } from './one-remote'
 import { clusterForSpan } from './pending-span'
 
 const DAY_MS = 86_400_000
@@ -53,9 +54,16 @@ export interface PassClusterStats {
   confirmedName: string | null
   /** The `auto_*` already on its words (relabel only raises). */
   auto: { name: string; personId: string | null; src: SpeakerAutoSource | null } | null
-  /** `att` name → stamped word time. */
+  /**
+   * `att` name → stamped word time. A system word with no `att`, in a chunk the one-remote rule
+   * named, counts as stamped by that name.
+   */
   att: Map<string, number>
   stampedMs: number
+  /** The part of `att` that came from one-remote chunks, by name. */
+  remote: Map<string, number>
+  /** Names with one-remote word time stamped under no known participant count. */
+  remoteUncounted: Set<string>
   /** Epoch ms of its first and last word. */
   startMs: number
   endMs: number
@@ -71,6 +79,7 @@ export function passClusters(chunks: readonly TranscriptChunk[], passId: string)
     const d = c.providerDetails
     const ks = keys.get(c.id)
     if (!d || !ks || d.mergeScopeId !== passId) continue
+    const remote = oneRemoteOf(c)
     d.words.forEach((w, i) => {
       const k = ks[i]
       if (!k || !k.startsWith(prefix)) return
@@ -89,6 +98,8 @@ export function passClusters(chunks: readonly TranscriptChunk[], passId: string)
           auto: null,
           att: new Map(),
           stampedMs: 0,
+          remote: new Map(),
+          remoteUncounted: new Set(),
           startMs: Infinity,
           endMs: -Infinity
         }
@@ -105,10 +116,16 @@ export function passClusters(chunks: readonly TranscriptChunk[], passId: string)
       }
       const auto = w.auto_spk?.trim()
       if (auto && !s.auto) s.auto = { name: auto, personId: w.auto_pid ?? null, src: w.auto_src ?? null }
-      const att = c.source === 'system' ? w.att?.trim() : undefined
+      // A word's own `att` always wins over the chunk's one-remote name.
+      const own = c.source === 'system' ? w.att?.trim() : undefined
+      const att = own || remote?.name
       if (att) {
         s.att.set(att, (s.att.get(att) ?? 0) + ms)
         s.stampedMs += ms
+      }
+      if (!own && remote) {
+        s.remote.set(remote.name, (s.remote.get(remote.name) ?? 0) + ms)
+        if (remote.peopleCount !== 2) s.remoteUncounted.add(remote.name)
       }
     })
   }
@@ -163,7 +180,13 @@ export function decideCluster(
 ): DecideCluster {
   const tiles: DecideTile[] =
     s.channel === 'system' && s.stampedMs > 0
-      ? [...s.att].map(([name, ms]) => ({ participantId: name, name, share: ms / s.stampedMs, kind: kinds.get(name) ?? 'individual' }))
+      ? [...s.att].map(([name, ms]) => ({
+          participantId: name,
+          name,
+          share: ms / s.stampedMs,
+          kind: kinds.get(name) ?? 'individual',
+          ...(s.remoteUncounted.has(name) ? { uncounted: true } : {})
+        }))
       : []
   return {
     key: s.key,

@@ -24,7 +24,7 @@ import { join, resolve } from 'node:path'
 import { assertBuilt, linkModels, runApp } from './speaker-bench/electron.mjs'
 import { composeStress, dryFixture, findFfmpeg, T3_VARIANTS, t2Variants } from './speaker-bench/fixtures.mjs'
 import { assertPrivatePath, BENCH_DIR, loadManifest, ROOT } from './speaker-bench/manifest.mjs'
-import { a1, clusterRows, coverageDrops, cpuSummary, derSummary, finalCalibration, micEchoSummary, fitCandidate, summarize, t2Summary, verification } from './speaker-bench/metrics.mjs'
+import { a1, clusterRows, coverageDrops, cpuSummary, derSummary, finalCalibration, fitCandidate, micEchoSummary, oneRemoteSummary, summarize, t2Summary, verification } from './speaker-bench/metrics.mjs'
 import { compareModels } from './speaker-bench/models.mjs'
 import { basePlan, BENCH_VERSION, benchSettings, feedMeeting, heldOutPeople, schedule } from './speaker-bench/protocol.mjs'
 import { writeReport } from './speaker-bench/report.mjs'
@@ -106,12 +106,15 @@ async function run(args) {
   const t2 = []
   if (!args['no-t2']) {
     const withStream = labelled.filter((m) => m.uia).slice(0, Number(args['t2-meetings'] ?? (dry ? 1 : 1e9)))
-    for (const m of withStream) {
-      const lags = dry ? [0, 1_500, 3_000] : undefined
-      for (const v of t2Variants(m.uia.path, join(publicRun, 'fixtures', 't2'), { seed, ...(lags ? { lags } : {}) })) {
+    const selfId = manifest.people.find((p) => p.self)?.id ?? null
+    const replay = (m, opts) => {
+      for (const v of t2Variants(m.uia.path, join(publicRun, 'fixtures', 't2'), { seed, selfId, ...opts })) {
         t2.push({ tag: `t2:${m.id}:${v.variant}`, meeting: feedMeeting(m, { id: `${m.id}`, uia: { app: m.uia.app, path: v.path } }) })
       }
     }
+    for (const m of withStream) replay(m, dry ? { lags: [0, 1_500, 3_000] } : {})
+    // The dry fixture's 1:1 call scores the one-remote path.
+    for (const m of manifest.oneToOne ?? []) replay(m, { only: ['unlit'] })
   }
   let t3 = { people: [], meetings: [], skipped: 'off (--no-t3)' }
   if (!args['no-t3']) {
@@ -119,7 +122,7 @@ async function run(args) {
     t3 = composeStress(manifest, join(publicRun, 'fixtures', 't3'), { ffmpeg, variants, meetingMs: dry ? 6_000 : 60_000, seed, dry })
   }
   const people = [...manifest.people.map(({ id, name, email, self }) => ({ id, name, email, ...(self ? { self: true } : {}) })), ...t3.people]
-  const meetingsById = new Map([...labelled, ...t3.meetings].map((m) => [m.id, m]))
+  const meetingsById = new Map([...labelled, ...(manifest.oneToOne ?? []), ...t3.meetings].map((m) => [m.id, m]))
   const ctx = {
     meetingOfTag: (tag) => meetingsById.get(tag.startsWith('t2:') ? tag.split(':')[1] : tag.split('~')[0]),
     enrolledIn: {},
@@ -241,6 +244,7 @@ async function run(args) {
     micEcho: micEchoSummary(baselineFeeds, ctx),
     cpu: cpuSummary(baselineFeeds),
     t2: t2Summary(r1.feeds, ctx),
+    oneRemote: oneRemoteSummary([...r1.feeds, ...r3.feeds], ctx),
     t3: candidate.composed,
     t3Skipped: t3.skipped,
     models,

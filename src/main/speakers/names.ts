@@ -46,6 +46,7 @@ import { log } from '../log'
 import { egressBlocked, LOCAL_ONLY_REASON } from '../privacy'
 import { transcriptionControl } from '../transcription'
 import { ensureJob, jobBusy, jobState } from './job'
+import { oneRemoteOf } from './one-remote'
 
 const EVIDENCE: readonly SpeakerEvidenceType[] = [
   'introduced_self',
@@ -491,16 +492,24 @@ function namedClusters(chunks: TranscriptChunk[]): Map<string, string> {
   return out
 }
 
-/** Meeting-app names on system words, and those that cover more than one cluster (room tiles). */
+/**
+ * Meeting-app names on system words, and those that cover more than one cluster (room tiles).
+ * One-remote names (on chunks, not words) join the names, never the shared tiles.
+ */
 function appNames(chunks: TranscriptChunk[]): { names: string[]; tiles: Map<string, Set<string>> } {
   const keys = wordIdentityKeys(chunks)
   const byName = new Map<string, Set<string>>()
+  const remote = new Set<string>()
   for (const c of chunks) {
     if (c.source !== 'system') continue
     const ks = keys.get(c.id)
+    const one = oneRemoteOf(c)
     c.providerDetails?.words.forEach((w, i) => {
       const att = w.att?.trim()
-      if (!att) return
+      if (!att) {
+        if (one) remote.add(one.name)
+        return
+      }
       const set = byName.get(att) ?? new Set<string>()
       const k = ks?.[i]
       if (k) set.add(k)
@@ -508,7 +517,9 @@ function appNames(chunks: TranscriptChunk[]): { names: string[]; tiles: Map<stri
     })
   }
   const tiles = new Map([...byName].filter(([, s]) => s.size > 1))
-  return { names: [...byName.keys()].filter((n) => !tiles.has(n)), tiles }
+  const names = [...byName.keys()].filter((n) => !tiles.has(n))
+  for (const n of remote) if (!byName.has(n)) names.push(n)
+  return { names, tiles }
 }
 
 function attendeesOf(note: Pick<Note, 'linked_event'>, profileEmail: string, myEmails: string[]): { name: string; email: string }[] {

@@ -29,6 +29,11 @@
 //    `decide`), an app auto drops under a contradicting mapping, the bench's mock names the
 //    system clusters as someone else, and the prompt, chat and webhook outputs print a cluster
 //    with a suggestion row as its letter, word by word, while a real leak is still counted.
+// 5. The one-remote rule: live, the rule that drives the chunk fallback (a third person, a page of
+//    tiles under a larger count, settling, the user unknown or named), and after the meeting, a 1:1
+//    note whose tile never lit (auto with a count of 2, suggest without one, suggest with both
+//    names under another attendee's voice, no evidence from the user's name or a room). Also
+//    Zoom's state log.
 //
 // Exits 1 on any failure. `--keep` keeps the scratch folder.
 
@@ -442,6 +447,162 @@ function benchChecks(NEW) {
   }
 }
 
+// ---------- the one-remote rule and Zoom's state log ----------
+
+/**
+ * The one-remote rule, live (`OneRemoteRule`, which drives the chunk fallback and its marker) and
+ * after the meeting (the production `passClusters`, `tileKinds`, `decideCluster` and `decide` on
+ * a synthetic 1:1 note whose remote tile never lit), and Zoom's state log.
+ */
+function oneRemoteChecks(NEW) {
+  const OR = NEW['one-remote']
+  const CA = NEW.candidates
+  const ZS = NEW['zoom-state']
+  const ME = 'Dana Example'
+
+  // Live: one rule fed roster records a second apart.
+  {
+    const rule = new OR.OneRemoteRule()
+    const tile = (name, isSelf = false) => ({ name, isSelf })
+    const feed = (t, participants, count, opts = {}) =>
+      rule.update({ participants, ...(count === undefined ? {} : { count }), profileName: ME, ownName: null, at: t * 1000, ...opts })
+    const first = feed(0, [tile(ME), tile('Ana Souza')], 2)
+    check('one-remote: the user and one other person name that person at once', first.name === 'Ana Souza' && first.reason === null, first)
+    const joined = feed(1, [tile(ME), tile('Ana Souza'), tile('Bruno Lima')], 3)
+    const paged = feed(2, [tile(ME), tile('Ana Souza')], undefined)
+    check('one-remote: a third person gives no name, nor does a page of tiles under a count of 3', joined.name === null && joined.reason === 'several' && paged.name === null && paged.reason === 'count', { joined, paged })
+    const settling = []
+    for (let t = 3; t <= 20; t++) settling.push([t, feed(t, [tile(ME), tile('Ana Souza')], 2)])
+    const named = settling.filter(([, r]) => r.name)
+    check(
+      'one-remote: after a third person was seen, the candidate settles 15 s before it names anyone',
+      settling.filter(([t]) => t < 18).every(([, r]) => r.name === null && r.reason === 'settling') && named.length > 0 && named[0][0] === 18,
+      settling.map(([t, r]) => `${t}:${r.name ? 'named' : r.reason}`).join(' ')
+    )
+    const gap = feed(28, [tile(ME), tile('Ana Souza')], 2)
+    check('one-remote: the same name after more than 7 s unseen settles again', gap.name === null && gap.reason === 'settling', gap)
+
+    const fresh = (opts) => {
+      const r = new OR.OneRemoteRule()
+      return r.update({ participants: [tile('Ana Souza'), ...(opts.self ? [tile(opts.self, opts.isSelf)] : [])], count: 2, profileName: opts.profile, ownName: opts.own ?? null, at: 0 })
+    }
+    const unknownUser = fresh({ profile: '' })
+    const byTile = fresh({ profile: '', self: 'Me', isSelf: true })
+    const byOwn = fresh({ profile: '', own: 'Dana' })
+    check('one-remote: no answer until the user is known (profile name on a tile, a self tile or Zoom\'s own name)', unknownUser.name === null && unknownUser.reason === 'self-unknown' && byTile.name === 'Ana Souza' && byOwn.name === 'Ana Souza', { unknownUser, byTile, byOwn })
+
+    const alone = new OR.OneRemoteRule().update({ participants: [tile(ME), tile(`${ME.toUpperCase()} (You)`)], count: 2, profileName: ME, ownName: null, at: 0 })
+    const ownTile = new OR.OneRemoteRule().update({ participants: [tile('Dana E.'), tile('Ana Souza')], count: 2, profileName: '', ownName: 'dana e.', at: 0 })
+    check("one-remote: the user's own name never arrives this way (live)", alone.name === null && alone.reason === 'nobody' && ownTile.name === 'Ana Souza', { alone, ownTile })
+  }
+
+  // After the meeting: a 1:1 note. Mic: the user (r9). System: Ana (r1, 40 s), her tile never lit,
+  // so no word carries `att`; the chunks carry the rule's name.
+  const base = Date.parse('2026-10-29T10:00:00.000Z')
+  const note = ({ peopleCount = 2, name = 'Ana Souza', attWords = 0 } = {}) => {
+    const chunks = []
+    let n = 0
+    const say = (source, label, startS, count, detected) => {
+      const anchor = base + startS * 1000
+      const words = Array.from({ length: count }, (_, i) => ({ w: `w${n}x${i}`, s_ms: i * 500, e_ms: i * 500 + 450, merged_spk: label, ...(i < attWords ? { att: 'Bruno Lima' } : {}) }))
+      chunks.push({
+        id: `or-${String(n++).padStart(3, '0')}`, document_id: 'or', source, transcription_session_id: 's1', is_final: true, text: words.map((w) => w.w).join(' '),
+        start_timestamp: new Date(anchor).toISOString(), end_timestamp: new Date(anchor + count * 500).toISOString(),
+        detected_speaker_name: detected?.participantName ?? null, detectedSpeaker: detected ?? null,
+        providerDetails: { provider: 'local', words, wallClockAnchorMs: anchor, mergeScopeId: 'p1' }
+      })
+    }
+    const one = { participantId: name, participantName: name, source: 'zoom-uia', via: 'one-remote', peopleCount }
+    for (let t = 0; t < 120; t += 30) say('microphone', 'r9', t, 40, null)
+    for (let t = 200; t < 400; t += 50) say('system', 'r1', t, 20, one)
+    return chunks
+  }
+  const voiceOf = (cos) => Float32Array.from([cos, Math.sqrt(1 - cos * cos), 0, 0])
+  const conditions = ['<10s', '10-30s', '>=30s'].flatMap((bucket) => ['mic', 'system'].map((channel) => ({
+    channel, language: 'en', bucket, autoEnabled: bucket === '>=30s', tauAuto: 0.97, tauSuggest: 0.75, margin: 0.1, tieMargin: 0.03, logistic: { a: 11, b: -6 }
+  })))
+  const voiceCal = { voice: true, file: { modelSha: 'm', reportHash: null, createdAt: '2026-10-30T00:00:00.000Z', benchVersion: 0, conditions } }
+  const off = { voice: false, reason: 'missing', file: null }
+  const person = (id, name, tiles) => ({ id, personId: id, name, isSelf: false, attendee: true, known: false, tileIds: [], stampedOnSystem: false, hasAgreement: true, autoRecognize: true, tiles })
+  const decideNote = (chunks, { gallery = [], vector = null, cal = off } = {}) => {
+    const stats = CA.passClusters(chunks, 'p1')
+    const kinds = CA.tileKinds(stats.values(), ME)
+    const tiles = [...kinds].filter(([, k]) => k === 'individual').map(([n]) => n)
+    const candidates = [
+      { id: 'self', personId: 'self', name: ME, isSelf: true, attendee: false, known: false, tileIds: [], stampedOnSystem: false, hasAgreement: true, autoRecognize: true },
+      person('ana', 'Ana Souza'),
+      person('bruno', 'Bruno Lima')
+    ]
+    // As noteCandidates maps a tile: a unique name match with an attendee.
+    for (const t of tiles) {
+      const c = candidates.find((j) => !j.isSelf && j.name.toLowerCase() === t.toLowerCase())
+      if (c) {
+        c.tileIds.push(t)
+        c.stampedOnSystem = true
+      }
+    }
+    const clusters = [...stats.values()].map((s) => CA.decideCluster(s, kinds, 'en', { cleanMs: s.speechMs, vector: s.channel === 'system' ? vector : null }))
+    const out = NEW.decide.decide(
+      { noteId: 'n', passId: 'p1', modelId: cal.file?.modelSha ?? null, voices: true, selfVoice: true, hasLinkedEvent: true, clusters, candidates: candidates.map(({ tiles: _t, ...c }) => c), gallery, negatives: [], llm: [] },
+      cal
+    )
+    return { r1: out.clusters.find((d) => d.key === 'r:p1:r1'), stats: stats.get('r:p1:r1'), kinds }
+  }
+  const brief = (d) => ({ band: d?.band, personId: d?.personId, autoSrc: d?.autoSrc, candidates: d?.candidates?.map((c) => c.personId ?? c.name) })
+
+  const counted = decideNote(note())
+  check(
+    'one-remote: a 1:1 call whose tile never lit, count 2, 40 s of speech: Ana named automatically (app)',
+    counted.stats?.speechMs >= 30_000 && counted.r1?.band === 'auto' && counted.r1.personId === 'ana' && counted.r1.autoSrc === 'app',
+    { speechMs: counted.stats?.speechMs, ...brief(counted.r1) }
+  )
+  const unknown = decideNote(note({ peopleCount: null }))
+  check('one-remote: the same with an unknown count: a suggestion of Ana', unknown.r1?.band === 'suggest' && unknown.r1.candidates[0]?.personId === 'ana', brief(unknown.r1))
+  const voiced = decideNote(note(), { gallery: [{ personId: 'bruno', channel: 'system', confirmations: 3, exemplars: [voiceOf(1)] }], vector: voiceOf(0.7), cal: voiceCal })
+  check(
+    'one-remote: a voice match to another attendee turns the auto into a suggestion showing both names',
+    voiced.r1?.band === 'suggest' && voiced.r1.candidates.length === 2 && ['ana', 'bruno'].every((p) => voiced.r1.candidates.some((c) => c.personId === p)),
+    brief(voiced.r1)
+  )
+  const mine = decideNote(note({ name: ME }))
+  check("one-remote: a one-remote name equal to the user's gives no evidence", mine.kinds.get(ME) === 'self' && mine.r1?.band === 'none', { kind: mine.kinds.get(ME), ...brief(mine.r1) })
+  const room = decideNote(note({ name: 'Boardroom 2' }))
+  check('one-remote: a one-remote name that is a room tile gives no evidence', room.kinds.get('Boardroom 2') === 'room' && room.r1?.band === 'none', brief(room.r1))
+  const mixed = CA.passClusters(note({ attWords: 5 }), 'p1').get('r:p1:r1')
+  check(
+    "one-remote: a word's own att wins over the chunk's name",
+    mixed.att.get('Bruno Lima') > 0 && mixed.att.get('Ana Souza') > 0 && mixed.stampedMs === mixed.speechMs && mixed.remote.get('Ana Souza') === mixed.att.get('Ana Souza'),
+    Object.fromEntries(mixed.att)
+  )
+
+  // Zoom's state log: a change is logged once it held 9 s; a gap over 10 s drops it and counts 10 s.
+  {
+    const z = new ZS.ZoomStateLog()
+    const changes = []
+    const rec = (s, state, count = 2) => {
+      const c = z.record(state, s * 1000, count)
+      if (c) changes.push(`${s}:${c.from ?? '-'}>${c.to}`)
+    }
+    for (let s = 0; s <= 10; s++) rec(s, 'idle')
+    for (let s = 11; s <= 15; s++) rec(s, 'naming:label')
+    rec(30, 'naming:label')
+    for (let s = 31; s <= 40; s++) rec(s, 'naming:label', 3)
+    const sum = z.summary()
+    check(
+      "Zoom state log: changes after 9 s, a gap over 10 s drops a pending one, times capped per gap",
+      changes.join(' ') === '9:->idle 39:idle>naming:label' && sum.times.idle === 11_000 && sum.times['naming:label'] === 4_000 + 10_000 + 10_000 && sum.maxPeople === 3,
+      { changes, sum }
+    )
+    check(
+      'Zoom state log: states sort as named, one-remote, idle (window or version refusals included) or refused',
+      ZS.zoomStateOf({ speaker: true, speakerIsSelf: true, method: 'marker', refusal: null, oneRemote: false }) === 'naming-self:marker' &&
+        ZS.zoomStateOf({ speaker: false, speakerIsSelf: false, method: null, refusal: 'version', oneRemote: true }) === 'one-remote' &&
+        ZS.zoomStateOf({ speaker: false, speakerIsSelf: false, method: null, refusal: 'window', oneRemote: false }) === 'idle' &&
+        ZS.zoomStateOf({ speaker: false, speakerIsSelf: false, method: null, refusal: 'mismatch', oneRemote: false }) === 'refused:mismatch'
+    )
+  }
+}
+
 // ---------- run ----------
 
 const SPEAKER_TABLES = [
@@ -461,7 +622,7 @@ try {
   mkdirSync(scratch, { recursive: true })
   console.log(`Building the storage engines (${PREV_REV} and this tree)…`)
   const OLD = await bundle(sourceTree(PREV_REV, join(OUT, 'prev-src')), 'prev', ['engine'])
-  const NEW = await bundle(ROOT, 'new', ['engine', '../speakers/pending-span', '../speakers/bench-checks', '../speakers/decide', '../enhance/transcript', '../chat/windows', '../../shared/lib/speakers'])
+  const NEW = await bundle(ROOT, 'new', ['engine', '../speakers/pending-span', '../speakers/bench-checks', '../speakers/decide', '../speakers/candidates', '../speakers/one-remote', '../speakers/zoom-state', '../enhance/transcript', '../chat/windows', '../../shared/lib/speakers'])
   const keyHex = randomBytes(32).toString('hex')
 
   // A fresh database of this tree: the schema an upgrade must reach.
@@ -641,6 +802,7 @@ try {
   // ---------- the bench's A7 and A15, on synthetic notes ----------
 
   benchChecks(NEW)
+  oneRemoteChecks(NEW)
 
   // ---------- the speaker-profile storage API on the upgraded file ----------
 
