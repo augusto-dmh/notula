@@ -40,6 +40,8 @@ export interface BlockExecuteOptions {
   mode?: 'draft' | 'send'
   /** Calendar "Add to". */
   targetSourceId?: string
+  /** Calendar: write even though some guests are busy then ("Book anyway"). */
+  allowConflicts?: boolean
 }
 
 /** One end of a time option: timed, or all-day. */
@@ -65,7 +67,8 @@ export interface CalendarEventDraft {
   location?: string
   /** Default true: the user's email is the first attendee. */
   addMeAsGuest?: boolean
-  attendees: { email: string; resource?: boolean }[]
+  /** Rooms are `resource` entries; `optional` guests needn't attend. */
+  attendees: { email: string; resource?: boolean; optional?: boolean }[]
   description: string
   /** `RRULE:`, `EXRULE:`, `RDATE`, `EXDATE` lines: new events, and `series` / `following` edits. */
   recurrenceRules?: string[]
@@ -86,6 +89,10 @@ export interface CalendarEventDraft {
     occurrenceStart?: CalendarDraftTime
     original: Omit<CalendarEventDraft, 'existingEvent' | 'execution' | 'dismissedAt'>
   }
+  /** Updates only; absent means true. False changes the event without telling guests (Google). */
+  notifyGuests?: boolean
+  /** A time the user picked on the card while it showed these busy guests: booking it is accepted. */
+  acceptedClash?: { start: string; end: string; emails: string[] }
 }
 
 /** An `email` block's content. */
@@ -101,6 +108,16 @@ export interface EmailDraftBlock {
   forward?: { messageId: string; includeAttachments: boolean; subject?: string }
   /** ≤ 10. */
   attachmentIds?: string[]
+  /** Files the user added to the same chat thread, sent with the email (≤ 10, ≤ 25 MB with a forward's own). */
+  attachments?: EmailAttachment[]
+}
+
+/** A chat file on an email draft. */
+export interface EmailAttachment {
+  id: string
+  name: string
+  mimeType: string
+  size: number
 }
 
 export const BLOCK_LIMITS = { autosaveMs: 750, creatingExpiresMs: 60_000, sendUndoMs: 10_000 } as const

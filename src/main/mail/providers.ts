@@ -7,7 +7,7 @@ import { randomBytes } from 'node:crypto'
 import { MAIL_LIMITS, type MailThread } from '@shared/types/mail'
 import type { MainContext } from '../context'
 import { exchange, insufficientScope, providerHttp, type Exchange } from '../calendar-write/http'
-import { buildForwardRaw, buildRaw, forwardSubject, parseForwardSource, stripQuoted } from './mime'
+import { buildForwardRaw, buildRaw, FORWARD_MAX_BYTES, forwardSubject, parseForwardSource, stripQuoted, type MimeFile } from './mime'
 
 type Obj = Record<string, unknown>
 const obj = (v: unknown): Obj => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Obj) : {})
@@ -23,7 +23,8 @@ export const MAIL_COPY = {
   network: 'Couldn’t reach your mail account. Check your connection and try again.',
   other: 'Couldn’t reach your mailbox. Try again.',
   replyAndForward: 'Choose either a reply or a forward, not both.',
-  forwardTooLarge: 'This email is too large to forward with its attachments. Forward it without them.'
+  forwardTooLarge: 'This email is too large to forward with its attachments. Forward it without them.',
+  filesTooLarge: 'The attached files are larger than 25 MB in all. Remove some and try again.'
 } as const
 
 export class MailError extends Error {
@@ -67,6 +68,8 @@ export interface SendDraft {
   inReplyToThread?: string | null
   /** Forwards this message (Gmail or Graph message id); `text` is the introduction above it. */
   forward?: { messageId: string; includeAttachments: boolean } | null
+  /** Chat files sent with the email. */
+  files?: MimeFile[]
 }
 
 // ---------- Gmail ----------
@@ -191,7 +194,7 @@ async function gmailForwardRaw(ctx: MainContext, token: string, m: SendDraft, fo
   if (!x.ok) raise(x, 'read')
   const original = parseForwardSource(Buffer.from(str(x.body['raw']), 'base64url').toString('latin1'))
   const raw = buildForwardRaw({ ...m, subject: forwardSubject(m.subject || original.subject) }, original, forward.includeAttachments, `notula-${randomBytes(12).toString('hex')}`)
-  if (!raw) throw new MailError('provider', MAIL_COPY.forwardTooLarge)
+  if (!raw) throw new MailError('provider', m.files?.length ? MAIL_COPY.filesTooLarge : MAIL_COPY.forwardTooLarge)
   return raw
 }
 
@@ -199,13 +202,32 @@ export async function gmailCreateDraft(ctx: MainContext, token: string, m: SendD
   const http = providerHttp(ctx, 'integration', 'mail')
   const reply = m.inReplyToThread ? await gmailReplyHeaders(ctx, token, m.inReplyToThread) : { inReplyTo: null, references: null }
   const raw = m.forward ? await gmailForwardRaw(ctx, token, m, m.forward) : buildRaw({ ...m, ...reply }, `notula-${randomBytes(12).toString('hex')}`)
-  const x = await exchange(() =>
-    http.fetch('https://gmail.googleapis.com/gmail/v1/users/me/drafts', {
-      method: 'POST',
-      headers: auth(token, { 'content-type': 'application/json' }),
-      body: JSON.stringify({ message: { raw, ...(m.inReplyToThread ? { threadId: m.inReplyToThread } : {}) } })
-    })
-  )
+  const thread = m.inReplyToThread ? { threadId: m.inReplyToThread } : {}
+  // Files make the message large: it goes up as the message itself, beside the draft's metadata.
+  const boundary = `notula-${randomBytes(12).toString('hex')}`
+  const x = m.files?.length
+    ? await exchange(() =>
+        http.fetch('https://gmail.googleapis.com/upload/gmail/v1/users/me/drafts', {
+          method: 'POST',
+          query: { uploadType: 'multipart' },
+          headers: auth(token, { 'content-type': `multipart/related; boundary="${boundary}"` }),
+          body: new Uint8Array(
+            Buffer.concat([
+              Buffer.from(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({ message: thread })}\r\n--${boundary}\r\nContent-Type: message/rfc822\r\n\r\n`, 'utf8'),
+              Buffer.from(raw, 'base64url'),
+              Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8')
+            ])
+          ),
+          timeoutMs: 120_000
+        })
+      )
+    : await exchange(() =>
+        http.fetch('https://gmail.googleapis.com/gmail/v1/users/me/drafts', {
+          method: 'POST',
+          headers: auth(token, { 'content-type': 'application/json' }),
+          body: JSON.stringify({ message: { raw, ...thread } })
+        })
+      )
   if (!x.ok) raise(x, 'send')
   return { draftId: str(x.body['id']), messageId: str(obj(x.body['message'])['id']) || null }
 }
@@ -341,8 +363,72 @@ export async function graphSubject(ctx: MainContext, token: string, id: string):
   return x.ok ? str(x.body['subject']) : null
 }
 
+/** A file of this size or less goes up in one request; a larger one through an upload session. */
+const GRAPH_INLINE_MAX = 3 * 1024 * 1024
+/** Upload session chunks are multiples of 320 KiB. */
+const GRAPH_CHUNK = 10 * 320 * 1024
+
+/** Adds the chat files to a draft that exists; a forward's own attachments count toward the 25 MB. */
+async function graphAttach(ctx: MainContext, token: string, draftId: string, files: MimeFile[], forwarded: boolean): Promise<void> {
+  const http = providerHttp(ctx, 'integration', 'mail')
+  const json = auth(token, { 'content-type': 'application/json' })
+  let total = files.reduce((n, f) => n + f.bytes.length, 0)
+  if (forwarded) {
+    const list = await exchange(() => http.fetch('https://graph.microsoft.com/v1.0/me/messages/{id}/attachments', { params: { id: draftId }, query: { $select: 'size' }, headers: auth(token) }))
+    if (!list.ok) raise(list, 'send')
+    total += arr(list.body['value']).reduce((n, a) => n + (Number(a['size']) || 0), 0)
+  }
+  if (total > FORWARD_MAX_BYTES) {
+    await exchange(() => http.fetch('https://graph.microsoft.com/v1.0/me/messages/{id}', { method: 'DELETE', params: { id: draftId }, headers: auth(token) }))
+    throw new MailError('provider', MAIL_COPY.filesTooLarge)
+  }
+  for (const f of files) {
+    if (f.bytes.length <= GRAPH_INLINE_MAX) {
+      const x = await exchange(() =>
+        http.fetch('https://graph.microsoft.com/v1.0/me/messages/{id}/attachments', {
+          method: 'POST',
+          params: { id: draftId },
+          headers: json,
+          body: JSON.stringify({ '@odata.type': '#microsoft.graph.fileAttachment', name: f.name, contentType: f.mimeType, contentBytes: f.bytes.toString('base64') })
+        })
+      )
+      if (!x.ok) raise(x, 'send')
+      continue
+    }
+    const session = await exchange(() =>
+      http.fetch('https://graph.microsoft.com/v1.0/me/messages/{id}/attachments/createUploadSession', {
+        method: 'POST',
+        params: { id: draftId },
+        headers: json,
+        body: JSON.stringify({ AttachmentItem: { attachmentType: 'file', name: f.name, size: f.bytes.length, contentType: f.mimeType } })
+      })
+    )
+    if (!session.ok) raise(session, 'send')
+    const uploadUrl = str(session.body['uploadUrl'])
+    if (!/^https:\/\//.test(uploadUrl)) throw new MailError('provider', MAIL_COPY.other)
+    for (let start = 0; start < f.bytes.length; start += GRAPH_CHUNK) {
+      const end = Math.min(f.bytes.length, start + GRAPH_CHUNK)
+      // The upload URL carries its own authorization: no bearer token goes with it.
+      const put = await exchange(() =>
+        http.fetchUrl(uploadUrl, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/octet-stream', 'content-range': `bytes ${start}-${end - 1}/${f.bytes.length}` },
+          body: new Uint8Array(f.bytes.subarray(start, end)),
+          timeoutMs: 120_000
+        })
+      )
+      if (!put.ok) raise(put, 'send')
+    }
+  }
+}
+
 export async function graphCreateDraft(ctx: MainContext, token: string, m: SendDraft): Promise<{ draftId: string; webUrl: string | null }> {
-  if (m.forward) return graphForwardDraft(ctx, token, m, m.forward)
+  const d = m.forward ? await graphForwardDraft(ctx, token, m, m.forward) : await graphNewDraft(ctx, token, m)
+  if (m.files?.length) await graphAttach(ctx, token, d.draftId, m.files, !!m.forward?.includeAttachments)
+  return d
+}
+
+async function graphNewDraft(ctx: MainContext, token: string, m: SendDraft): Promise<{ draftId: string; webUrl: string | null }> {
   const http = providerHttp(ctx, 'integration', 'mail')
   const x = await exchange(() =>
     http.fetch('https://graph.microsoft.com/v1.0/me/messages', {

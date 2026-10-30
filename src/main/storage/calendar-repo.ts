@@ -37,7 +37,7 @@ const MAX_PARTICIPANT_QUERY = 200
 const strOrNull = (v: unknown): string | null => (typeof v === 'string' ? v : null)
 
 /** The incremental grants a source holds. */
-const GRANTS: readonly CalendarGrant[] = ['calendar-write', 'mail-read', 'mail-send', 'files-read']
+const GRANTS: readonly CalendarGrant[] = ['calendar-write', 'mail-read', 'mail-send', 'files-read', 'rooms-read']
 const grantsOf = (v: unknown): CalendarGrant[] =>
   (Array.isArray(parseJson<unknown>(v, [])) ? (parseJson<unknown>(v, []) as unknown[]) : []).filter((g): g is CalendarGrant => GRANTS.includes(g as CalendarGrant))
 

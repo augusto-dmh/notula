@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // The chat email card: a draft from
 // `draftFollowUpEmail` the user edits, then sends (after a 10 s countdown they can undo) or saves to
-// their mailbox's drafts. The tool never sends by itself.
+// their mailbox's drafts. The tool never sends by itself. Files from the chat show as chips the user
+// can remove before sending.
 
 import { useEffect, useRef, useState, type JSX } from 'react'
 import type { EmailDraftBlock } from '@shared/types/workflow-blocks'
@@ -15,6 +16,12 @@ import './mail.css'
 
 const SAVE_FAILED = 'Couldn’t save the email draft'
 const UNDO_S = 10
+
+/** "2.4 MB", "820 KB". */
+function fileSize(bytes: number): string {
+  if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1)} MB`
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`
+}
 
 function splitList(v: string): string[] {
   return v
@@ -165,6 +172,30 @@ export function EmailDraftCard({ toolCall }: ToolCardProps): JSX.Element {
       </label>
       {c.forward ? <p className="ml-forward">Forwarding: {c.forward.subject || c.subject.replace(/^fwd:\s*/i, '') || '(no subject)'}</p> : null}
       <textarea className="ml-body" value={c.body} disabled={locked} aria-label="Message" rows={Math.min(14, Math.max(5, c.body.split('\n').length + 1))} onChange={(e) => set({ body: e.target.value })} />
+      {c.attachments?.length ? (
+        <ul className="ml-files" aria-label="Attached files">
+          {c.attachments.map((f) => (
+            <li key={f.id} className="ml-file">
+              <span className="ml-file__name">{f.name}</span>
+              <span className="ml-file__size">{fileSize(f.size)}</span>
+              {locked ? null : (
+                <button
+                  type="button"
+                  className="ml-file__x"
+                  aria-label={`Remove ${f.name}`}
+                  onClick={() => {
+                    const rest = (c.attachments ?? []).filter((x) => x.id !== f.id)
+                    const { attachments: _a, ...draft } = c
+                    h.edit(rest.length ? { ...draft, attachments: rest } : draft)
+                  }}
+                >
+                  ×
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : null}
       <div className="ml-foot">
         <button type="button" className="n-btn n-btn--sm n-btn--ghost" disabled={locked} onClick={() => void h.dismiss()}>
           Dismiss

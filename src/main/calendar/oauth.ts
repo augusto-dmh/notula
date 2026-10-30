@@ -17,7 +17,7 @@ import type { OAuthClient } from './secrets'
 export const GOOGLE_SCOPE = 'https://www.googleapis.com/auth/calendar.readonly'
 export const MICROSOFT_SCOPE = 'offline_access User.Read Calendars.Read'
 
-const GRANT_ORDER: readonly CalendarGrant[] = ['calendar-write', 'mail-read', 'mail-send', 'files-read']
+const GRANT_ORDER: readonly CalendarGrant[] = ['calendar-write', 'mail-read', 'mail-send', 'files-read', 'rooms-read']
 
 /**
  * The scope request for the read scope plus the held grants. On Microsoft
@@ -38,7 +38,8 @@ export function grantsFromScope(provider: OAuthCalendarProvider, scope: string):
       .filter(Boolean)
       .map((x) => (provider === 'microsoft' ? x.replace(/^https:\/\/graph\.microsoft\.com\//i, '').toLowerCase() : x))
   )
-  return GRANT_ORDER.filter((g) => CALENDAR_GRANT_SCOPES[g][provider].every((x) => have.has(provider === 'microsoft' ? x.toLowerCase() : x)))
+  // A grant with no scopes on this provider (`rooms-read` on Microsoft) is never held there.
+  return GRANT_ORDER.filter((g) => CALENDAR_GRANT_SCOPES[g][provider].length > 0 && CALENDAR_GRANT_SCOPES[g][provider].every((x) => have.has(provider === 'microsoft' ? x.toLowerCase() : x)))
 }
 
 /** Options of a consent run: the grants to request and the account to pre-select. */

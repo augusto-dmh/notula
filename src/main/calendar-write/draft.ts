@@ -16,6 +16,8 @@ const DATE = /^\d{4}-\d{2}-\d{2}$/
 const DATETIME = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:\d{2})?$/
 const COLORS: readonly CalendarColorId[] = ['default', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11']
 const VISIBILITY = ['default', 'public', 'private'] as const
+const DECLINE_MODES = ['declineNone', 'declineOnlyNewConflictingInvitations', 'declineAllConflictingInvitations'] as const
+type Attendee = CalendarEventDraft['attendees'][number]
 const obj = (v: unknown): Obj => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Obj) : {})
 const str = (v: unknown): string => (typeof v === 'string' ? v : '')
 const scopeOf = (v: unknown): CalendarEditScope => (v === 'series' || v === 'following' ? v : 'occurrence')
@@ -23,6 +25,7 @@ const userZone = (): string => Intl.DateTimeFormat().resolvedOptions().timeZone 
 
 export const NOT_AVAILABLE = 'Notula can only create regular events.'
 export const OFFSET_AND_ZONE = 'Give the time either with its offset or with a time zone, not both.'
+export const DECLINE_MAX = 1_000
 
 export interface NormalizeOptions {
   /** The tool's arguments: a time may leave out its offset, and a given offset must agree with a given zone. */
@@ -93,20 +96,24 @@ function endAfter(start: CalendarDraftTime, length: NonNullable<NormalizeOptions
   return { dateTime: zoned(Date.parse(start.dateTime) + ms, start.timeZone), timeZone: start.timeZone }
 }
 
-function attendees(v: unknown): { email: string; resource?: boolean }[] {
-  if (v === undefined || v === null) return []
-  if (!Array.isArray(v)) throw bad('Guests must be a list')
+/** Guests, then rooms (`resource`); a room is never optional. */
+function attendees(v: unknown, rooms: unknown): Attendee[] {
+  if (v !== undefined && v !== null && !Array.isArray(v)) throw bad('Guests must be a list')
+  if (rooms !== undefined && rooms !== null && !Array.isArray(rooms)) throw bad('Rooms must be a list')
   const seen = new Set<string>()
-  const out: { email: string; resource?: boolean }[] = []
-  for (const a of v) {
+  const out: Attendee[] = []
+  const add = (a: unknown, room: boolean): void => {
     const o = typeof a === 'string' ? { email: a } : obj(a)
     const email = str(o['email']).trim()
-    if (!EMAIL.test(email)) throw bad(`${email || 'A guest'} isn’t a valid email address`)
+    if (!EMAIL.test(email)) throw bad(`${email || (room ? 'A room' : 'A guest')} isn’t a valid email address`)
     const key = email.toLowerCase()
-    if (seen.has(key)) continue
+    if (seen.has(key)) return
     seen.add(key)
-    out.push(o['resource'] === true ? { email, resource: true } : { email })
+    if (room || o['resource'] === true) out.push({ email, resource: true })
+    else out.push(o['optional'] === true ? { email, optional: true } : { email })
   }
+  for (const a of (v as unknown[] | null | undefined) ?? []) add(a, false)
+  for (const r of (rooms as unknown[] | null | undefined) ?? []) add(r, true)
   if (out.length > 200) throw bad('Too many guests')
   return out
 }
@@ -133,7 +140,7 @@ export function normalizeDraft(raw: unknown, opts: NormalizeOptions = {}): Calen
     summary: str(c['summary']).trim().slice(0, 1_000),
     timeOptions,
     conference,
-    attendees: attendees(c['attendees']),
+    attendees: attendees(c['attendees'], c['rooms']),
     description: str(c['description']).slice(0, 8_000),
     addMeAsGuest: c['addMeAsGuest'] !== false,
     execution: null,
@@ -141,8 +148,19 @@ export function normalizeDraft(raw: unknown, opts: NormalizeOptions = {}): Calen
   }
   if (c['selectedTime'] !== undefined && c['selectedTime'] !== null) d.selectedTime = option(c['selectedTime'], {})
   if (typeof c['location'] === 'string') d.location = c['location'].slice(0, 500)
-  if (typeof c['autoDeclineMode'] === 'string') d.autoDeclineMode = c['autoDeclineMode'] as NonNullable<CalendarEventDraft['autoDeclineMode']>
-  if (typeof c['declineMessage'] === 'string') d.declineMessage = c['declineMessage']
+  if (c['autoDeclineMode'] !== undefined && c['autoDeclineMode'] !== null) {
+    if (!DECLINE_MODES.includes(c['autoDeclineMode'] as (typeof DECLINE_MODES)[number])) throw bad('Auto-decline must be declineNone, declineOnlyNewConflictingInvitations or declineAllConflictingInvitations')
+    d.autoDeclineMode = c['autoDeclineMode'] as (typeof DECLINE_MODES)[number]
+  }
+  if (typeof c['declineMessage'] === 'string') {
+    if (c['declineMessage'].length > DECLINE_MAX) throw bad('Keep the decline message to 1,000 characters')
+    d.declineMessage = c['declineMessage']
+  }
+  if (c['notifyGuests'] === false) d.notifyGuests = false
+  const clash = obj(c['acceptedClash'])
+  if (str(clash['start']) && str(clash['end']) && Array.isArray(clash['emails'])) {
+    d.acceptedClash = { start: str(clash['start']), end: str(clash['end']), emails: (clash['emails'] as unknown[]).filter((e): e is string => typeof e === 'string').slice(0, 200) }
+  }
   if (Array.isArray(c['recurrenceRules'])) {
     const rules = (c['recurrenceRules'] as unknown[]).filter((x): x is string => typeof x === 'string' && /^(RRULE|EXRULE|RDATE|EXDATE)[:;]/.test(x)).slice(0, 10)
     if (rules.length) d.recurrenceRules = rules
@@ -162,7 +180,7 @@ export function normalizeDraft(raw: unknown, opts: NormalizeOptions = {}): Calen
   }
   const ex = obj(c['existingEvent'])
   if (str(ex['eventId']) && str(ex['calendarId'])) {
-    const original = normalizeDraft({ ...obj(ex['original']), existingEvent: undefined, fromEvent: undefined })
+    const original = normalizeDraft({ ...obj(ex['original']), existingEvent: undefined, fromEvent: undefined, notifyGuests: undefined, acceptedClash: undefined })
     const { execution: _e, dismissedAt: _d, existingEvent: _x, ...orig } = original
     d.existingEvent = { calendarId: str(ex['calendarId']), eventId: str(ex['eventId']), scope: scopeOf(ex['scope']), etag: str(ex['etag']), original: orig }
     if (str(ex['seriesEtag'])) d.existingEvent.seriesEtag = str(ex['seriesEtag'])
@@ -175,7 +193,8 @@ export function normalizeDraft(raw: unknown, opts: NormalizeOptions = {}): Calen
 
 const isTimed = (t: CalendarDraftTime): t is { dateTime: string; timeZone: string } => 'dateTime' in t
 const DAY_MS = 86_400_000
-const DECLINE_REFUSAL = 'Auto-decline settings can’t be set from Notula.'
+const DECLINE_TYPES = 'Only focus-time and out-of-office events decline invitations on their own, so this event can’t.'
+const DECLINE_OUTLOOK = 'Notula can’t set auto-decline on Outlook calendars.'
 
 /** The chosen time: the selected one, else the only option. */
 export function chosenTime(d: CalendarEventDraft): TimeOption | null {
@@ -185,8 +204,10 @@ export function chosenTime(d: CalendarEventDraft): TimeOption | null {
 
 /** The first message that blocks the draft, or null. */
 export function validateDraft(d: CalendarEventDraft): string | null {
-  if (d.eventType && d.eventType !== 'default') return NOT_AVAILABLE
-  if (d.autoDeclineMode || d.declineMessage) return DECLINE_REFUSAL
+  // An edit keeps the event's own kind (a focus-time or out-of-office event stays one).
+  if (d.eventType && d.eventType !== 'default' && !d.existingEvent) return NOT_AVAILABLE
+  const decline = declineRefusal(d)
+  if (decline) return decline
   const allDay = d.timeOptions.some((o) => !isTimed(o.start) || !isTimed(o.end))
   if (allDay) {
     if (d.timeOptions.length !== 1 || d.timeOptions.some((o) => isTimed(o.start) || isTimed(o.end))) return 'An all-day event needs a single date range with no times.'
@@ -217,6 +238,17 @@ export function validateDraft(d: CalendarEventDraft): string | null {
     }
   }
   if (d.conference.kind === 'custom' && !validLink(d.conference.url)) return 'Add a valid meeting link'
+  return null
+}
+
+/** Auto-decline is set only by editing a Google focus-time or out-of-office event. */
+export function declineRefusal(d: CalendarEventDraft): string | null {
+  if (!d.autoDeclineMode && !d.declineMessage) return null
+  const ex = d.existingEvent
+  if (ex?.calendarId.startsWith('microsoft:')) return DECLINE_OUTLOOK
+  const kind = ex?.original.eventType
+  if (kind !== 'focusTime' && kind !== 'outOfOffice') return DECLINE_TYPES
+  if ((d.declineMessage ?? '').length > DECLINE_MAX) return 'Keep the decline message to 1,000 characters.'
   return null
 }
 
@@ -352,32 +384,40 @@ export interface DraftDiff {
   description?: string
   time?: TimeOption
   location?: string
-  addAttendees: { email: string; resource?: boolean }[]
+  addAttendees: Attendee[]
   removeAttendees: string[]
+  /** Guests who stay, with a new optional flag. */
+  optional: { email: string; optional: boolean }[]
   conference?: CalendarEventDraft['conference']
   /** The new recurrence lines (series and following edits). */
   recurrence?: string[]
   colorId?: CalendarColorId
   visibility?: 'default' | 'public' | 'private'
+  /** Both fields, whenever either differs from the event's. */
+  decline?: { mode: NonNullable<CalendarEventDraft['autoDeclineMode']>; message: string }
 }
 
 export const NO_CHANGE = 'This draft doesn’t change the event.'
 const SERIES_REFUSAL = 'To move a whole series, suggest a single time. Several time options only work for a one-off event.'
+/** What a whole-series edit may change. */
+export const SERIES_KINDS =
+  'A change to every occurrence can only cover how it repeats, its start time and length, the title, description, who can see it, color, location, video link, guests, rooms and auto-decline.'
 
 /** The changed fields of an update, or the refusal that blocks it. */
 export function diffDraft(d: CalendarEventDraft): { diff: DraftDiff } | { refusal: string } {
   const ex = d.existingEvent
   if (!ex) return { refusal: 'This draft doesn’t edit an event.' }
   const o = ex.original
-  if (d.eventType && d.eventType !== 'default') return { refusal: 'Notula can’t turn an event into a different kind of event.' }
-  if (d.autoDeclineMode || d.declineMessage) return { refusal: DECLINE_REFUSAL }
+  if ((d.eventType ?? 'default') !== (o.eventType ?? 'default')) return { refusal: 'Notula can’t turn an event into a different kind of event.' }
+  const decline = declineRefusal(d)
+  if (decline) return { refusal: decline }
   const rules = d.recurrenceRules ?? []
   const before = o.recurrenceRules ?? []
   const rulesChanged = JSON.stringify(rules) !== JSON.stringify(before)
   if (ex.scope === 'occurrence' && rulesChanged) return { refusal: 'Pick the whole series, or this and the later ones, to change how it repeats.' }
   if ((d.addMeAsGuest !== false) !== (o.addMeAsGuest !== false)) return { refusal: 'Notula can’t add or remove you as an attendee.' }
   if (before.length && !rules.length) return { refusal: 'Notula can’t stop a series from repeating. Change it in your calendar app.' }
-  const diff: DraftDiff = { addAttendees: [], removeAttendees: [] }
+  const diff: DraftDiff = { addAttendees: [], removeAttendees: [], optional: [] }
   if (d.summary !== o.summary) diff.title = d.summary
   if (d.description !== o.description) diff.description = d.description
   if ((d.location ?? '') !== (o.location ?? '')) diff.location = d.location ?? ''
@@ -388,6 +428,10 @@ export function diffDraft(d: CalendarEventDraft): { diff: DraftDiff } | { refusa
   const has = new Set(d.attendees.map((a) => a.email.toLowerCase()))
   diff.addAttendees = d.attendees.filter((a) => !had.has(a.email.toLowerCase()))
   diff.removeAttendees = o.attendees.filter((a) => !has.has(a.email.toLowerCase())).map((a) => a.email)
+  const wasOptional = new Map(o.attendees.map((a) => [a.email.toLowerCase(), a.optional === true]))
+  diff.optional = d.attendees
+    .filter((a) => !a.resource && had.has(a.email.toLowerCase()) && wasOptional.get(a.email.toLowerCase()) !== (a.optional === true))
+    .map((a) => ({ email: a.email, optional: a.optional === true }))
   if (JSON.stringify(d.conference) !== JSON.stringify(o.conference)) diff.conference = d.conference
   if (rulesChanged) diff.recurrence = rules
   // Left out means unchanged; `default` is the calendar's own setting.
@@ -396,6 +440,9 @@ export function diffDraft(d: CalendarEventDraft): { diff: DraftDiff } | { refusa
   if (diff.visibility !== undefined && ex.scope === 'occurrence' && ex.occurrenceStart) {
     return { refusal: 'Your calendar only lets you change who can see this for the whole series.' }
   }
+  const mode = d.autoDeclineMode ?? o.autoDeclineMode ?? 'declineNone'
+  const message = d.declineMessage ?? o.declineMessage ?? ''
+  if (mode !== (o.autoDeclineMode ?? 'declineNone') || message !== (o.declineMessage ?? '')) diff.decline = { mode, message }
   const changed =
     diff.title !== undefined ||
     diff.description !== undefined ||
@@ -405,11 +452,25 @@ export function diffDraft(d: CalendarEventDraft): { diff: DraftDiff } | { refusa
     diff.recurrence ||
     diff.colorId !== undefined ||
     diff.visibility !== undefined ||
+    diff.decline ||
     diff.addAttendees.length ||
-    diff.removeAttendees.length
+    diff.removeAttendees.length ||
+    diff.optional.length
   if (!changed) return { refusal: NO_CHANGE }
+  if (ex.scope === 'series' && seriesOutside(d, t, ot, rulesChanged)) return { refusal: SERIES_KINDS }
   if (ex.scope !== 'occurrence' && d.selectedTime && d.timeOptions.length > 1) return { refusal: SERIES_REFUSAL }
   return { diff }
+}
+
+/**
+ * A whole-series change outside SERIES_KINDS: several proposed times, a move to another date
+ * (unless the repeat rule changes with it), or a switch between all-day and timed.
+ */
+function seriesOutside(d: CalendarEventDraft, t: TimeOption | null, ot: TimeOption | null, rulesChanged: boolean): boolean {
+  if (d.timeOptions.length > 1) return true
+  if (!t || !ot) return false
+  if (isTimed(t.start) !== isTimed(ot.start)) return true
+  return !rulesChanged && localDate(t.start) !== localDate(ot.start)
 }
 
 // ---------- an existing event as a draft (for `fromEvent`) ----------
@@ -434,8 +495,14 @@ export function draftFromEvent(ev: CalendarEvent, myEmails: readonly string[]): 
   const color = str(ev['colorId'])
   const visibility = str(ev['visibility'])
   const recurrence = Array.isArray(ev['recurrence']) ? (ev['recurrence'] as unknown[]).filter((x): x is string => typeof x === 'string' && /^(RRULE|EXRULE|RDATE|EXDATE)[:;]/.test(x)) : []
+  const kind = ev['eventType'] === 'focusTime' || ev['eventType'] === 'outOfOffice' ? ev['eventType'] : 'default'
+  const props = obj(kind === 'focusTime' ? ev['focusTimeProperties'] : kind === 'outOfOffice' ? ev['outOfOfficeProperties'] : undefined)
+  const mode = DECLINE_MODES.find((m) => m === props['autoDeclineMode'])
+  const declineMessage = str(props['declineMessage'])
   return {
-    eventType: 'default',
+    eventType: kind,
+    ...(mode ? { autoDeclineMode: mode } : {}),
+    ...(declineMessage ? { declineMessage: declineMessage.slice(0, DECLINE_MAX) } : {}),
     summary: str(ev.summary),
     timeOptions: start && end ? [{ start, end }] : [],
     conference: meet ? { kind: 'googleMeet' } : { kind: 'none' },
@@ -443,7 +510,7 @@ export function draftFromEvent(ev: CalendarEvent, myEmails: readonly string[]): 
     addMeAsGuest: true,
     attendees: (ev.attendees ?? [])
       .filter((a) => typeof a.email === 'string' && !mine.has(a.email.toLowerCase()))
-      .map((a) => ((a as { resource?: unknown }).resource === true ? { email: String(a.email), resource: true } : { email: String(a.email) })),
+      .map((a): Attendee => (a.resource === true ? { email: String(a.email), resource: true } : a.optional === true ? { email: String(a.email), optional: true } : { email: String(a.email) })),
     description: str(ev['description']),
     ...(COLORS.includes(color as CalendarColorId) ? { colorId: color as CalendarColorId } : {}),
     ...(VISIBILITY.includes(visibility as (typeof VISIBILITY)[number]) ? { visibility: visibility as (typeof VISIBILITY)[number] } : {}),

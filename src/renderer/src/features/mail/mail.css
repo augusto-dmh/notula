@@ -202,3 +202,50 @@
   font-size: var(--text-sm);
   max-width: 200px;
 }
+
+.ml-files {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.ml-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 2px 4px 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  font-size: var(--text-xs);
+  color: var(--fg);
+}
+
+.ml-file__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ml-file__size {
+  color: var(--fg-3);
+  white-space: nowrap;
+}
+
+.ml-file__x {
+  border: 0;
+  background: none;
+  color: var(--fg-3);
+  cursor: pointer;
+  padding: 0 4px;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.ml-file__x:hover {
+  color: var(--fg);
+}

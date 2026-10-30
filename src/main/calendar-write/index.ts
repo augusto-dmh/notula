@@ -12,7 +12,7 @@ import { ipcMain } from 'electron'
 import { notulaError } from '@shared/errors'
 import type { InvokeChannel, InvokeReq, InvokeRes } from '@shared/ipc'
 import type { CalendarGrant, CalendarSource } from '@shared/types/calendar'
-import type { CalendarEventDraft, WorkflowBlock } from '@shared/types/workflow-blocks'
+import type { BlockExecuteOptions, CalendarEventDraft, WorkflowBlock } from '@shared/types/workflow-blocks'
 import type { CalendarEvent } from '@shared/types/notes'
 import type { MainContext } from '../context'
 import { log } from '../log'
@@ -22,16 +22,19 @@ import type { ChatToolResult, ChatToolSpec } from '../chat/tool-api'
 import { AVAILABILITY_SPECS, AVAILABILITY_TOOL, PERSON_CALENDAR_TOOL, runCheckAvailability, runReadPersonCalendar } from '../chat/tools-availability'
 import { cancelEvent } from './cancel'
 import { respondRefusal, respondToInvite, type InviteResponse } from './respond'
-import { availabilitySource, busyTimes, overlaps, without } from './availability'
+import { availabilitySource, slotGuests } from './availability'
 import { eventColors } from './colors'
 import { chosenTime, diffDraft, draftFromEvent, eventTime, NO_CHANGE, NOT_AVAILABLE, normalizeDraft, validateDraft } from './draft'
-import { COPY, eventRef, googleCreate, googleSplit, googleUpdate, graphCreate, graphSplit, graphUpdate, seriesMaster, writeToken, type WriteTarget } from './providers'
+import { COPY, eventRef, googleCreate, googleEventLive, googleSplit, googleUpdate, graphCreate, graphSplit, graphUpdate, seriesMaster, writeToken, type WriteTarget } from './providers'
+import { registerRooms } from './rooms'
 
 export const DRAFT_TOOL = 'proposeEvent'
 const REPLY_TOOL = 'replyToInvite'
 const CANCEL_TOOL = 'cancelEvent'
 const NEED_WRITE = 'Grant Notula permission to change this calendar in Settings ▸ Calendar first.'
-const GRANTS: readonly CalendarGrant[] = ['calendar-write', 'mail-read', 'mail-send', 'files-read']
+const GUESTS_BUSY = 'Some guests are busy then. Book it anyway, or pick another time.'
+const OUTLOOK_TELLS = 'Outlook calendars tell guests about every change, so they will hear about this one.'
+const GRANTS: readonly CalendarGrant[] = ['calendar-write', 'mail-read', 'mail-send', 'files-read', 'rooms-read']
 
 /** The account a Create event used last, for the "Add to" default (this session). */
 let lastTarget: string | null = null
@@ -63,7 +66,53 @@ async function resolveTarget(ctx: MainContext, wanted: string | undefined): Prom
   return { sourceId: src.id, provider, accountEmail: src.accountEmail, calendarNativeId: provider === 'google' ? nativeId || 'primary' : nativeId }
 }
 
-async function executeDraft(ctx: MainContext, block: WorkflowBlock, targetSourceId: string | undefined): Promise<ExecResult> {
+/** The time the event is written at, as instants, when it is new or moves (all-day times aren't checked). */
+function clashSlot(d: CalendarEventDraft): { startMs: number; endMs: number; timeZone: string } | null {
+  let t = chosenTime(d)
+  if (d.existingEvent) {
+    const r = diffDraft(d)
+    t = 'refusal' in r ? null : (r.diff.time ?? null)
+  }
+  if (!t || !('dateTime' in t.start) || !('dateTime' in t.end)) return null
+  return { startMs: Date.parse(t.start.dateTime), endMs: Date.parse(t.end.dateTime), timeZone: t.start.timeZone }
+}
+
+/** An edit's current slot: the event doesn't clash with itself. */
+function ownSlot(d: CalendarEventDraft): { startMs: number; endMs: number } | null {
+  const before = d.existingEvent?.original.timeOptions[0]
+  return before && 'dateTime' in before.start && 'dateTime' in before.end ? { startMs: Date.parse(before.start.dateTime), endMs: Date.parse(before.end.dateTime) } : null
+}
+
+/**
+ * Before a create, or an update that moves the time: the guests and rooms known to be busy then,
+ * unless the user accepted them ("Book anyway", or picking that time on the card while it showed
+ * them). Calendars Notula can't read never block.
+ */
+async function guestsBusy(ctx: MainContext, src: CalendarSource, d: CalendarEventDraft, allow: boolean): Promise<{ busy: string[]; overridden: boolean }> {
+  const slot = clashSlot(d)
+  if (!slot) return { busy: [], overridden: false }
+  const mine = new Set((await ctx.calendar.myEmails()).map((e) => e.toLowerCase()))
+  const people = d.attendees.map((a) => a.email).filter((e) => !mine.has(e.toLowerCase()))
+  const r = await slotGuests(ctx, src, people, [slot], slot.timeZone, ownSlot(d)).catch(() => null)
+  const busy = r?.[0]?.busy ?? []
+  if (!busy.length) return { busy: [], overridden: false }
+  const accepted = d.acceptedClash
+  const picked =
+    !!accepted &&
+    Date.parse(accepted.start) === slot.startMs &&
+    Date.parse(accepted.end) === slot.endMs &&
+    busy.every((e) => accepted.emails.some((x) => x.toLowerCase() === e.toLowerCase()))
+  return allow || picked ? { busy: [], overridden: true } : { busy, overridden: false }
+}
+
+/** Display names for busy guests: the event's own names, else the address. */
+async function namesOf(ctx: MainContext, d: CalendarEventDraft, emails: string[]): Promise<{ email: string; name: string }[]> {
+  const ev = d.existingEvent ? await ctx.calendar.getEvent(d.existingEvent.eventId).catch(() => null) : null
+  return emails.map((email) => ({ email, name: ev?.attendees?.find((a) => a.email?.toLowerCase() === email.toLowerCase())?.displayName || email }))
+}
+
+async function executeDraft(ctx: MainContext, block: WorkflowBlock, options: BlockExecuteOptions): Promise<ExecResult> {
+  const targetSourceId = options.targetSourceId
   if (await egressBlocked(ctx, { kind: 'calendar' })) return { status: 'failed', errorCode: 'local_only', error: COPY.localOnly }
   const d = block.content as CalendarEventDraft
   const invalid = validateDraft(d)
@@ -75,6 +124,12 @@ async function executeDraft(ctx: MainContext, block: WorkflowBlock, targetSource
   if ('error' in resolved) return resolved.error
   const token = await writeToken(ctx, resolved.sourceId)
   if (typeof token !== 'string') return token
+  const src = (await oauthSources(ctx)).find((s) => s.id === resolved.sourceId)
+  const clash = src ? await guestsBusy(ctx, src, d, options.allowConflicts === true) : { busy: [], overridden: false }
+  if (clash.busy.length) {
+    log('info', 'calendar-write:result', { provider: resolved.provider, update: !!d.existingEvent, scope: d.existingEvent?.scope ?? null, status: 'failed', code: 'guests_busy', notify: null, clashOverride: false })
+    return { status: 'failed', errorCode: 'guests_busy', error: GUESTS_BUSY, fields: { busy: await namesOf(ctx, d, clash.busy) } }
+  }
   const edit = d.existingEvent ? { ...d.existingEvent, eventId: d.existingEvent.eventId.split(':').slice(2).join(':') || d.existingEvent.eventId } : undefined
   const draft = edit ? { ...d, existingEvent: edit } : d
   // An edit writes to the event's own calendar.
@@ -97,7 +152,9 @@ async function executeDraft(ctx: MainContext, block: WorkflowBlock, targetSource
     ctx.calendar.refreshSource(t.sourceId)
     out.fields = { ...out.fields, sourceId: t.sourceId, provider: t.provider }
   }
-  log('info', 'calendar-write:result', { provider: t.provider, update: !!edit, scope: edit?.scope ?? null, status: out.status, code: out.errorCode ?? null })
+  // Graph can't change an event without telling its guests.
+  const notify = edit ? t.provider === 'microsoft' || d.notifyGuests !== false : null
+  log('info', 'calendar-write:result', { provider: t.provider, update: !!edit, scope: edit?.scope ?? null, status: out.status, code: out.errorCode ?? null, notify, clashOverride: clash.overridden })
   return out
 }
 
@@ -134,8 +191,13 @@ const DRAFT_SCHEMA = {
     },
     attendees: {
       type: 'array',
-      description: 'Guests by email. Set resource true to book a room.',
-      items: { type: 'object', properties: { email: { type: 'string' }, resource: { type: 'boolean' } }, required: ['email'], additionalProperties: false }
+      description: 'Guests by email (people, not rooms). optional true marks a guest who needn’t attend. On an edit, leave it out to keep the guests; given, it is the whole new list.',
+      items: { type: 'object', properties: { email: { type: 'string' }, optional: { type: 'boolean' } }, required: ['email'], additionalProperties: false }
+    },
+    rooms: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'Meeting rooms to book, by their calendar address. On an edit, leave it out to keep the rooms; given, it is the whole new list.'
     },
     location: { type: 'string' },
     description: { type: 'string' },
@@ -148,6 +210,13 @@ const DRAFT_SCHEMA = {
     },
     colorId: { type: 'string', enum: ['default', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11'], description: 'Google event color 1–11; default is the calendar’s color. Not available on Microsoft calendars.' },
     visibility: { type: 'string', enum: ['default', 'public', 'private'], description: 'Who can see the event: the calendar’s setting, anyone who can see the calendar, or only the user and the guests.' },
+    notifyGuests: { type: 'boolean', description: 'Edits only. Default true: guests hear about the change. False only when the user asks to change the event without telling guests (Google; Outlook always tells them).' },
+    autoDeclineMode: {
+      type: 'string',
+      enum: ['declineNone', 'declineOnlyNewConflictingInvitations', 'declineAllConflictingInvitations'],
+      description: 'Edits of the user’s Google focus-time or out-of-office events only: which overlapping invitations they decline on their own (declineNone turns it off).'
+    },
+    declineMessage: { type: 'string', maxLength: 1000, description: 'With autoDeclineMode: the message sent with each decline.' },
     fromEvent: {
       type: 'object',
       description:
@@ -187,10 +256,15 @@ async function conflicts(ctx: MainContext, d: CalendarEventDraft): Promise<strin
   )
 }
 
-/** `fromEvent` → the update's `existingEvent`, from the synced copy of the event (and its series, for series edits). */
-async function withExisting(ctx: MainContext, d: CalendarEventDraft): Promise<CalendarEventDraft | string> {
+/**
+ * `fromEvent` → the update's `existingEvent`, from the synced copy of the event (and its series, for
+ * series edits). What the tool left out stays as the event has it: guests, rooms, its kind and its
+ * auto-decline settings.
+ */
+async function withExisting(ctx: MainContext, d: CalendarEventDraft, args: Record<string, unknown>): Promise<CalendarEventDraft | string> {
   if (!d.fromEvent) return d
-  const ev = await ctx.calendar.getEvent(d.fromEvent.eventId)
+  // Focus-time and out-of-office events don't sync: read those from Google.
+  const ev = (await ctx.calendar.getEvent(d.fromEvent.eventId)) ?? (await googleEventLive(ctx, d.fromEvent.calendarId, d.fromEvent.eventId).catch(() => null))
   if (!ev) return 'That event isn’t in your synced calendar. Search the calendar again and use its id.'
   const calendarId = typeof ev['calendarId'] === 'string' ? ev['calendarId'] : d.fromEvent.calendarId
   if (!/^(google|microsoft):/.test(calendarId)) return 'Calendar feeds are read-only, so this event can’t be changed from Notula.'
@@ -208,9 +282,15 @@ async function withExisting(ctx: MainContext, d: CalendarEventDraft): Promise<Ca
   }
   // A series edit that leaves out the rule keeps the series' own.
   const rules = scope !== 'occurrence' && !d.recurrenceRules?.length && original.recurrenceRules?.length ? { recurrenceRules: original.recurrenceRules } : {}
+  const guests = args['attendees'] === undefined ? original.attendees.filter((a) => !a.resource) : d.attendees.filter((a) => !a.resource)
+  const rooms = args['rooms'] === undefined && !(Array.isArray(args['attendees']) && d.attendees.some((a) => a.resource)) ? original.attendees.filter((a) => a.resource) : d.attendees.filter((a) => a.resource)
   return {
     ...d,
     ...rules,
+    attendees: [...guests, ...rooms],
+    eventType: original.eventType ?? 'default',
+    ...(d.autoDeclineMode === undefined && original.autoDeclineMode ? { autoDeclineMode: original.autoDeclineMode } : {}),
+    ...(d.declineMessage === undefined && original.declineMessage ? { declineMessage: original.declineMessage } : {}),
     existingEvent: {
       calendarId,
       eventId: ev.id,
@@ -228,34 +308,49 @@ export interface MoveAvailability {
   checked: number
   unknown: string[]
   conflicts: { email: string; name: string }[]
+  /** The option's time as checked: the card shows the names only while the option still has it. */
+  start?: string
+  end?: string
 }
 
-/** An update that moves the time: who among the guests is busy then. It never blocks the update. */
-async function moveAvailability(ctx: MainContext, d: CalendarEventDraft): Promise<MoveAvailability | null> {
+/**
+ * Per time option, which guests and rooms are busy then: for a new event, and for an update that
+ * moves the time (whose own current slot doesn't count). The card shows it; execution checks again.
+ */
+async function guestAvailability(ctx: MainContext, d: CalendarEventDraft): Promise<(MoveAvailability | null)[] | null> {
   const ex = d.existingEvent
-  if (!ex) return null
-  const r = diffDraft(d)
-  if ('refusal' in r || !r.diff.time || !('dateTime' in r.diff.time.start) || !('dateTime' in r.diff.time.end)) return null
-  const mine = new Set((await ctx.calendar.myEmails()).map((e) => e.toLowerCase()))
-  const guests = d.attendees.filter((a) => !a.resource && !mine.has(a.email.toLowerCase())).slice(0, 50)
-  if (!guests.length) return null
-  const sourceId = ex.calendarId.split(':')[1]
-  const src = (await oauthSources(ctx)).find((s) => s.id === sourceId) ?? (await availabilitySource(ctx))
-  if (!src) return null
-  const from = Date.parse(r.diff.time.start.dateTime)
-  const to = Date.parse(r.diff.time.end.dateTime)
-  const busy = await busyTimes(ctx, src, guests.map((g) => g.email), new Date(from), new Date(to), r.diff.time.start.timeZone)
-  if (typeof busy === 'string') return null
-  // The event's current slot is the event itself, not a conflict.
-  const before = ex.original.timeOptions[0]
-  const ignore = before && 'dateTime' in before.start && 'dateTime' in before.end ? { startMs: Date.parse(before.start.dateTime), endMs: Date.parse(before.end.dateTime) } : null
-  const ev = await ctx.calendar.getEvent(ex.eventId).catch(() => null)
-  const nameOf = (email: string): string => ev?.attendees?.find((a) => a.email?.toLowerCase() === email.toLowerCase())?.displayName || email
-  return {
-    checked: busy.filter((b) => b.known).length,
-    unknown: busy.filter((b) => !b.known).map((b) => b.email),
-    conflicts: busy.filter((b) => b.known && overlaps(without(b.busy, ignore), from, to)).map((b) => ({ email: b.email, name: nameOf(b.email) }))
+  if (ex) {
+    const r = diffDraft(d)
+    if ('refusal' in r || !r.diff.time) return null
   }
+  const mine = new Set((await ctx.calendar.myEmails()).map((e) => e.toLowerCase()))
+  const people = d.attendees.filter((a) => !mine.has(a.email.toLowerCase())).slice(0, 50)
+  if (!people.length) return null
+  const sourceId = ex ? ex.calendarId.split(':')[1] : undefined
+  const resolved = ex ? null : await resolveTarget(ctx, undefined)
+  const wanted = sourceId ?? (resolved && !('error' in resolved) ? resolved.sourceId : undefined)
+  const src = (await oauthSources(ctx)).find((s) => s.id === wanted) ?? (await availabilitySource(ctx))
+  if (!src) return null
+  const timed = d.timeOptions.map((o) => ('dateTime' in o.start && 'dateTime' in o.end ? { startMs: Date.parse(o.start.dateTime), endMs: Date.parse(o.end.dateTime), timeZone: o.start.timeZone } : null))
+  const slots = timed.filter((s): s is NonNullable<typeof s> => !!s)
+  if (!slots[0]) return null
+  const r = await slotGuests(ctx, src, people.map((p) => p.email), slots, slots[0].timeZone, ownSlot(d))
+  if (!r) return null
+  const names = new Map((await namesOf(ctx, d, people.map((p) => p.email))).map((n) => [n.email.toLowerCase(), n.name]))
+  let i = 0
+  return timed.map((s) => {
+    if (!s) return null
+    const g = r[i++]
+    return g
+      ? {
+          checked: g.checked,
+          unknown: g.unknown,
+          conflicts: g.busy.map((email) => ({ email, name: names.get(email.toLowerCase()) ?? email })),
+          start: new Date(s.startMs).toISOString(),
+          end: new Date(s.endMs).toISOString()
+        }
+      : null
+  })
 }
 
 /** Whether a draft writes to a Microsoft calendar: an edit's own account, else the default "Add to". */
@@ -336,8 +431,9 @@ export function registerCalendarWrite(ctx: MainContext): void {
     normalize: normalizeDraft,
     inProgress: 'creating',
     idempotent: true,
-    execute: (block, options) => executeDraft(ctx, block, options.targetSourceId)
+    execute: (block, options) => executeDraft(ctx, block, options)
   })
+  registerRooms(ctx)
 
   ipcMain.handle('calendar:event-colors' satisfies InvokeChannel, async (_e, req: InvokeReq<'calendar:event-colors'>): Promise<InvokeRes<'calendar:event-colors'>> => {
     const id = obj(req)['sourceId']
@@ -350,6 +446,9 @@ export function registerCalendarWrite(ctx: MainContext): void {
     if (typeof r['sourceId'] !== 'string' || !r['sourceId']) throw notulaError('invalid-input', 'sourceId is required')
     if (!GRANTS.includes(r['grant'] as CalendarGrant)) throw notulaError('invalid-input', 'Unknown permission')
     if (typeof r['enabled'] !== 'boolean') throw notulaError('invalid-input', 'enabled is required')
+    if (r['grant'] === 'rooms-read' && r['enabled'] && !(await oauthSources(ctx)).some((s) => s.id === r['sourceId'] && s.kind === 'google')) {
+      throw notulaError('invalid-input', 'Your organization’s room list is available for Google Workspace accounts only.')
+    }
     return ctx.calendar.setGrant(r['sourceId'], r['grant'] as CalendarGrant, r['enabled'])
   })
 
@@ -364,8 +463,11 @@ export function registerCalendarWrite(ctx: MainContext): void {
           def: {
             name: DRAFT_TOOL,
             description:
-              'Drafts a new calendar event, or a change to an existing one, for the user to review: title, one to three proposed times, attendees, video link, location, description, repeat rule, color and visibility. ' +
+              'Drafts a new calendar event, or a change to an existing one, for the user to review: title, one to three proposed times, guests (required or optional), meeting rooms, video link, location, description, repeat rule, color and visibility. ' +
               'For a repeating event, a change can cover one occurrence, the whole series, or this occurrence and the later ones. ' +
+              'Book a room through rooms, by its calendar address; the free-text location never books one. ' +
+              'A change tells guests unless notifyGuests is false: clear it only when the user asks for a quiet change. ' +
+              'Auto-decline can be changed only on the user’s Google focus-time and out-of-office events. ' +
               'Nothing is written until the user confirms it on the card this shows, so draft it as soon as the request is clear.',
             inputSchema: DRAFT_SCHEMA as unknown as ChatToolSpec['def']['inputSchema']
           },
@@ -456,7 +558,7 @@ export function registerCalendarWrite(ctx: MainContext): void {
         return { content: err instanceof Error ? err.message.replace(/^[a-z-]+: /, '') : 'Invalid draft.', isError: true }
       }
       if (draft.eventType !== 'default') return { content: NOT_AVAILABLE, isError: true }
-      const full = await withExisting(ctx, draft)
+      const full = await withExisting(ctx, draft, args)
       if (typeof full === 'string') return { content: full, isError: true }
       // Microsoft calendars have no event colors: the draft drops it, and the result says so.
       const noColor = full.colorId !== undefined && (await writesToMicrosoft(ctx, full))
@@ -469,16 +571,21 @@ export function registerCalendarWrite(ctx: MainContext): void {
       }
       const block = await blockStore().create({ type: 'calendar_event', threadId: opts.threadId, content: full })
       const busy = await conflicts(ctx, full).catch(() => [] as string[][])
-      const availability = await moveAvailability(ctx, full).catch(() => null)
+      const guests = await guestAvailability(ctx, full).catch(() => null)
+      // Graph has no quiet update: guests of an Outlook event hear about every change.
+      const outlookTells = !!full.existingEvent?.calendarId.startsWith('microsoft:') && full.attendees.some((a) => !a.resource)
       return {
         content: JSON.stringify({
           draft: { ...full, blockId: block.id },
           conflicts: busy,
-          ...(availability ? { guestAvailability: availability } : {}),
+          ...(guests ? { guestAvailability: guests } : {}),
+          ...(outlookTells ? { guestNote: OUTLOOK_TELLS } : {}),
           ...(noColor ? { colorNote: 'Color isn’t available for Microsoft calendars, so the event keeps its calendar’s color.' } : {}),
-          note: 'The draft is shown to the user as a card, where they can adjust it and create the event. It has not been created: do not say it was. Mention any conflicts briefly.'
+          note:
+            'The draft is shown to the user as a card, where they can adjust it and create the event. It has not been created: do not say it was. Mention any conflicts briefly. ' +
+            'If guests are busy at the chosen time, the card stops until the user books it anyway or picks another time.'
         }),
-        data: { blockId: block.id, conflicts: busy, ...(availability ? { availability } : {}) },
+        data: { blockId: block.id, conflicts: busy, ...(guests ? { guests } : {}) },
         isError: false
       }
     }

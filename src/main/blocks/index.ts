@@ -193,7 +193,8 @@ export function registerBlocks(ctx: MainContext): BlocksApi {
     const o = obj(r['options'])
     const options: BlockExecuteOptions = {
       ...(o['mode'] === 'draft' || o['mode'] === 'send' ? { mode: o['mode'] } : {}),
-      ...(typeof o['targetSourceId'] === 'string' && o['targetSourceId'] ? { targetSourceId: o['targetSourceId'] } : {})
+      ...(typeof o['targetSourceId'] === 'string' && o['targetSourceId'] ? { targetSourceId: o['targetSourceId'] } : {}),
+      ...(o['allowConflicts'] === true ? { allowConflicts: true } : {})
     }
     const executionId = randomUUID()
     const startedAt = new Date().toISOString()

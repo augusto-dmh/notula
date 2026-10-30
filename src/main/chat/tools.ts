@@ -7,6 +7,7 @@
 // approval rule and availability rule; the agentic tools live in tools-*.ts and the registry
 // (registry.ts) assembles one answer's set.
 
+import { createHash } from 'node:crypto'
 import { app } from 'electron'
 import { parseError } from '@shared/errors'
 import { CHAT_LIMITS, type ChatPlace, type ChatToolCategory, type DocRef } from '@shared/types/chat'
@@ -19,7 +20,7 @@ import { log } from '../log'
 import { readerTranscript } from '../sources/reader'
 import { transcriptionControl } from '../transcription'
 import { attendeesOf, docRef, folders, loadPayload, noteTitle, noteWhen, renderPayload, type PayloadSource } from './library'
-import { shortDate } from './text'
+import { queryTerms, shortDate } from './text'
 import { fitTranscript, renderWindow, transcriptWindows, type TranscriptWindow } from './windows'
 
 export const LIBRARY_TOOLS = [
@@ -83,6 +84,27 @@ const DEFS: Record<string, LlmToolDef> = {
         includeShared: { type: 'boolean', description: 'Also include notes that other people shared with the user.' },
         startDate: isoDateProp('Earliest meeting date'),
         endDate: isoDateProp('Latest meeting date')
+      },
+      additionalProperties: false
+    }
+  },
+  findMeetings: {
+    name: 'findMeetings',
+    description:
+      "One search over the user's meetings that combines words, people, dates and a folder, and continues page by page. " +
+      'Words are matched in titles, notes and summaries, best match first; without words the newest come first. ' +
+      'The status says whether more pages follow (more: call again with the same arguments and the cursor), all were shown (complete), ' +
+      'or the page stopped early (partial: the results may be incomplete, and the cursor carries on from there).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Words to look for.' },
+        people: { type: 'array', items: { type: 'string' }, maxItems: 10, description: 'People who were in the meeting, as names or email addresses; a meeting matches any of them.' },
+        from: isoDateProp('Earliest meeting date'),
+        to: isoDateProp('Latest meeting date'),
+        folderId: { type: 'string', description: 'Only the notes in this folder.' },
+        pageSize: { type: 'integer', minimum: 1, maximum: 50, description: 'Meetings per page (default 20).' },
+        cursor: { type: 'string', description: 'The cursor of the previous page. Keep every other argument the same.' }
       },
       additionalProperties: false
     }
@@ -283,6 +305,7 @@ const P2_CATEGORY: Record<string, ChatToolCategory> = {
   getCurrentTime: 'calendar',
   findMeetingsByTerms: 'search',
   findMeetingsWithPeople: 'search',
+  findMeetings: 'search',
   gatherMeetingContext: 'search',
   listMeetings: 'notes',
   getMeetings: 'notes',
@@ -297,6 +320,7 @@ const P2_TITLE: Record<string, string> = {
   getCurrentTime: 'Get the current time',
   findMeetingsByTerms: 'Search meetings by keywords',
   findMeetingsWithPeople: 'Search meetings by people',
+  findMeetings: 'Search meetings page by page',
   gatherMeetingContext: 'List meetings in a time range',
   listMeetings: 'List meetings',
   getMeetings: 'Look up meetings',
@@ -322,6 +346,7 @@ function p2Tool(name: string, available: (a: ToolAvailability) => boolean, opts:
 /** The core tools. */
 export const P2_TOOLS: readonly LocalTool[] = [
   ...LIBRARY_TOOLS.map((n) => p2Tool(n, always, { readOnly: true })),
+  p2Tool('findMeetings', always, { readOnly: true }),
   p2Tool('editNote', (a) => a.noteEdit, { readOnly: false }),
   p2Tool('rewriteNote', (a) => a.noteEdit && a.rewrite, { readOnly: false }),
   p2Tool(APPROVAL_FIXTURE_TOOL, approvalFixtureEnabled, { readOnly: false, needsApproval: true })
@@ -563,6 +588,90 @@ export function idsArg(v: unknown): string[] {
   return Array.isArray(v) ? [...new Set(v.filter((x): x is string => typeof x === 'string').map((x) => x.trim().toLowerCase()))] : []
 }
 
+// ---------- findMeetings: one search, page by page ----------
+
+/** A page stops here and reports `partial`; its cursor carries on from where it stopped. */
+const FIND_BUDGET_MS = 3_000
+const FIND_PAGE_SIZE = 20
+
+export type FindMeetingsStatus = 'more' | 'complete' | 'partial'
+
+/** The arguments that define a search, hashed with the thread: a cursor is valid only for them. */
+function searchKey(threadId: string, a: { terms: string[]; people: string[]; from: string; to: string; folderId: string }): string {
+  return createHash('sha256').update(JSON.stringify([threadId, a.terms, [...a.people].sort(), a.from, a.to, a.folderId])).digest('base64url').slice(0, 24)
+}
+
+function readCursor(v: unknown): { key: string; offset: number; page: number } | null {
+  if (typeof v !== 'string' || !v || v.length > 200) return null
+  try {
+    const c = JSON.parse(Buffer.from(v, 'base64url').toString('utf8')) as { k?: unknown; o?: unknown; n?: unknown }
+    if (typeof c.k !== 'string' || !Number.isInteger(c.o) || !Number.isInteger(c.n) || (c.o as number) < 0 || (c.n as number) < 1) return null
+    return { key: c.k, offset: c.o as number, page: c.n as number }
+  } catch {
+    return null
+  }
+}
+
+const writeCursor = (key: string, offset: number, page: number): string => Buffer.from(JSON.stringify({ k: key, o: offset, n: page })).toString('base64url')
+
+async function findMeetings(args: Record<string, unknown>, env: ToolEnv): Promise<ToolOutcome> {
+  const started = Date.now()
+  const { ctx } = env
+  const terms = typeof args['query'] === 'string' ? queryTerms(args['query']) : []
+  const people = idsArg(args['people']).filter(Boolean)
+  const fromArg = typeof args['from'] === 'string' ? args['from'].trim() : ''
+  const toArg = typeof args['to'] === 'string' ? args['to'].trim() : ''
+  const folderId = typeof args['folderId'] === 'string' ? args['folderId'].trim() : ''
+  const from = parseDate(fromArg, false)
+  const to = parseDate(toArg, true)
+  if ((fromArg && !from) || (toArg && !to)) return fail('Use dates like 2026-10-20 for from and to.')
+  if (!terms.length && !people.length && !from && !to && !folderId) return fail('Give at least one of query (words of 3 letters or more), people, from, to or folderId.')
+  const key = searchKey(env.threadId, { terms, people, from: fromArg, to: toArg, folderId })
+  let offset = 0
+  let page = 1
+  if (args['cursor'] !== undefined && args['cursor'] !== null) {
+    const c = readCursor(args['cursor'])
+    if (!c || c.key !== key) return fail('That cursor belongs to a different search. Start the search again without a cursor.')
+    offset = c.offset
+    page = c.page
+  }
+  const size = bound(args['pageSize'], FIND_PAGE_SIZE, 50)
+  const candidates = terms.length ? await ftsNotes(ctx, terms) : await allNotes(ctx)
+  const members = folderId ? new Set((await folders(ctx))?.membership[folderId] ?? []) : null
+  const matches = (n: NoteListItem): boolean =>
+    inRange(n, from, to) && (!members || members.has(n.id)) && (!people.length || people.some((p) => peopleText(n).includes(p)))
+
+  const found: NoteListItem[] = []
+  let i = offset
+  let stopped = false
+  for (; i < candidates.length; i++) {
+    if ((i - offset) % 50 === 0 && (Date.now() - started > FIND_BUDGET_MS || env.signal.aborted)) {
+      stopped = true
+      break
+    }
+    const n = candidates[i]
+    if (!n || !matches(n)) continue
+    // One match past a full page: there is more, and the next page starts with it.
+    if (found.length === size) break
+    found.push(n)
+  }
+  const status: FindMeetingsStatus = stopped ? 'partial' : i < candidates.length ? 'more' : 'complete'
+  const cursor = status === 'complete' ? null : writeCursor(key, i, page + 1)
+  for (const n of found) env.scanned.set(n.id, docRef(n))
+  log('info', 'chat:find-meetings', { status, page })
+  const count = `${found.length} meeting${found.length === 1 ? '' : 's'}`
+  const head =
+    status === 'partial'
+      ? `Page ${page}: ${count}. The results may be incomplete: the search stopped early. Call findMeetings again with the cursor to continue.`
+      : status === 'more'
+        ? `Page ${page}: ${count}. More meetings match: call findMeetings again with the same arguments and the cursor.`
+        : found.length === 0 && page === 1
+          ? 'No meetings matched.'
+          : `Page ${page}: ${count}. That is the last page.`
+  const text = found.length ? `${head}\n${found.map(meetingLine).join('\n')}` : head
+  return okJson({ meetings: found.map(meetingRow), status, cursor, text })
+}
+
 async function runP2(name: string, args: Record<string, unknown>, env: ToolEnv): Promise<ToolOutcome> {
   const { ctx } = env
   switch (name) {
@@ -594,6 +703,8 @@ async function runP2(name: string, args: Record<string, unknown>, env: ToolEnv):
         .slice(0, bound(args['limit'], 30, 100))
       return listResult(env, notes, 'No meetings with those people or companies.')
     }
+    case 'findMeetings':
+      return findMeetings(args, env)
     case 'gatherMeetingContext': {
       const r = rangeOf(args)
       const notes = await ctx.storage.queryNotes({

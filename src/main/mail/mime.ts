@@ -2,6 +2,7 @@
 // RFC 2822 / MIME for Gmail drafts: From, To, Cc, Bcc,
 // Subject (RFC 2047 when not ASCII), MIME-Version, and multipart/alternative with a text/plain and a
 // text/html part, both UTF-8 and quoted-printable. Header values never carry CR or LF.
+// Chat files go in a multipart/mixed message as base64 parts with their name and type.
 // A forward reads the original raw message and adds its attachments as they were encoded.
 
 export interface MimeMessage {
@@ -14,6 +15,14 @@ export interface MimeMessage {
   html: string
   inReplyTo?: string | null
   references?: string | null
+  /** Chat files sent with the email. */
+  files?: MimeFile[]
+}
+
+export interface MimeFile {
+  name: string
+  mimeType: string
+  bytes: Buffer
 }
 
 const oneLine = (s: string): string => s.replace(/[\r\n]+/g, ' ').trim()
@@ -50,6 +59,20 @@ export function quotedPrintable(input: string): string {
     .join('\r\n')
 }
 
+/** A file name for a MIME header: as is when plain ASCII, else RFC 2231 (`filename*`). */
+function fileParam(name: string, key: 'name' | 'filename'): string {
+  const v = oneLine(name).replace(/[\\"]/g, '_') || 'file'
+  // eslint-disable-next-line no-control-regex
+  return /^[\x20-\x7E]*$/.test(v) ? `${key}="${v}"` : `${key}*=UTF-8''${encodeURIComponent(v).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)}`
+}
+
+/** One file as a base64 MIME part (76-character lines), without its boundary line. */
+export function filePart(f: MimeFile): string {
+  const type = /^[\w.+-]+\/[\w.+-]+$/.test(f.mimeType) ? f.mimeType : 'application/octet-stream'
+  const body = f.bytes.toString('base64').replace(/.{76}/g, '$&\r\n').replace(/\r\n$/, '')
+  return [`Content-Type: ${type}; ${fileParam(f.name, 'name')}`, `Content-Disposition: attachment; ${fileParam(f.name, 'filename')}`, 'Content-Transfer-Encoding: base64', '', body].join('\r\n')
+}
+
 /** The raw message, base64url-encoded for `message.raw`. */
 export function buildRaw(m: MimeMessage, boundary: string): string {
   const head: string[] = [`From: ${oneLine(m.from)}`]
@@ -59,10 +82,16 @@ export function buildRaw(m: MimeMessage, boundary: string): string {
   head.push(`Subject: ${encodeWord(m.subject)}`)
   if (m.inReplyTo) head.push(`In-Reply-To: ${oneLine(m.inReplyTo)}`)
   if (m.references) head.push(`References: ${oneLine(m.references)}`)
-  head.push('MIME-Version: 1.0', `Content-Type: multipart/alternative; boundary="${boundary}"`)
+  const files = m.files ?? []
+  // With files, the text and HTML pair sits inside multipart/mixed next to them.
+  const alt = files.length ? `${boundary}-alt` : boundary
+  head.push('MIME-Version: 1.0', files.length ? `Content-Type: multipart/mixed; boundary="${boundary}"` : `Content-Type: multipart/alternative; boundary="${alt}"`)
   const part = (type: string, body: string): string =>
-    [`--${boundary}`, `Content-Type: ${type}; charset=UTF-8`, 'Content-Transfer-Encoding: quoted-printable', '', quotedPrintable(body)].join('\r\n')
-  const raw = [head.join('\r\n'), '', part('text/plain', m.text), part('text/html', m.html), `--${boundary}--`, ''].join('\r\n')
+    [`--${alt}`, `Content-Type: ${type}; charset=UTF-8`, 'Content-Transfer-Encoding: quoted-printable', '', quotedPrintable(body)].join('\r\n')
+  const alternative = [part('text/plain', m.text), part('text/html', m.html), `--${alt}--`]
+  const raw = files.length
+    ? [head.join('\r\n'), '', `--${boundary}`, `Content-Type: multipart/alternative; boundary="${alt}"`, '', ...alternative, ...files.flatMap((f) => [`--${boundary}`, filePart(f)]), `--${boundary}--`, ''].join('\r\n')
+    : [head.join('\r\n'), '', ...alternative, ''].join('\r\n')
   return Buffer.from(raw, 'utf8').toString('base64url')
 }
 
@@ -89,7 +118,7 @@ export function stripQuoted(text: string): string {
 
 // ---------- forwarding ----------
 
-/** The size a forward may reach with its attachments. */
+/** The most an email carries in attachments: a forward's own and the chat files together. */
 export const FORWARD_MAX_BYTES = 25 * 1024 * 1024
 
 /** What a forward takes from the original message. Attachments stay as their encoded MIME parts. */
@@ -234,7 +263,7 @@ export function buildForwardRaw(m: MimeMessage, original: ForwardSource, include
   const part = (type: string, body: string): string =>
     [`--${alt}`, `Content-Type: ${type}; charset=UTF-8`, 'Content-Transfer-Encoding: quoted-printable', '', quotedPrintable(body)].join('\r\n')
   const alternative = [part('text/plain', text), part('text/html', html), `--${alt}--`].join('\r\n')
-  const attachments = includeAttachments ? original.attachments : []
+  const attachments = [...(includeAttachments ? original.attachments : []), ...(m.files ?? []).map(filePart)]
   const lines = attachments.length
     ? [
         ...head,

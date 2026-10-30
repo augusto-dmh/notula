@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // The calendar draft card: what `proposeEvent`
 // proposed, editable in place (autosaved after 750 ms), and written to the calendar only when the
-// user clicks Create event. A missing write permission opens the permission modal first.
+// user clicks Create event. A missing write permission opens the permission modal first. When main
+// finds guests busy at the time, the card lists them and offers to book anyway.
 
 import { useEffect, useMemo, useState, type JSX } from 'react'
-import type { CalendarSource } from '@shared/types/calendar'
+import { parseError } from '@shared/errors'
+import type { CalendarRoom, CalendarSource } from '@shared/types/calendar'
 import type { CalendarEventDraft } from '@shared/types/workflow-blocks'
 import { navigateToSettings } from '../../app/navigation'
 import type { ToolCardProps } from '../../app/slots'
@@ -13,11 +15,13 @@ import { IconAlert, IconCalendar } from '../../app/icons'
 import { blockIdOf, useBlock, useThreadBlocks } from '../blocks/useBlock'
 import { openExternal } from '../integrations/store'
 import { usePrefs } from '../settings/prefs-store'
-import { PermissionModal, useOAuthSources } from './grants'
+import { PermissionModal, useGrantAction, useOAuthSources } from './grants'
 import {
   buildRepeat,
   cardReason,
   COLOR_CHOICES,
+  DECLINE_CHOICES,
+  DECLINE_MAX,
   isTimed,
   localDate,
   localTime,
@@ -39,6 +43,7 @@ const LOCAL_ONLY = 'Calendar changes are off while Local-only mode is on.'
 const SAVE_FAILED = 'Couldn’t save your changes. Try again.'
 const NO_ACCOUNT = 'Connect Google Calendar or Microsoft to create events.'
 const LAST_TARGET_KEY = 'notula.calendarWrite.lastTarget'
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 function readLastTarget(): string | null {
   try {
@@ -56,11 +61,24 @@ function writeLastTarget(id: string): void {
   }
 }
 
-/** What main found when an update moves the time: guests busy then, and calendars it couldn't read. */
+/** What main found for a time option: guests and rooms busy then, and calendars it couldn't read. */
 interface MoveAvailability {
   checked: number
   unknown: string[]
   conflicts: { email: string; name: string }[]
+  /** The option's time when checked (older results leave it out). */
+  start?: string
+  end?: string
+}
+
+type Attendee = CalendarEventDraft['attendees'][number]
+
+/** "Ana, Ben, Cleo +2". */
+function nameList(people: { name: string }[]): string {
+  return `${people
+    .slice(0, 3)
+    .map((p) => p.name)
+    .join(', ')}${people.length > 3 ? ` +${people.length - 3}` : ''}`
 }
 
 const sameOption = (a: TimeOption | undefined | null, b: TimeOption | undefined | null): boolean => !!a && !!b && JSON.stringify(a) === JSON.stringify(b)
@@ -105,11 +123,12 @@ function retime(o: TimeOption, patch: { date?: string; start?: string; end?: str
   return { start: { dateTime: zonedIso(patch.date ?? localDate(o.start), patch.start ?? localTime(o.start), tz), timeZone: tz }, end: { dateTime: zonedIso(w.date, w.time, tz), timeZone: tz } }
 }
 
-function GuestEditor({ value, onChange, disabled }: { value: CalendarEventDraft['attendees']; onChange(v: CalendarEventDraft['attendees']): void; disabled: boolean }): JSX.Element {
+/** Guests (people). A tag on each chip toggles optional; optional guests always show it. */
+function GuestEditor({ value, onChange, disabled }: { value: Attendee[]; onChange(v: Attendee[]): void; disabled: boolean }): JSX.Element {
   const [text, setText] = useState('')
   const add = (): void => {
     const parts = text.split(/[\s,;]+/).map((x) => x.trim()).filter(Boolean)
-    const valid = parts.filter((p) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(p))
+    const valid = parts.filter((p) => EMAIL.test(p))
     if (!valid.length) return
     const have = new Set(value.map((a) => a.email.toLowerCase()))
     onChange([...value, ...valid.filter((v) => !have.has(v.toLowerCase())).map((email) => ({ email }))])
@@ -120,8 +139,20 @@ function GuestEditor({ value, onChange, disabled }: { value: CalendarEventDraft[
       {value.length === 0 ? <span className="cw-muted">No guests</span> : null}
       {value.map((a) => (
         <span key={a.email} className="cw-chip">
-          {a.resource ? 'Room · ' : ''}
           {a.email}
+          {disabled ? (
+            a.optional ? <span className="cw-tag is-on">Optional</span> : null
+          ) : (
+            <button
+              type="button"
+              className={`cw-tag${a.optional ? ' is-on' : ''}`}
+              aria-pressed={!!a.optional}
+              aria-label={a.optional ? `Make ${a.email} a required guest` : `Make ${a.email} an optional guest`}
+              onClick={() => onChange(value.map((x) => (x === a ? (a.optional ? { email: a.email } : { email: a.email, optional: true }) : x)))}
+            >
+              {a.optional ? 'Optional' : 'Required'}
+            </button>
+          )}
           {disabled ? null : (
             <button type="button" className="cw-chip__x" aria-label={`Remove ${a.email}`} onClick={() => onChange(value.filter((x) => x !== a))}>
               ×
@@ -145,6 +176,176 @@ function GuestEditor({ value, onChange, disabled }: { value: CalendarEventDraft[
           onBlur={add}
         />
       )}
+    </div>
+  )
+}
+
+/** The room picker: rooms from past events, and on Google Workspace the organization's list (opt-in). */
+function RoomPicker({
+  source,
+  slot,
+  have,
+  onPick
+}: {
+  source: CalendarSource
+  slot: { start: string; end: string } | null
+  have: Set<string>
+  onPick(room: { email: string; name: string }): void
+}): JSX.Element {
+  const google = source.kind === 'google'
+  const granted = source.grants.includes('rooms-read')
+  const [tab, setTab] = useState<'history' | 'directory'>('history')
+  const [rooms, setRooms] = useState<CalendarRoom[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [filter, setFilter] = useState('')
+  const grant = useGrantAction()
+  const showList = tab === 'history' || granted
+
+  useEffect(() => {
+    if (!showList) return
+    let live = true
+    setRooms(null)
+    setError(null)
+    window.notula.calendar
+      .rooms({ sourceId: source.id, source: tab, ...(slot ? { slot } : {}) })
+      .then((r) => {
+        if (!live) return
+        setRooms(r.rooms)
+        setError(r.error)
+      })
+      .catch((err: unknown) => {
+        if (!live) return
+        setRooms([])
+        setError(parseError(err).message || 'Couldn’t load rooms. Try again.')
+      })
+    return () => {
+      live = false
+    }
+  }, [source.id, tab, showList, slot?.start, slot?.end])
+
+  const q = filter.trim().toLowerCase()
+  const shown = (rooms ?? []).filter((r) => !have.has(r.email.toLowerCase()) && (!q || `${r.name} ${r.email} ${r.building ?? ''}`.toLowerCase().includes(q))).slice(0, 50)
+  const typed = EMAIL.test(filter.trim()) && !have.has(filter.trim().toLowerCase()) ? filter.trim() : null
+  return (
+    <div className="cw-rooms" role="group" aria-label="Add a room">
+      {google ? (
+        <div className="cw-rooms__tabs" role="tablist" aria-label="Where rooms come from">
+          <button type="button" role="tab" aria-selected={tab === 'history'} className={`cw-rooms__tab${tab === 'history' ? ' is-on' : ''}`} onClick={() => setTab('history')}>
+            Past rooms
+          </button>
+          <button type="button" role="tab" aria-selected={tab === 'directory'} className={`cw-rooms__tab${tab === 'directory' ? ' is-on' : ''}`} onClick={() => setTab('directory')}>
+            Organization
+          </button>
+        </div>
+      ) : null}
+      <input
+        className="n-input cw-in cw-in--grow"
+        placeholder="Search rooms or enter a room’s address"
+        aria-label="Search rooms or enter a room’s address"
+        value={filter}
+        onChange={(e) => setFilter(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && typed) {
+            e.preventDefault()
+            onPick({ email: typed, name: typed })
+            setFilter('')
+          }
+        }}
+      />
+      {!showList ? (
+        <div className="cw-rooms__ask">
+          <span className="cw-muted">Notula needs permission to list your organization’s rooms.</span>
+          <button type="button" className="n-btn n-btn--sm" disabled={grant.busyKey !== null} onClick={() => void grant.run(source.id, 'rooms-read', true)}>
+            {grant.busyKey ? 'Connecting…' : 'Grant access'}
+          </button>
+        </div>
+      ) : rooms === null ? (
+        <span className="cw-muted" aria-busy="true">
+          Loading rooms…
+        </span>
+      ) : (
+        <>
+          {error ? <span className="cw-muted">{error}</span> : null}
+          {!error && !shown.length && !typed ? <span className="cw-muted">{tab === 'history' ? 'No rooms on your past events yet. Enter a room’s address to add one.' : 'No rooms match.'}</span> : null}
+          <ul className="cw-rooms__list">
+            {typed ? (
+              <li>
+                <button
+                  type="button"
+                  className="cw-rooms__row"
+                  onClick={() => {
+                    onPick({ email: typed, name: typed })
+                    setFilter('')
+                  }}
+                >
+                  <span>Add {typed}</span>
+                </button>
+              </li>
+            ) : null}
+            {shown.map((r) => (
+              <li key={r.email}>
+                <button type="button" className="cw-rooms__row" onClick={() => onPick({ email: r.email, name: r.name })}>
+                  <span className="cw-rooms__name">{r.name}</span>
+                  <span className="cw-muted">{[r.building, r.capacity ? `${r.capacity} ${r.capacity === 1 ? 'seat' : 'seats'}` : null].filter(Boolean).join(' · ')}</span>
+                  {r.busy === true ? <span className="cw-conflict">Busy then</span> : r.busy === false ? <span className="cw-free">Free then</span> : null}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </div>
+  )
+}
+
+/** Rooms, kept apart from guests: chips, and the picker behind "Add a room". */
+function RoomEditor({
+  value,
+  onChange,
+  disabled,
+  source,
+  slot
+}: {
+  value: Attendee[]
+  onChange(v: Attendee[]): void
+  disabled: boolean
+  source: CalendarSource | null
+  slot: { start: string; end: string } | null
+}): JSX.Element {
+  const [open, setOpen] = useState(false)
+  const [names, setNames] = useState<Record<string, string>>({})
+  const have = new Set(value.map((r) => r.email.toLowerCase()))
+  return (
+    <div className="cw-room-field">
+      <div className="cw-guests">
+        {value.length === 0 ? <span className="cw-muted">No rooms</span> : null}
+        {value.map((r) => (
+          <span key={r.email} className="cw-chip">
+            {names[r.email.toLowerCase()] ?? r.email}
+            {disabled ? null : (
+              <button type="button" className="cw-chip__x" aria-label={`Remove ${names[r.email.toLowerCase()] ?? r.email}`} onClick={() => onChange(value.filter((x) => x !== r))}>
+                ×
+              </button>
+            )}
+          </span>
+        ))}
+        {disabled || !source ? null : (
+          <button type="button" className="cw-link" aria-expanded={open} onClick={() => setOpen(!open)}>
+            {open ? 'Done' : 'Add a room'}
+          </button>
+        )}
+      </div>
+      {open && source && !disabled ? (
+        <RoomPicker
+          source={source}
+          slot={slot}
+          have={have}
+          onPick={(room) => {
+            setNames((n) => ({ ...n, [room.email.toLowerCase()]: room.name }))
+            onChange([...value, { email: room.email, resource: true }])
+          }}
+        />
+      ) : null}
     </div>
   )
 }
@@ -230,8 +431,28 @@ export function CalendarDraftCard({ threadId, toolCall }: ToolCardProps): JSX.El
   const localOnly = !!prefs?.['privacy.localOnly']
   const targetSource = (target ? sources.find((s) => s.id === target) : null) ?? defaultTarget
   const microsoft = d.existingEvent ? d.existingEvent.calendarId.startsWith('microsoft:') : targetSource?.kind === 'microsoft'
-  const conflicts = (toolCall.result as { conflicts?: string[][] } | null)?.conflicts ?? []
-  const moved = (toolCall.result as { availability?: MoveAvailability } | null)?.availability ?? null
+  const result = toolCall.result as { conflicts?: string[][]; guests?: (MoveAvailability | null)[]; availability?: MoveAvailability } | null
+  const conflicts = result?.conflicts ?? []
+  /** Busy guests for an option, while it still has the time they were checked for. */
+  const guestsAt = (o: TimeOption, i: number): MoveAvailability | null => {
+    const g = result?.guests ? (result.guests[i] ?? null) : i === 0 ? (result?.availability ?? null) : null
+    if (!g || !g.start || !g.end) return g
+    return isTimed(o.start) && isTimed(o.end) && Date.parse(g.start) === Date.parse(o.start.dateTime) && Date.parse(g.end) === Date.parse(o.end.dateTime) ? g : null
+  }
+  const chosenAt = (() => {
+    const o = chosen(d)
+    const i = o ? d.timeOptions.findIndex((x) => sameOption(x, o)) : -1
+    return o && i >= 0 ? guestsAt(o, i) : null
+  })()
+  const guests = d.attendees.filter((a) => !a.resource)
+  const rooms = d.attendees.filter((a) => a.resource)
+  const hadGuests = guests.length > 0 || !!d.existingEvent?.original.attendees.some((a) => !a.resource)
+  const original = d.existingEvent?.original ?? null
+  const declines = !!original && !microsoft && (original.eventType === 'focusTime' || original.eventType === 'outOfOffice')
+  const busyFailure = status === 'failed' && ex?.errorCode === 'guests_busy'
+  const busyNow = busyFailure && Array.isArray(ex?.['busy']) ? (ex['busy'] as { email: string; name: string }[]) : []
+  const slotOf = (o: TimeOption | null): { start: string; end: string } | null => (o && isTimed(o.start) && isTimed(o.end) ? { start: o.start.dateTime, end: o.end.dateTime } : null)
+  const writeTo = editCalendar ? (sources.find((s) => s.id === editCalendar.split(':')[1]) ?? null) : targetSource
   const scope = d.existingEvent?.scope ?? null
   const first = d.timeOptions[0]
   const repeat = parseRepeat(d.recurrenceRules)
@@ -240,16 +461,18 @@ export function CalendarDraftCard({ threadId, toolCall }: ToolCardProps): JSX.El
   const set = (patch: Partial<CalendarEventDraft>): void => h.edit({ ...d, ...patch })
   const reason = localOnly ? LOCAL_ONLY : cardReason(d)
 
-  const create = async (granted = false): Promise<void> => {
+  const create = async (granted = false, allowConflicts = false): Promise<void> => {
     if (!targetSource) return
     if (!isEdit && !granted && !targetSource.grants.includes('calendar-write')) {
       setModalFor(targetSource.id)
       return
     }
-    const r = await h.execute(isEdit ? undefined : { targetSourceId: targetSource.id })
+    const r = await h.execute({ ...(isEdit ? {} : { targetSourceId: targetSource.id }), ...(allowConflicts ? { allowConflicts: true } : {}) })
     if (!r) return
     writeLastTarget(targetSource.id)
     if (!r.failure) return
+    // The card itself lists the busy guests and offers to book anyway.
+    if (r.failure.errorCode === 'guests_busy') return
     if (r.failure.errorCode === 'missing_scopes') setModalFor(targetSource.id)
     else if (r.failure.errorCode === 'missing_token') showToast({ id: 'cw-reconnect', kind: 'error', title: 'Reconnect your calendar to continue.', action: { label: 'Settings', onClick: () => navigateToSettings('calendar') } })
     else if (r.failure.error && r.failure.errorCode !== 'unknown') showToast({ id: `cw-fail-${block.id}`, kind: 'error', title: r.failure.error })
@@ -277,7 +500,7 @@ export function CalendarDraftCard({ threadId, toolCall }: ToolCardProps): JSX.El
     )
   }
 
-  const failedTitle = status === 'unknown' ? 'Calendar event status unknown' : status === 'failed' ? (isEdit ? 'Calendar event not updated' : 'Calendar event not created') : null
+  const failedTitle = busyFailure ? 'Some guests are busy then' : status === 'unknown' ? 'Calendar event status unknown' : status === 'failed' ? (isEdit ? 'Calendar event not updated' : 'Calendar event not created') : null
   const many = sources.filter((s) => s.grants.includes('calendar-write')).length > 1 || (sources.length > 1 && !isEdit)
 
   return (
@@ -296,11 +519,17 @@ export function CalendarDraftCard({ threadId, toolCall }: ToolCardProps): JSX.El
         ) : null}
       </div>
       {failedTitle ? (
-        <div className={`cw-banner${status === 'unknown' ? ' cw-banner--warn' : ' cw-banner--error'}`} role="status">
+        <div className={`cw-banner${status === 'unknown' || busyFailure ? ' cw-banner--warn' : ' cw-banner--error'}`} role="status">
           <IconAlert size={14} />
           <div>
             <strong>{failedTitle}</strong>
-            {ex?.error ? <span>{ex.error}</span> : null}
+            {busyFailure ? (
+              <span>
+                {busyNow.length ? `${nameList(busyNow)} ${busyNow.length === 1 ? 'is' : 'are'} busy at this time. ` : ''}Book it anyway, or pick another time.
+              </span>
+            ) : ex?.error ? (
+              <span>{ex.error}</span>
+            ) : null}
           </div>
         </div>
       ) : null}
@@ -312,16 +541,22 @@ export function CalendarDraftCard({ threadId, toolCall }: ToolCardProps): JSX.El
           {d.timeOptions.map((o, i) => {
             const on = sameOption(chosen(d), o)
             const busy = conflicts[i] ?? []
+            const away = guestsAt(o, i)?.conflicts ?? []
+            // Picking a time while its busy guests show accepts booking over them.
+            const pick = (): void => {
+              const { acceptedClash: _a, ...rest } = d
+              const s = slotOf(o)
+              h.edit(away.length && s ? { ...rest, selectedTime: o, acceptedClash: { ...s, emails: away.map((g) => g.email) } } : { ...rest, selectedTime: o })
+            }
             return (
               <label key={i} className={`cw-time${on ? ' is-on' : ''}`}>
-                {d.timeOptions.length > 1 ? (
-                  <input type="radio" name={`cw-time-${block.id}`} checked={on} disabled={locked} onChange={() => set({ selectedTime: o })} />
-                ) : null}
+                {d.timeOptions.length > 1 ? <input type="radio" name={`cw-time-${block.id}`} checked={on} disabled={locked} onChange={pick} /> : null}
                 <span className="cw-time__text">
                   {optionLabel(o)}
                   {zoneLabel(o) ? <span className="cw-muted"> · {zoneLabel(o)}</span> : null}
                 </span>
                 {busy.length ? <span className="cw-conflict">Conflicts with {busy[0]}{busy.length > 1 ? ` +${busy.length - 1}` : ''}</span> : null}
+                {away.length ? <span className="cw-conflict">Busy then: {nameList(away)}</span> : null}
               </label>
             )
           })}
@@ -349,18 +584,11 @@ export function CalendarDraftCard({ threadId, toolCall }: ToolCardProps): JSX.El
             </div>
           )
         })()}
-        {moved && !locked ? (
+        {chosenAt?.unknown.length && !locked ? (
           <div className="cw-availability">
-            {moved.conflicts.slice(0, 5).map((c) => (
-              <span key={c.email} className="cw-conflict">
-                Busy then: {c.name}
-              </span>
-            ))}
-            {moved.unknown.length ? (
-              <span className="cw-muted">
-                Couldn’t see {moved.unknown.length} {moved.unknown.length === 1 ? 'guest’s calendar' : 'guests’ calendars'}.
-              </span>
-            ) : null}
+            <span className="cw-muted">
+              Couldn’t see {chosenAt.unknown.length} {chosenAt.unknown.length === 1 ? 'guest’s calendar' : 'guests’ calendars'}.
+            </span>
           </div>
         ) : null}
       </Field>
@@ -515,8 +743,68 @@ export function CalendarDraftCard({ threadId, toolCall }: ToolCardProps): JSX.El
       </Field>
 
       <Field label="Guests">
-        <GuestEditor value={d.attendees} disabled={locked} onChange={(attendees) => set({ attendees })} />
+        <GuestEditor value={guests} disabled={locked} onChange={(next) => set({ attendees: [...next, ...rooms] })} />
       </Field>
+      {isEdit && hadGuests ? (
+        microsoft ? (
+          <p className="cw-note">Outlook tells guests about every change.</p>
+        ) : (
+          <label className="cw-check">
+            <input
+              type="checkbox"
+              checked={d.notifyGuests !== false}
+              disabled={locked}
+              onChange={(e) => {
+                const { notifyGuests: _n, ...rest } = d
+                h.edit(e.target.checked ? rest : { ...rest, notifyGuests: false })
+              }}
+            />
+            Tell guests about this change
+          </label>
+        )
+      ) : null}
+
+      <Field label="Rooms">
+        <RoomEditor value={rooms} disabled={locked} source={writeTo} slot={slotOf(chosen(d))} onChange={(next) => set({ attendees: [...guests, ...next] })} />
+      </Field>
+
+      {declines ? (
+        <Field label="Auto-decline">
+          <select
+            className="n-input cw-in"
+            aria-label="Decline overlapping invitations"
+            disabled={locked}
+            value={d.autoDeclineMode ?? 'declineNone'}
+            onChange={(e) => set({ autoDeclineMode: e.target.value as NonNullable<CalendarEventDraft['autoDeclineMode']> })}
+          >
+            {DECLINE_CHOICES.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.label}
+              </option>
+            ))}
+          </select>
+          {(d.autoDeclineMode ?? 'declineNone') !== 'declineNone' ? (
+            <>
+              <textarea
+                className="n-input cw-desc"
+                rows={2}
+                maxLength={DECLINE_MAX}
+                placeholder="Message sent with each decline"
+                aria-label="Decline message"
+                aria-describedby={`cw-decline-${block.id}`}
+                disabled={locked}
+                value={d.declineMessage ?? ''}
+                onChange={(e) => set({ declineMessage: e.target.value.slice(0, DECLINE_MAX) })}
+              />
+              <span id={`cw-decline-${block.id}`} className="cw-muted">
+                {(d.declineMessage ?? '').length.toLocaleString()} / {DECLINE_MAX.toLocaleString()}
+              </span>
+            </>
+          ) : (
+            <></>
+          )}
+        </Field>
+      ) : null}
 
       {expanded || d.location || d.description ? (
         <>
@@ -558,11 +846,18 @@ export function CalendarDraftCard({ threadId, toolCall }: ToolCardProps): JSX.El
             </button>
           </span>
         ) : (
-          <span className={reason ? 'n-tooltip n-tooltip--end' : undefined} data-tooltip={reason ?? undefined}>
-            <button type="button" className="n-btn n-btn--sm n-btn--primary" disabled={!!reason || h.busy || status === 'creating'} onClick={() => void create()}>
-              {h.busy || status === 'creating' ? (isEdit ? 'Saving…' : 'Creating…') : status === 'failed' || status === 'unknown' ? 'Try again' : submitLabel(d)}
-            </button>
-          </span>
+          <>
+            {busyFailure ? (
+              <button type="button" className="n-btn n-btn--sm" disabled={!!reason || h.busy} onClick={() => void create(false, true)}>
+                Book anyway
+              </button>
+            ) : null}
+            <span className={reason ? 'n-tooltip n-tooltip--end' : undefined} data-tooltip={reason ?? undefined}>
+              <button type="button" className="n-btn n-btn--sm n-btn--primary" disabled={!!reason || h.busy || status === 'creating'} onClick={() => void create()}>
+                {h.busy || status === 'creating' ? (isEdit ? 'Saving…' : 'Creating…') : (status === 'failed' && !busyFailure) || status === 'unknown' ? 'Try again' : submitLabel(d)}
+              </button>
+            </span>
+          </>
         )}
       </div>
       {modalFor ? <PermissionModal sourceId={modalFor} onClose={() => setModalFor(null)} onGranted={() => void create(true)} /> : null}

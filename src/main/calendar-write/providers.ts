@@ -53,7 +53,7 @@ export function failed(x: Exclude<Exchange, { ok: true }>, write: boolean): Exec
 
 const isWorkAccount = (email: string | null): boolean => !!email && !/@(outlook|hotmail|live|msn)\.[a-z.]+$/i.test(email)
 
-function attendeeList(d: CalendarEventDraft, me: string | null): { email: string; resource?: boolean }[] {
+function attendeeList(d: CalendarEventDraft, me: string | null): CalendarEventDraft['attendees'] {
   const others = d.attendees.filter((a) => !me || a.email.toLowerCase() !== me.toLowerCase())
   return d.addMeAsGuest !== false && me ? [{ email: me }, ...others] : others
 }
@@ -78,7 +78,7 @@ function googleBody(d: CalendarEventDraft, blockId: string, me: string | null): 
     start: t?.start,
     end: t?.end,
     description,
-    attendees: attendeeList(d, me).map((a, i) => ({ email: a.email, ...(a.resource ? { resource: true } : {}), ...(i === 0 && me && a.email === me ? { responseStatus: 'accepted' } : {}) }))
+    attendees: attendeeList(d, me).map((a, i) => ({ ...googleAttendee(a), ...(i === 0 && me && a.email === me ? { responseStatus: 'accepted' } : {}) }))
   }
   if (location) body['location'] = location
   if (d.conference.kind === 'googleMeet') body['conferenceData'] = { createRequest: { requestId: blockId, conferenceSolutionKey: { type: 'hangoutsMeet' } } }
@@ -87,6 +87,11 @@ function googleBody(d: CalendarEventDraft, blockId: string, me: string | null): 
   if (d.visibility) body['visibility'] = d.visibility
   return body
 }
+
+const googleAttendee = (a: CalendarEventDraft['attendees'][number]): Obj => ({ email: a.email, ...(a.resource ? { resource: true } : a.optional ? { optional: true } : {}) })
+
+/** Updates tell guests unless the draft says otherwise; Google can change an event quietly. */
+const googleSendUpdates = (d: CalendarEventDraft, tell: boolean): 'all' | 'none' => (d.notifyGuests !== false && tell ? 'all' : 'none')
 
 function googleCreated(body: Obj, calendarId: string): ExecResult {
   return { status: 'created', fields: { eventId: str(body['id']), calendarId, htmlLink: str(body['htmlLink']) } }
@@ -130,10 +135,23 @@ function googlePatch(diff: DraftDiff, current: Obj): Obj {
     p['start'] = diff.time.start
     p['end'] = diff.time.end
   }
-  if (diff.addAttendees.length || diff.removeAttendees.length) {
+  if (diff.addAttendees.length || diff.removeAttendees.length || diff.optional.length) {
     const drop = new Set(diff.removeAttendees.map((e) => e.toLowerCase()))
-    const kept = (Array.isArray(current['attendees']) ? (current['attendees'] as Obj[]) : []).filter((a) => !drop.has(String(a['email'] ?? '').toLowerCase()))
-    p['attendees'] = [...kept, ...diff.addAttendees.map((a) => ({ email: a.email, ...(a.resource ? { resource: true } : {}) }))]
+    const flip = new Map(diff.optional.map((o) => [o.email.toLowerCase(), o.optional]))
+    const kept = (Array.isArray(current['attendees']) ? (current['attendees'] as Obj[]) : [])
+      .filter((a) => !drop.has(String(a['email'] ?? '').toLowerCase()))
+      .map((a) => {
+        const optional = flip.get(String(a['email'] ?? '').toLowerCase())
+        if (optional === undefined) return a
+        const { optional: _o, ...rest } = a
+        return optional ? { ...rest, optional: true } : rest
+      })
+    p['attendees'] = [...kept, ...diff.addAttendees.map(googleAttendee)]
+  }
+  if (diff.decline) {
+    // Only focus-time and out-of-office events get here (draft.ts); their other properties stay.
+    const key = current['eventType'] === 'outOfOffice' ? 'outOfOfficeProperties' : 'focusTimeProperties'
+    p[key] = { ...obj(current[key]), autoDeclineMode: diff.decline.mode, declineMessage: diff.decline.message }
   }
   if (diff.conference) {
     if (diff.conference.kind === 'googleMeet') p['conferenceData'] = { createRequest: { requestId: `${String(current['id'] ?? 'event')}-${Date.now()}`, conferenceSolutionKey: { type: 'hangoutsMeet' } } }
@@ -169,7 +187,7 @@ export async function googleUpdate(ctx: MainContext, token: string, t: WriteTarg
     http.fetch(googleEventUrl, {
       method: 'PATCH',
       params: { calendarId: t.calendarNativeId, eventId: target },
-      query: { conferenceDataVersion: '1', sendUpdates: googleHasGuests(current) || r.diff.addAttendees.length ? 'all' : 'none' },
+      query: { conferenceDataVersion: '1', sendUpdates: googleSendUpdates(d, googleHasGuests(current) || r.diff.addAttendees.length > 0) },
       headers: { ...headers, 'if-match': str(current['etag']) ?? '*' },
       body: JSON.stringify(googlePatch(r.diff, current))
     })
@@ -285,7 +303,7 @@ export async function googleSplit(ctx: MainContext, token: string, t: WriteTarge
     const { createRequest: _r, ...same } = conference
     body['conferenceData'] = same
   }
-  const sendUpdates = googleHasGuests(master) || r.diff.addAttendees.length ? 'all' : 'none'
+  const sendUpdates = googleSendUpdates(d, googleHasGuests(master) || r.diff.addAttendees.length > 0)
   const created = await exchange(() =>
     http.fetch('https://www.googleapis.com/calendar/v3/calendars/{calendarId}/events', {
       method: 'POST',
@@ -429,6 +447,8 @@ export function rruleFromGraph(recurrence: unknown): string | null {
   return `RRULE:${parts.join(';')}`
 }
 
+const graphAttendee = (a: CalendarEventDraft['attendees'][number]): Obj => ({ emailAddress: { address: a.email }, type: a.resource ? 'resource' : a.optional ? 'optional' : 'required' })
+
 function graphBody(d: CalendarEventDraft, blockId: string, me: string | null, recurrence: Obj | null): Obj {
   const t = chosenTime(d)
   const { location, description } = withCustomLink(d)
@@ -440,7 +460,7 @@ function graphBody(d: CalendarEventDraft, blockId: string, me: string | null, re
     end: t ? graphTime(t.end) : undefined,
     attendees: attendeeList(d, me)
       .filter((a) => !me || a.email.toLowerCase() !== me.toLowerCase())
-      .map((a) => ({ emailAddress: { address: a.email }, type: a.resource ? 'resource' : 'required' })),
+      .map(graphAttendee),
     transactionId: blockId
   }
   if (allDay) body['isAllDay'] = true
@@ -480,10 +500,16 @@ function graphPatch(diff: DraftDiff, current: Obj, me: string | null): Obj {
     p['start'] = graphTime(diff.time.start)
     p['end'] = graphTime(diff.time.end)
   }
-  if (diff.addAttendees.length || diff.removeAttendees.length) {
+  if (diff.addAttendees.length || diff.removeAttendees.length || diff.optional.length) {
     const drop = new Set(diff.removeAttendees.map((e) => e.toLowerCase()))
-    const kept = (Array.isArray(current['attendees']) ? (current['attendees'] as Obj[]) : []).filter((a) => !drop.has(String(obj(a['emailAddress'])['address'] ?? '').toLowerCase()))
-    p['attendees'] = [...kept, ...diff.addAttendees.map((a) => ({ emailAddress: { address: a.email }, type: a.resource ? 'resource' : 'required' }))]
+    const flip = new Map(diff.optional.map((o) => [o.email.toLowerCase(), o.optional]))
+    const kept = (Array.isArray(current['attendees']) ? (current['attendees'] as Obj[]) : [])
+      .filter((a) => !drop.has(String(obj(a['emailAddress'])['address'] ?? '').toLowerCase()))
+      .map((a) => {
+        const optional = flip.get(String(obj(a['emailAddress'])['address'] ?? '').toLowerCase())
+        return optional === undefined || a['type'] === 'resource' ? a : { ...a, type: optional ? 'optional' : 'required' }
+      })
+    p['attendees'] = [...kept, ...diff.addAttendees.map(graphAttendee)]
   }
   if (diff.conference?.kind === 'googleMeet' && isWorkAccount(me)) {
     p['isOnlineMeeting'] = true
@@ -669,6 +695,33 @@ export function eventRef(ev: CalendarEvent): EventRef | null {
     calendarNativeId: cal?.[2] ?? 'primary',
     organizer: obj(ev['organizer'])['self'] === true
   }
+}
+
+/**
+ * A Google event read live, in the synced shape (`google:<source>:<id>` ids): focus-time and
+ * out-of-office events never sync, so an edit of one starts here. Null when it can't be read.
+ */
+export async function googleEventLive(ctx: MainContext, calendarId: string, eventId: string): Promise<CalendarEvent | null> {
+  const cal = /^google:([^:]+):(.+)$/.exec(calendarId)
+  if (!cal?.[1] || !cal[2]) return null
+  const sourceId = cal[1]
+  const native = /^google:[^:]+:(.+)$/.exec(eventId)?.[1] ?? eventId
+  let token: string
+  try {
+    token = await ctx.calendar.accessToken(sourceId, null)
+  } catch {
+    return null
+  }
+  const http = providerHttp(ctx, 'calendar', 'calendar-read')
+  const x = await exchange(() => http.fetch(googleEventUrl, { params: { calendarId: cal[2] ?? 'primary', eventId: native }, headers: googleHeaders(token) }))
+  if (!x.ok || x.body['status'] === 'cancelled') return null
+  const recurring = str(x.body['recurringEventId'])
+  return {
+    ...x.body,
+    id: `google:${sourceId}:${str(x.body['id']) ?? native}`,
+    calendarId,
+    ...(recurring ? { recurringEventId: recurring } : {})
+  } as CalendarEvent
 }
 
 /** The account's `calendar-write` token, or the outcome that stops the write. */

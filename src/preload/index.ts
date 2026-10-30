@@ -454,7 +454,8 @@ const api: NotulaApi = {
       }
     },
     setGrant: (req) => ipcRenderer.invoke('calendar:set-grant' satisfies InvokeChannel, req),
-    eventColors: (req) => ipcRenderer.invoke('calendar:event-colors' satisfies InvokeChannel, req)
+    eventColors: (req) => ipcRenderer.invoke('calendar:event-colors' satisfies InvokeChannel, req),
+    rooms: (req) => ipcRenderer.invoke('calendar:rooms' satisfies InvokeChannel, req)
   },
   people: {
     participants: (req) => ipcRenderer.invoke('people:participants' satisfies InvokeChannel, req),

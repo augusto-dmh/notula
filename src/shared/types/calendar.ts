@@ -44,14 +44,16 @@ export interface CalendarSource {
 }
 
 /** Incremental grants on the user's calendar OAuth account. */
-export type CalendarGrant = 'calendar-write' | 'mail-read' | 'mail-send' | 'files-read'
+export type CalendarGrant = 'calendar-write' | 'mail-read' | 'mail-send' | 'files-read' | 'rooms-read'
 
 /** The OAuth scopes each grant adds. `calendar-write` on Microsoft replaces `Calendars.Read`. */
 export const CALENDAR_GRANT_SCOPES: Record<CalendarGrant, { google: string[]; microsoft: string[] }> = {
   'calendar-write': { google: ['https://www.googleapis.com/auth/calendar.events'], microsoft: ['Calendars.ReadWrite'] },
   'mail-read': { google: ['https://www.googleapis.com/auth/gmail.readonly'], microsoft: ['Mail.Read'] },
   'mail-send': { google: ['https://www.googleapis.com/auth/gmail.compose'], microsoft: ['Mail.ReadWrite', 'Mail.Send'] },
-  'files-read': { google: ['https://www.googleapis.com/auth/drive.readonly'], microsoft: ['Files.Read'] }
+  'files-read': { google: ['https://www.googleapis.com/auth/drive.readonly'], microsoft: ['Files.Read'] },
+  /** Google Workspace only: the organization's room list. Asked for only from the room picker. */
+  'rooms-read': { google: ['https://www.googleapis.com/auth/admin.directory.resource.calendar.readonly'], microsoft: [] }
 }
 
 export type CalendarGrantError = 'missing_scopes' | 'missing_token' | 'google_account_missing'
@@ -133,3 +135,14 @@ export const UPCOMING_PAGE = { firstWithToday: 5, firstWithoutToday: 4, later: 1
 export const CALENDAR_COLOR_DEFAULT = '#6470dc'
 /** The reminder card without a calendar colour. */
 export const REMINDER_COLOR_DEFAULT = '#9fe1e7'
+
+/** A meeting room for a calendar draft (`calendar:rooms`): from past events, or the organization's directory. */
+export interface CalendarRoom {
+  /** The room's calendar address. */
+  email: string
+  name: string
+  building: string | null
+  capacity: number | null
+  /** Busy at the asked time; null when unknown or not asked. */
+  busy: boolean | null
+}

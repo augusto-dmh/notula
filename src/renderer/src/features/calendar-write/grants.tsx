@@ -81,6 +81,10 @@ export function CalendarPermissionsRows({ sourceId }: { sourceId: string }): JSX
   const google = source.kind === 'google'
   const rows: { grant: CalendarGrant; label: string; hint: string }[] = []
   if (prefs['calendarWrite.enabled']) rows.push({ grant: 'calendar-write', label: 'Create events', hint: 'Lets Notula add and edit events on your calendar' })
+  // Asked for only from a draft's room picker; listed here once held, so it can be turned off.
+  if (prefs['calendarWrite.enabled'] && google && source.grants.includes('rooms-read')) {
+    rows.push({ grant: 'rooms-read', label: 'See your organization’s rooms', hint: 'Lists Google Workspace meeting rooms when you add a room to an event' })
+  }
   if (prefs['mail.enabled']) {
     rows.push(
       { grant: 'mail-read', label: 'Read mail for briefs and chat', hint: google ? 'Read your Gmail' : 'Read your Outlook email' },

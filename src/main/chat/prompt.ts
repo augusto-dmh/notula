@@ -66,6 +66,7 @@ export function systemPrompt(p: SystemPromptInput): string {
     p.tools
       ? 'Use the tools to search meetings, transcripts, people, folders and the calendar whenever the context does not already answer the question. Search before you say that something is not in the notes.'
       : 'Answer only from the context below: no search is available in this conversation.',
+    ...(p.tools ? ['When the meetings you need may run to more than one page of results, search with findMeetings and follow its cursor until the status is complete.'] : []),
     'Write Markdown: short paragraphs and bullet lists, headings only in long answers.'
   ]
   if (p.detailed) rules.push('The user asked for a detailed answer: be thorough, cover every relevant meeting and include the specifics.')

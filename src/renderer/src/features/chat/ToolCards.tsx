@@ -390,6 +390,7 @@ const MEETING_LISTS = new Set([
   'fetchMeetings',
   'findMeetingsByTerms',
   'findMeetingsWithPeople',
+  'findMeetings',
   'findMeetingsWithPeopleOrCompanies',
   'gatherMeetingContext',
   'getMeetings',

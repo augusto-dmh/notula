@@ -18,7 +18,7 @@ import type { InvokeChannel, InvokeReq, InvokeRes, PushChannel } from '@shared/i
 import type { CalendarGrant, CalendarSource } from '@shared/types/calendar'
 import type { IntegrationDelivery, IntegrationProvider } from '@shared/types/integrations'
 import { MAIL_LIMITS, type EmailContext, type MailAccount, type MailDraftInput, type MailThread } from '@shared/types/mail'
-import type { EmailDraftBlock } from '@shared/types/workflow-blocks'
+import type { EmailAttachment, EmailDraftBlock } from '@shared/types/workflow-blocks'
 import { blockStore, registerBlockType, type ExecResult } from '../blocks'
 import type { ChatToolSpec } from '../chat/tool-api'
 import type { EmailContextApi, MainContext } from '../context'
@@ -27,7 +27,7 @@ import type { IntegrationPlugin, IntegrationSendOutcome } from '../integration-p
 import { expected } from '../ipc-expected'
 import { log } from '../log'
 import { egressBlocked } from '../privacy'
-import { textToHtml } from './mime'
+import { FORWARD_MAX_BYTES, textToHtml, type MimeFile } from './mime'
 import {
   gmailCreateDraft,
   gmailRead,
@@ -70,8 +70,27 @@ function addresses(v: unknown, what: string): string[] {
 }
 
 const MESSAGE_ID = /^[A-Za-z0-9_=+/-]{1,512}$/
+const MAX_FILES = 10
 
-/** The `email` block shape; attachments stay off. A forward and a reply in thread exclude each other. */
+/** The chat files on a draft: their shape only (execution checks they belong to the draft's thread). */
+function emailAttachments(v: unknown): EmailAttachment[] {
+  if (v === undefined || v === null) return []
+  if (!Array.isArray(v)) throw bad('Attachments must be a list')
+  const out: EmailAttachment[] = []
+  for (const a of v.map(obj)) {
+    if (typeof a['id'] !== 'string' || !a['id'] || a['id'].length > 100 || out.some((x) => x.id === a['id'])) continue
+    out.push({
+      id: a['id'],
+      name: typeof a['name'] === 'string' ? a['name'].slice(0, 255) : 'file',
+      mimeType: typeof a['mimeType'] === 'string' ? a['mimeType'].slice(0, 255) : 'application/octet-stream',
+      size: Math.max(0, Math.floor(Number(a['size']) || 0))
+    })
+  }
+  if (out.length > MAX_FILES) throw bad(`An email can carry up to ${MAX_FILES} files. Remove one to add another.`)
+  return out
+}
+
+/** The `email` block shape. A forward and a reply in thread exclude each other. */
 function normalizeEmail(raw: unknown): EmailDraftBlock {
   const c = obj(raw)
   const subject = typeof c['subject'] === 'string' ? c['subject'].replace(/[\r\n]+/g, ' ').slice(0, 998) : ''
@@ -85,8 +104,12 @@ function normalizeEmail(raw: unknown): EmailDraftBlock {
     out.forward = { messageId: f['messageId'], includeAttachments: f['includeAttachments'] !== false }
     if (typeof f['subject'] === 'string' && f['subject'].trim()) out.forward.subject = f['subject'].replace(/[\r\n]+/g, ' ').slice(0, 998)
   }
+  const files = emailAttachments(c['attachments'])
+  if (files.length) out.attachments = files
   return out
 }
+
+const tooLarge = (files: { size: number }[]): boolean => files.reduce((n, f) => n + f.size, 0) > FORWARD_MAX_BYTES
 
 export function registerMail(ctx: MainContext): EmailContextApi {
   // ---------- accounts ----------
@@ -201,7 +224,7 @@ export function registerMail(ctx: MainContext): EmailContextApi {
     if (await blocked()) throw new MailError('local_only', MAIL_COPY.localOnly)
     const t = await sendToken(s, m)
     const r = s.kind === 'google' ? { ...(await gmailCreateDraft(ctx, t, m)), webUrl: DRAFTS_URL } : await graphCreateDraft(ctx, t, m)
-    log('info', 'mail:draft-saved', { provider: s.kind })
+    log('info', 'mail:draft-saved', { provider: s.kind, attachments: m.files?.length ?? 0 })
     return { draftId: r.draftId, webUrl: r.webUrl }
   }
 
@@ -217,6 +240,41 @@ export function registerMail(ctx: MainContext): EmailContextApi {
     const d = await graphCreateDraft(ctx, t, m)
     await graphSend(ctx, t, d.draftId)
     return { messageId: d.draftId }
+  }
+
+  // ---------- chat files ----------
+
+  /**
+   * The chat files for a draft, each checked to belong to `threadId`: an agent reaches only the
+   * files the user added to the thread it works in. A string is the problem to report.
+   */
+  async function threadFiles(threadId: string, ids: string[]): Promise<{ info: EmailAttachment[] } | string> {
+    if (ids.length > MAX_FILES) return `Attach up to ${MAX_FILES} files.`
+    if (!ids.length) return { info: [] }
+    const infos = await ctx.storage.listAttachments({ ids }).catch(() => [])
+    const out: EmailAttachment[] = []
+    for (const id of ids) {
+      const a = infos.find((x) => x.id === id)
+      if (!a || a.parent_type !== 'chat_thread' || a.parent_id !== threadId) return `${id} isn’t a file the user added to this chat.`
+      if (a.status === 'failed') return `The file “${a.file_name}” isn’t available.`
+      out.push({ id: a.id, name: a.file_name, mimeType: a.mime_type, size: a.byte_size })
+    }
+    if (tooLarge(out)) return MAIL_COPY.filesTooLarge
+    return { info: out }
+  }
+
+  /** The bytes of a draft's files, checked against its thread again at send time. */
+  async function fileBytes(threadId: string, files: EmailAttachment[]): Promise<MimeFile[]> {
+    const r = await threadFiles(threadId, files.map((f) => f.id))
+    if (typeof r === 'string') throw new MailError('provider', r)
+    const out: MimeFile[] = []
+    for (const f of r.info) {
+      const b = await ctx.attachments.readBytes(f.id).catch(() => null)
+      if (!b) throw new MailError('provider', `The file “${f.name}” isn’t available. Remove it and try again.`)
+      out.push({ name: f.name, mimeType: f.mimeType || b.mimeType, bytes: b.bytes })
+    }
+    if (tooLarge(out.map((f) => ({ size: f.bytes.length })))) throw new MailError('provider', MAIL_COPY.filesTooLarge)
+    return out
   }
 
   // ---------- the outbox plug-ins ----------
@@ -282,6 +340,7 @@ export function registerMail(ctx: MainContext): EmailContextApi {
       const c = block.content as EmailDraftBlock
       try {
         const s = await pick('mail-send')
+        const files = c.attachments?.length ? await fileBytes(block.source_id, c.attachments) : []
         const m = await message(s, {
           to: c.to,
           cc: c.cc,
@@ -292,11 +351,13 @@ export function registerMail(ctx: MainContext): EmailContextApi {
           ...(c.inReplyToThread ? { inReplyToThread: c.inReplyToThread } : {}),
           ...(c.forward ? { forward: { messageId: c.forward.messageId, includeAttachments: c.forward.includeAttachments } } : {})
         })
+        if (files.length) m.files = files
         if (options.mode === 'draft') {
           const r = await saveDraft(s, m)
           return { status: 'created', fields: { draftId: r.draftId, webUrl: r.webUrl, provider: s.kind, drafted: true } }
         }
         const r = await sendNow(s, m)
+        log('info', 'mail:sent', { provider: s.kind, attachments: files.length })
         return { status: 'sent', fields: { messageId: r.messageId, provider: s.kind } }
       } catch (err) {
         if (err instanceof MailError) return err.code === 'uncertain' ? { status: 'unknown', errorCode: 'uncertain', error: MAIL_COPY.maySent } : { status: 'failed', errorCode: err.code, error: err.message }
@@ -450,7 +511,8 @@ export function registerMail(ctx: MainContext): EmailContextApi {
           def: {
             name: TOOLS.write,
             description:
-              'Drafts an email for the user to review and send from a card. Nothing is sent by this tool; write the body as plain text.' +
+              'Drafts an email for the user to review and send from a card. Nothing is sent by this tool; write the body as plain text. ' +
+              'Files the user added to this chat can go with it, but only when the user wants them sent with the email.' +
               (canRead ? ' For a forward, the body is only a short introduction: the original message follows it.' : ''),
             inputSchema: {
               type: 'object',
@@ -461,6 +523,12 @@ export function registerMail(ctx: MainContext): EmailContextApi {
                 subject: { type: 'string' },
                 body: { type: 'string', description: 'Plain text.' },
                 inReplyToThread: { type: 'string', description: 'A thread id to reply in (Gmail).' },
+                attachmentIds: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  maxItems: MAX_FILES,
+                  description: 'Ids of files the user added to this chat, to send with the email (25 MB in all). Attach them only when the user wants them sent.'
+                },
                 ...forward
               },
               required: ['to', 'subject', 'body'],
@@ -492,7 +560,11 @@ export function registerMail(ctx: MainContext): EmailContextApi {
           return { content: JSON.stringify(r), data: { messages: r.messages.length }, isError: false }
         }
         if (name === TOOLS.write) {
-          const content = args['forward'] !== undefined ? await withForwardSubject(args) : args
+          const ids = Array.isArray(args['attachmentIds']) ? [...new Set((args['attachmentIds'] as unknown[]).filter((x): x is string => typeof x === 'string'))] : []
+          const files = await threadFiles(opts.threadId, ids)
+          if (typeof files === 'string') return { content: files === MAIL_COPY.filesTooLarge ? `${files} Ask the user which files to leave out.` : files, isError: true }
+          const { attachmentIds: _ids, ...rest } = args
+          const content = { ...(rest['forward'] !== undefined ? await withForwardSubject(rest) : rest), ...(files.info.length ? { attachments: files.info } : {}) }
           const block = await blockStore().create({ type: 'email', threadId: opts.threadId, content })
           return {
             content: JSON.stringify({ draft: block.content, blockId: block.id, sent: false, note: 'The user reviews this draft on a card and sends it themselves.' }),

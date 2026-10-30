@@ -146,3 +146,37 @@ export function without(busy: Busy[], ignore: { startMs: number; endMs: number }
 }
 
 export const overlaps = (busy: Busy[], startMs: number, endMs: number): boolean => busy.some((b) => Date.parse(b.start) < endMs && Date.parse(b.end) > startMs)
+
+export interface SlotGuests {
+  /** Guests whose calendars were read. */
+  checked: number
+  /** Calendars the provider couldn't show: never counted as busy. */
+  unknown: string[]
+  /** Known busy in the slot. */
+  busy: string[]
+}
+
+/**
+ * Who among `people` (guests and rooms) is busy in each slot, from one free/busy read over all of
+ * them. `ignore` is the event's own current time when it moves. Null when the provider couldn't
+ * answer at all: a clash Notula can't see never blocks.
+ */
+export async function slotGuests(
+  ctx: MainContext,
+  src: CalendarSource,
+  people: string[],
+  slots: { startMs: number; endMs: number }[],
+  timeZone: string,
+  ignore: { startMs: number; endMs: number } | null
+): Promise<SlotGuests[] | null> {
+  if (!people.length || !slots.length) return null
+  const from = Math.min(...slots.map((s) => s.startMs))
+  const to = Math.max(...slots.map((s) => s.endMs))
+  const busy = await busyTimes(ctx, src, people.slice(0, 100), new Date(from), new Date(to), timeZone)
+  if (typeof busy === 'string') return null
+  return slots.map((s) => ({
+    checked: busy.filter((b) => b.known).length,
+    unknown: busy.filter((b) => !b.known).map((b) => b.email),
+    busy: busy.filter((b) => b.known && overlaps(without(b.busy, ignore), s.startMs, s.endMs)).map((b) => b.email)
+  }))
+}

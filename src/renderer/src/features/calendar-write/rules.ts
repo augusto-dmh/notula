@@ -187,7 +187,8 @@ export function validLink(url: string): boolean {
 
 /** The first card-side reason Create event can't run yet, or null. */
 export function cardReason(d: CalendarEventDraft): string | null {
-  if (d.eventType && d.eventType !== 'default') return d.existingEvent ? 'Notula can’t turn an event into a different kind of event.' : 'Notula can only create regular events.'
+  if (!d.existingEvent && d.eventType && d.eventType !== 'default') return 'Notula can only create regular events.'
+  if (d.existingEvent && (d.eventType ?? 'default') !== (d.existingEvent.original.eventType ?? 'default')) return 'Notula can’t turn an event into a different kind of event.'
   const o = d.selectedTime ?? (d.timeOptions.length === 1 ? d.timeOptions[0] : null)
   if (!o) return 'Choose a time'
   if (isTimed(o.start) && isTimed(o.end)) {
@@ -208,7 +209,8 @@ export function cardReason(d: CalendarEventDraft): string | null {
     const refusal = editRefusal(d)
     if (refusal) return refusal
     const a = JSON.stringify({ ...d.existingEvent.original, execution: undefined })
-    const { existingEvent: _x, execution: _e, dismissedAt: _d, fromEvent: _f, ...now } = d
+    // Whether guests hear about it, and accepted clashes, aren't changes to the event.
+    const { existingEvent: _x, execution: _e, dismissedAt: _d, fromEvent: _f, notifyGuests: _n, acceptedClash: _c, ...now } = d
     if (a === JSON.stringify({ ...now, execution: undefined })) return 'This draft doesn’t change the event.'
   }
   if (d.conference.kind === 'custom' && !validLink(d.conference.url)) return 'Add a valid meeting link'
@@ -220,7 +222,11 @@ function editRefusal(d: CalendarEventDraft): string | null {
   const ex = d.existingEvent
   if (!ex) return null
   const o = ex.original
-  if (d.autoDeclineMode || d.declineMessage) return 'Auto-decline settings can’t be set from Notula.'
+  if (d.autoDeclineMode || d.declineMessage) {
+    if (ex.calendarId.startsWith('microsoft:')) return 'Notula can’t set auto-decline on Outlook calendars.'
+    if (o.eventType !== 'focusTime' && o.eventType !== 'outOfOffice') return 'Only focus-time and out-of-office events decline invitations on their own, so this event can’t.'
+    if ((d.declineMessage ?? '').length > DECLINE_MAX) return 'Keep the decline message to 1,000 characters.'
+  }
   const rules = d.recurrenceRules ?? []
   const before = o.recurrenceRules ?? []
   if (ex.scope === 'occurrence' && JSON.stringify(rules) !== JSON.stringify(before)) return 'Pick the whole series, or this and the later ones, to change how it repeats.'
@@ -229,8 +235,26 @@ function editRefusal(d: CalendarEventDraft): string | null {
   if (ex.scope === 'occurrence' && ex.occurrenceStart && d.visibility !== undefined && d.visibility !== (o.visibility ?? 'default')) {
     return 'Your calendar only lets you change who can see this for the whole series.'
   }
+  if (ex.scope === 'series') {
+    const t = d.selectedTime ?? (d.timeOptions.length === 1 ? d.timeOptions[0] : null)
+    const was = o.timeOptions[0]
+    const rulesChanged = JSON.stringify(rules) !== JSON.stringify(before)
+    if (d.timeOptions.length > 1 || (t && was && (isTimed(t.start) !== isTimed(was.start) || (!rulesChanged && localDate(t.start) !== localDate(was.start))))) return SERIES_KINDS
+  }
   return null
 }
+
+/** What a whole-series edit may change (main says the same). */
+const SERIES_KINDS =
+  'A change to every occurrence can only cover how it repeats, its start time and length, the title, description, who can see it, color, location, video link, guests, rooms and auto-decline.'
+export const DECLINE_MAX = 1_000
+
+/** The auto-decline choices of a focus-time or out-of-office event. */
+export const DECLINE_CHOICES: { id: NonNullable<CalendarEventDraft['autoDeclineMode']>; label: string }[] = [
+  { id: 'declineNone', label: 'Off' },
+  { id: 'declineOnlyNewConflictingInvitations', label: 'New invitations only' },
+  { id: 'declineAllConflictingInvitations', label: 'All overlapping invitations' }
+]
 
 /** A rule change that keeps the series' other lines (extra and skipped dates). */
 export function withRepeat(d: CalendarEventDraft, rule: string[] | undefined): string[] | undefined {

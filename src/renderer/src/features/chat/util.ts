@@ -184,6 +184,18 @@ function peopleLine(c: ChatToolCall, phase: ToolPhase): string {
   return n === 0 ? `Found no people matching “${q}”` : `Found ${n} ${c.name === 'findPeopleOrCompanies' ? `result${n === 1 ? '' : 's'}` : n === 1 ? 'person' : 'people'}`
 }
 
+/** `findMeetings`: "Found 20 meetings · more to see", or a warning when the page stopped early. */
+function findMeetingsLine(c: ChatToolCall, phase: ToolPhase): string {
+  if (phase === 'running') return 'Searching meetings…'
+  if (phase === 'failed') return 'Couldn’t search meetings'
+  const r = c.result as { meetings?: unknown[]; status?: unknown } | null
+  const n = r?.meetings?.length ?? 0
+  const found = `Found ${n} meeting${n === 1 ? '' : 's'}`
+  if (r?.status === 'partial') return n ? `${found} · results may be incomplete` : 'No meetings yet · results may be incomplete'
+  if (n === 0) return 'No meetings matched'
+  return r?.status === 'more' ? `${found} · more to see` : found
+}
+
 /** `list_todos`: "Fetched 4 action items". */
 function actionItemsLine(c: ChatToolCall, phase: ToolPhase): string {
   const kind = str(c.args['created_after']) ? 'recent action items' : 'action items'
@@ -205,6 +217,7 @@ export function toolLine(c: ChatToolCall, phase: ToolPhase): string {
   if (CALENDAR_SEARCH.has(c.name)) return calendarLine(c, phase)
   if (PEOPLE_TOOLS.has(c.name)) return peopleLine(c, phase)
   if (c.name === 'list_todos') return actionItemsLine(c, phase)
+  if (c.name === 'findMeetings') return findMeetingsLine(c, phase)
   if (c.name === 'checkAvailability') return availabilityLine(c, phase)
   if (c.name === 'readPersonCalendar') return personCalendarLine(c, phase)
   if (c.mcpToolLabel || c.name.startsWith('mcp__')) {
@@ -228,7 +241,7 @@ export function toolLine(c: ChatToolCall, phase: ToolPhase): string {
 
 export function toolGroup(name: string): 'notes' | 'search' | 'calendar' | 'generic' {
   if (name === 'editNote' || name === 'rewriteNote' || name === 'readMeetings' || name === 'readTranscript') return 'notes'
-  if (name.startsWith('search') || name === 'listMeetings' || name === 'gatherMeetingContext' || name === 'getMeetings') return 'search'
+  if (name.startsWith('search') || name === 'findMeetings' || name === 'listMeetings' || name === 'gatherMeetingContext' || name === 'getMeetings') return 'search'
   if (name === 'getCurrentTime' || (SCHEDULING_TOOLS as readonly string[]).includes(name)) return 'calendar'
   return 'generic'
 }

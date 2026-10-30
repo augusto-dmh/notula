@@ -41,6 +41,7 @@ import type {
 import type { CaptionsState } from './types/captions'
 import type {
   CalendarGrant,
+  CalendarRoom,
   CalendarInfo,
   CalendarSource,
   CalendarSourcesState,
@@ -807,6 +808,8 @@ export interface InvokeChannels {
   'calendar:set-grant': [{ sourceId: string; grant: CalendarGrant; enabled: boolean }, CalendarSource]
   /** Google's event palette for an account (color id → hex); a built-in copy when it can't be read. */
   'calendar:event-colors': [{ sourceId: string }, Record<string, string>]
+  /** Rooms for a draft: from past events, or the Google Workspace directory (`rooms-read`); `slot` marks the busy ones. */
+  'calendar:rooms': [{ sourceId: string; source: 'history' | 'directory'; slot?: { start: IsoTime; end: IsoTime } }, { rooms: CalendarRoom[]; error: string | null }]
   'blocks:get': [{ blockId: string }, WorkflowBlock]
   'blocks:list': [{ sourceType: 'chat_thread'; sourceId: string }, WorkflowBlock[]]
   'blocks:update': [BlockUpdate, WorkflowBlock | { stale: true }]
@@ -1444,6 +1447,7 @@ export interface NotulaApi {
     onChanged: PushMember<'calendar:changed'>
     setGrant: InvokeMember<'calendar:set-grant'>
     eventColors: InvokeMember<'calendar:event-colors'>
+    rooms: InvokeMember<'calendar:rooms'>
   }
   people: {
     participants: InvokeMember<'people:participants'>

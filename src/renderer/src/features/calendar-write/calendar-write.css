@@ -457,3 +457,133 @@
     opacity: 0;
   }
 }
+
+/* Optional guests, quiet changes and rooms. */
+
+.cw-tag {
+  border: 1px solid var(--border);
+  background: none;
+  border-radius: 999px;
+  padding: 0 6px;
+  font: inherit;
+  font-size: 10px;
+  line-height: 16px;
+  color: var(--fg-3);
+  cursor: pointer;
+}
+
+/* A required guest's tag shows on hover or keyboard focus, so the chips stay quiet. */
+button.cw-tag:not(.is-on) {
+  opacity: 0;
+}
+
+.cw-chip:hover button.cw-tag,
+button.cw-tag:focus-visible {
+  opacity: 1;
+}
+
+.cw-tag.is-on {
+  border-color: transparent;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.cw-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 106px;
+  font-size: var(--text-sm);
+  color: var(--fg-2);
+}
+
+.cw-room-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.cw-rooms {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 8px);
+  background: var(--surface-2);
+  font-size: var(--text-sm);
+}
+
+.cw-rooms__tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.cw-rooms__tab {
+  border: 0;
+  background: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font: inherit;
+  font-size: var(--text-xs);
+  color: var(--fg-2);
+  cursor: pointer;
+}
+
+.cw-rooms__tab.is-on {
+  background: var(--surface-3);
+  color: var(--fg);
+}
+
+.cw-rooms__ask {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cw-rooms__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.cw-rooms__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: 0;
+  background: none;
+  padding: 4px 6px;
+  border-radius: 6px;
+  font: inherit;
+  text-align: left;
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.cw-rooms__row:hover,
+.cw-rooms__row:focus-visible {
+  background: var(--surface-3);
+}
+
+.cw-rooms__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cw-free {
+  font-size: var(--text-xs);
+  color: var(--success);
+  background: var(--success-soft);
+  border-radius: 999px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}

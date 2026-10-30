@@ -36,7 +36,7 @@ import {
 } from './secrets'
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-const GRANTS: readonly CalendarGrant[] = ['calendar-write', 'mail-read', 'mail-send', 'files-read']
+const GRANTS: readonly CalendarGrant[] = ['calendar-write', 'mail-read', 'mail-send', 'files-read', 'rooms-read']
 const CLIENT_VALUE = /^[\x21-\x7E]{1,512}$/
 
 export type RefreshTrigger =
