@@ -101,7 +101,10 @@ export function voiceEvidence(
     const cos = maxCosine(c.vector, space.exemplars)
     if (cos === null) continue
     if (space.channel === c.channel) {
-      if (!same || cos > same.cosine) same = { cosine: cos, space }
+      // Equal cosines: the space with more confirmations, so the gallery's order doesn't matter.
+      if (!same || cos > same.cosine || (cos === same.cosine && space.confirmations > same.space.confirmations)) {
+        same = { cosine: cos, space }
+      }
     } else if (cross === null || cos > cross) {
       cross = cos
     }

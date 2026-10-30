@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // The decision module: evidence per (cluster, candidate), fusion
 // from the calibration, a one-to-one assignment with an unknown option per cluster (autos take
-// theirs from one that only voice able to name automatically can steer), and the bands. Pure:
-// no I/O and no logging, so the job, relabel and the benchmark all drive it. Its inputs and
-// outputs never leave main.
+// theirs from a second assignment that ignores voice which can't name automatically), and the
+// bands. Pure: no I/O and no logging, so the job, relabel and the benchmark all drive it. Its
+// inputs and outputs never leave main.
 
 import type {
   SpeakerAutoSource,
@@ -29,7 +29,8 @@ import {
   sigmoid,
   voiceEvidence,
   type EvidenceInput,
-  type PairEvidence
+  type PairEvidence,
+  type VoiceEvidence
 } from './decide/evidence'
 
 /** One meeting-app tile over a system cluster's `att`-stamped words. */
@@ -170,7 +171,10 @@ export function decide(input: DecideInput, calibration: SpeakerCalibrationState)
   // Evidence and fusion per allowed pair.
   const states: ClusterState[] = clusters.map((c) => {
     const cond = conditionFor(calibration, c.channel, c.language, c.cleanMs)
-    const mappings = input.llm.filter((m) => m.clusterKey === c.key)
+    // Sorted, so the shown name of a self-introduced one doesn't depend on the input's order.
+    const mappings = input.llm
+      .filter((m) => m.clusterKey === c.key)
+      .sort((a, b) => compare(a.name, b.name) || compare(a.candidateId ?? '', b.candidateId ?? ''))
     const pairs = new Map<string, PairEvidence>()
     for (const j of candidates) {
       if (!pairAllowed(c, j, negatives)) continue
@@ -181,7 +185,7 @@ export function decide(input: DecideInput, calibration: SpeakerCalibrationState)
       const conversation = cues.length > 0 && !elimination
       const f = fuse({ voice, app, conversation, elimination }, opts.fusion)
       if (!f) continue
-      const own = voice && !voiceMayName(c, j, input) ? fuse({ voice: null, app, conversation, elimination }, opts.fusion) : f
+      const own = voice && !voiceCanAuto(cond, c, j, voice, input, voiceOn) ? fuse({ voice: null, app, conversation, elimination }, opts.fusion) : f
       pairs.set(j.id, {
         id: j.id,
         candidate: j,
@@ -238,7 +242,8 @@ export function decide(input: DecideInput, calibration: SpeakerCalibrationState)
   }
   const assigned = assign((e) => e.fused)
   // Autos come from an assignment that voice which can't name automatically doesn't steer:
-  // otherwise a non-attendee's voice could move their tile onto a cluster the app rule then names.
+  // otherwise a voice that can't name (a non-attendee's, or one under a condition with voice
+  // autos off) could move a tile onto a cluster the app rule then names.
   const steered = states.some((s) => [...s.pairs.values()].some((e) => e.autoFused !== e.fused))
   const autoAssigned = steered ? assign((e) => e.autoFused) : assigned
   states.forEach((s, i) => {
@@ -315,7 +320,9 @@ function appAuto(s: ClusterState, j: DecideCandidate): boolean {
   if (!j.tileIds.includes(top.participantId)) return false
   // The LLM has no accepted mapping of this cluster to a different candidate.
   if (s.mappings.some((m) => !mappingRefersTo(m, j))) return false
-  // No voice evidence at suggest level or above for a different person.
+  // No voice evidence at suggest level or above for a different person. Any voice counts here,
+  // also one that can't name automatically: it can only take an auto away, never give or move
+  // one, and the conflict stays visible as a two-candidate suggestion.
   for (const e of s.pairs.values()) {
     if (e.id !== j.id && e.voice && e.voice.p >= s.cond.tauSuggest) return false
   }
@@ -332,14 +339,11 @@ function voiceAuto(
 ): boolean {
   const c = s.cluster
   const e = s.pairs.get(j.id)
-  if (!voiceOn || !e?.voice || e.voice.crossChannel || !e.voice.space) return false
-  if (!voiceMayName(c, j, input)) return false
-  if (c.cleanMs < L.autoMinSpeechMs) return false
-  if (e.voice.space.confirmations < L.autoMinConfirmations) return false
-  if (!s.cond.autoEnabled) return false
+  if (!e?.voice || !voiceCanAuto(s.cond, c, j, e.voice, input, voiceOn)) return false
   if (e.p < s.cond.tauAuto) return false
   const floorP = s.cond.floor
-  // The margin to the runner-up person.
+  // The margin to the runner-up person. Both margins compare full scores, voice that can't name
+  // included: like the app rule's veto, it can only hold an auto back.
   let runnerUp = floorP
   for (const o of s.pairs.values()) if (o.id !== j.id) runnerUp = Math.max(runnerUp, o.p)
   if (!clearsMargin(e.p - runnerUp, s.cond)) return false
@@ -360,6 +364,25 @@ function voiceAuto(
   // … or an accepted LLM mapping to another candidate.
   if (s.mappings.some((m) => !mappingRefersTo(m, j))) return false
   return true
+}
+
+/**
+ * Every gate of a voice auto but the score: could this voice name the candidate automatically
+ * if it scored high enough? Only such voice counts in the assignment that picks the autos.
+ */
+function voiceCanAuto(
+  cond: DecideCondition,
+  c: DecideCluster,
+  j: DecideCandidate,
+  voice: VoiceEvidence,
+  input: DecideInput,
+  voiceOn: boolean
+): boolean {
+  if (!voiceOn || voice.crossChannel || !voice.space) return false
+  if (!voiceMayName(c, j, input)) return false
+  if (c.cleanMs < L.autoMinSpeechMs) return false
+  if (voice.space.confirmations < L.autoMinConfirmations) return false
+  return cond.autoEnabled
 }
 
 /** Whose voice may name them automatically: self on the mic, or an attendee with an agreement. */

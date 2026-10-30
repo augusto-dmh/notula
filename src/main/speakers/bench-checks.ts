@@ -6,12 +6,14 @@
 // - `contradictingMappings`: A7's mock reply. Every labelled cluster gets a candidate that
 //   isn't its own person, one candidate per cluster (the gate drops a name given twice),
 //   system clusters first, as only they can be named by the meeting app.
-// - `letterLeaks`: A15. Which words of an unnamed cluster (one with a suggestion row) an
-//   output prints under anything but the cluster's letter. Each output line is aligned back
-//   to the note's words, so a name on another cluster's words (the owner's Me, or an auto
-//   cluster's word that keeps another tile's name) is not counted against this one.
+// - `lineLeaks`, `chunkLeaks`: A15. Which words of an unnamed cluster (one with a suggestion
+//   row) an output prints under anything but the cluster's letter. Each output line is aligned
+//   back to the note's words, so a name on another cluster's words (the owner's Me, or an auto
+//   cluster's word that keeps another tile's name) is not counted against this one. A line
+//   that can't be aligned still counts as a leak when it carries a row's suggested name that
+//   no other cluster's words print; `unalignedShare` is the share A15 tolerates.
 
-import { speakerIdentities, wordIdentityKeys } from '@shared/lib/speakers'
+import { sameSpeakerName, speakerIdentities, wordIdentityKeys } from '@shared/lib/speakers'
 import { DELETED_CHUNK_MARKER, type TranscriptChunk } from '@shared/types/transcript'
 
 // ---------- A7: the contradicting reply ----------
@@ -86,7 +88,16 @@ export interface LeakCount {
   leaks: number
   /** Output tokens that could not be placed on a word of the note (a word a chat window cut, else none). */
   unaligned: number
+  /** Output tokens read, placed or not (per-chunk outputs: entries). */
+  tokens: number
 }
+
+/**
+ * The unaligned share of an output's tokens A15 tolerates: a chat window cuts a turn with no
+ * sentence end mid-word, which leaves the two pieces unaligned. The prompt and webhook outputs
+ * print whole words, so they get none.
+ */
+export const CHAT_UNALIGNED_SHARE = 0.02
 
 /** `Label: text` lines; anything else (a window's header, a gap line) is not a speaker line. */
 export function labelledLines(text: string): OutputLine[] {
@@ -140,23 +151,66 @@ function lettersOf(chunks: readonly TranscriptChunk[], rowKeys: ReadonlySet<stri
   return out
 }
 
+/**
+ * The labels the note prints on words that aren't a row cluster's (an auto or the owner's name,
+ * a kept tile name), and names the user confirmed on any word, folded: an unaligned line under
+ * one of them may be any cluster's, so only another row name on it is surely a leak.
+ */
+function otherLabels(chunks: readonly TranscriptChunk[], rowKeys: ReadonlySet<string>): Set<string> {
+  const out = new Set<string>()
+  for (const t of speakerIdentities(chunks, { live: false }).turns) {
+    if (t.identityKey && rowKeys.has(t.identityKey)) {
+      if (t.nameSource === 'user' && t.name) out.add(fold(t.name))
+      continue
+    }
+    out.add(fold(t.label))
+    if (t.name) out.add(fold(t.name))
+  }
+  return out
+}
+
+/**
+ * Row clusters whose words print a name anyway: an auto cluster (stale `auto_spk`) with a row
+ * of this pass. `lettersOf` leaves them out of the word count, so A15 fails on them apart.
+ */
+export function namedRows(chunks: readonly TranscriptChunk[], rowKeys: ReadonlySet<string>): number {
+  return speakerIdentities(chunks, { live: false }).identities.filter((i) => rowKeys.has(i.key) && i.state === 'auto').length
+}
+
 function tally(acc: LeakCount, w: Word, label: string, letters: ReadonlyMap<string, string>): void {
   const letter = w.identity ? letters.get(w.identity) : undefined
   if (!letter) return
   acc.words++
-  if (label !== letter && !w.confirmed) acc.leaks++
+  // A confirmed word prints its confirmed name (with the letter when the name is shared).
+  if (label !== letter && !(w.confirmed && sameSpeakerName(label.replace(/ \([^)]*\)$/, ''), w.confirmed))) acc.leaks++
 }
 
 /**
  * Prompt and chat outputs: each line's words are found in the note's words, in order (a line
  * is a run of consecutive words; an output may leave words out, never reorder them). A chat
  * window cuts a turn longer than a window mid-word when it has no sentence end, so a line may
- * start or end with a piece of a word: that piece is unaligned, the rest still counts.
+ * start or end with a piece of a word: that piece is unaligned, the rest still counts. The
+ * tokens of a line that can't be placed are leaks when its label is one of `rowNames` (the
+ * rows' suggested names) and no other cluster's words print it.
  */
-export function lineLeaks(chunks: readonly TranscriptChunk[], rowKeys: ReadonlySet<string>, lines: readonly OutputLine[]): LeakCount {
+export function lineLeaks(
+  chunks: readonly TranscriptChunk[],
+  rowKeys: ReadonlySet<string>,
+  lines: readonly OutputLine[],
+  rowNames: readonly string[] = []
+): LeakCount {
   const letters = lettersOf(chunks, rowKeys)
   const words = noteWords(chunks)
-  const acc: LeakCount = { words: 0, leaks: 0, unaligned: 0 }
+  const others = otherLabels(chunks, rowKeys)
+  const named = new Set(rowNames.map(fold).filter((n) => !others.has(n)))
+  const acc: LeakCount = { words: 0, leaks: 0, unaligned: 0, tokens: 0 }
+  const lost = (label: string, n: number): void => {
+    acc.unaligned += n
+    if (n && named.has(fold(label))) {
+      acc.words += n
+      acc.leaks += n
+    }
+  }
   const find = (tokens: readonly string[], from: number): number => {
     const head = tokens.slice(0, 3)
     if (!head.length) return -1
@@ -167,21 +221,22 @@ export function lineLeaks(chunks: readonly TranscriptChunk[], rowKeys: ReadonlyS
   for (const line of lines) {
     let tokens = line.text.split(/\s+/).filter(Boolean)
     if (!tokens.length) continue
+    acc.tokens += tokens.length
     let start = find(tokens, at)
     if (start < 0 && tokens.length > 1) {
       start = find(tokens.slice(1), at)
       if (start >= 0) {
-        acc.unaligned++
+        lost(line.label, 1)
         tokens = tokens.slice(1)
       }
     }
     if (start < 0) {
-      acc.unaligned += tokens.length
+      lost(line.label, tokens.length)
       continue
     }
     let i = 0
     for (; i < tokens.length && words[start + i]?.text === tokens[i]; i++) tally(acc, words[start + i] as Word, line.label, letters)
-    acc.unaligned += tokens.length - i
+    lost(line.label, tokens.length - i)
     at = start + i
   }
   return acc
@@ -196,7 +251,7 @@ export function chunkLeaks(chunks: readonly TranscriptChunk[], rowKeys: Readonly
   const first = new Map<string, Word>()
   for (const w of noteWords(chunks)) if (!first.has(w.chunkId)) first.set(w.chunkId, w)
   const finals = chunks.filter((c) => c.is_final && c.text.trim())
-  const acc: LeakCount = { words: 0, leaks: 0, unaligned: 0 }
+  const acc: LeakCount = { words: 0, leaks: 0, unaligned: 0, tokens: entries.length }
   entries.forEach((e, n) => {
     const c = finals[n]
     if (!c || c.text !== e.text) {

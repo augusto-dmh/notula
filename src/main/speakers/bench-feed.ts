@@ -45,7 +45,17 @@ import { loadOrCreateKey } from '../storage/keyfile'
 import { DB_FILE } from '../storage/protocol'
 import { getTranscriptionManager } from '../transcription/manager'
 import { getAttribution } from './attribution'
-import { chunkLeaks, contradictingMappings, labelledLines, lineLeaks, type LeakCount, type MockCandidate, type MockCluster } from './bench-checks'
+import {
+  CHAT_UNALIGNED_SHARE,
+  chunkLeaks,
+  contradictingMappings,
+  labelledLines,
+  lineLeaks,
+  namedRows,
+  type LeakCount,
+  type MockCandidate,
+  type MockCluster
+} from './bench-checks'
 import { calibrationState, getCalibration, parseCalibration, type SpeakerCalibrationState } from './calibration'
 import { decideCluster, noteCandidates, noteLanguage, passClusters, pendingByCluster, tileKinds, type PassClusterStats } from './candidates'
 import { decide, type DecideCandidate, type DecideCluster, type DecideLlmMapping, type DecideVoiceSpace } from './decide'
@@ -326,8 +336,11 @@ class Bench {
   private mockUrl = ''
   private mockMode: 'abstain' | 'contradict' = 'abstain'
   private mockNote: { noteId: string; feedStartMs: number; labels: LabelSpan[] } | null = null
-  /** The clusters the contradicting reply named as someone else, by note. */
-  private readonly contradicted = new Map<string, Set<string>>()
+  /**
+   * The contradicting reply, by note: the clusters it named as someone else, the `CANDIDATES:`
+   * lines it couldn't read, and whether it found no pass to read.
+   */
+  private readonly contradicted = new Map<string, { keys: Set<string>; unparsed: number; noPass: boolean }>()
   /** The note the running feed created. */
   private feeding: string | null = null
   mockCalls = 0
@@ -515,6 +528,7 @@ class Bench {
     const target = this.mockNote
     if (this.mockMode !== 'contradict' || !target) return { mappings: [], extra_speakers_likely: null }
     const cands: MockCandidate[] = []
+    let unparsed = 0
     let inCands = false
     for (const line of prompt.split('\n')) {
       if (line.startsWith('CANDIDATES:')) {
@@ -522,14 +536,19 @@ class Bench {
         continue
       }
       if (inCands) {
+        if (!line.startsWith('- ')) break
         const m = /^- \[(c\d+)\] (.*?)(?: <([^>]*)>)?$/.exec(line)
-        if (!m) break
-        cands.push({ id: m[1] as string, name: (m[2] ?? '').trim(), email: (m[3] ?? '').toLowerCase() })
+        // A line the mock can't read would leave a cluster uncontradicted: A7 fails on it.
+        if (!m) unparsed++
+        else cands.push({ id: m[1] as string, name: (m[2] ?? '').trim(), email: (m[3] ?? '').toLowerCase() })
       }
     }
     const chunks = (await this.ctx.storage.getTranscript(target.noteId)).filter((c) => c.is_final)
     const passId = currentPassId(chunks)
-    if (!passId) return { mappings: [], extra_speakers_likely: null }
+    if (!passId) {
+      this.contradicted.set(target.noteId, { keys: new Set(), unparsed, noPass: true })
+      return { mappings: [], extra_speakers_likely: null }
+    }
     const stats = passClusters(chunks, passId)
     const { identities } = speakerIdentities(chunks, { live: false })
     const segs = this.segments(chunks, target.feedStartMs)
@@ -542,7 +561,7 @@ class Bench {
       clusters.push({ key: id.key, label: id.letterLabel, channel: s.channel, speechMs: s.speechMs, truth: p ? { name: p.name, email: p.email } : null })
     }
     const planned = contradictingMappings(clusters, cands)
-    this.contradicted.set(target.noteId, new Set(planned.map((m) => m.key)))
+    this.contradicted.set(target.noteId, { keys: new Set(planned.map((m) => m.key)), unparsed, noPass: false })
     const mappings = planned.map(({ label, candidate }) => ({
       label,
       candidate: candidate.id,
@@ -1359,6 +1378,12 @@ class Bench {
       let contradictedDropped = 0
       let contradictedKept = 0
       let uncontradicted = 0
+      // The contradict half proves something only when the mock named a baseline auto's cluster.
+      // It may name none of a re-feed's clusters only when no candidate is another person
+      // (`nothingToName`) or the LLM step never ran (`notAsked`); otherwise the mock is broken.
+      let mockBroken = 0
+      let nothingToName = 0
+      let notAsked = 0
       for (const r of refeeds) {
         const base = baseline.get(r.base)
         if (!base || (r.kind !== 'no-app' && r.kind !== 'contradict')) continue
@@ -1367,7 +1392,13 @@ class Bench {
           const t = base.truth.get(k)
           if (t && b.band === 'auto') autoBy.set(t, b.src)
         }
-        const sent = this.contradicted.get(r.dump.noteId) ?? new Set<string>()
+        const plan = r.kind === 'contradict' ? this.contradicted.get(r.dump.noteId) : undefined
+        const sent = plan?.keys ?? new Set<string>()
+        if (r.kind === 'contradict' && autoBy.size) {
+          if (!plan) notAsked++
+          else if (plan.noPass || plan.unparsed || (sent.size && !r.dump.clusters.some((c) => sent.has(c.key)))) mockBroken++
+          else if (!sent.size) nothingToName++
+        }
         for (const c of r.dump.clusters) {
           const t = truthOf(c.segments, c.channel, r.meeting.labels)
           if (r.kind === 'contradict' && sent.has(c.key)) {
@@ -1384,8 +1415,15 @@ class Bench {
           }
         }
       }
-      const any = appDropped + appKept + contradictedDropped + contradictedKept
-      this.check('A7:app-removed+contradicted', any ? (appKept || contradictedKept ? 'fail' : 'pass') : 'n/a', { appDropped, appKept, contradictedDropped, contradictedKept, uncontradicted })
+      this.check('A7:app-removed', appDropped + appKept ? (appKept ? 'fail' : 'pass') : 'n/a', { appDropped, appKept })
+      this.check('A7:contradicted', contradictedKept || mockBroken ? 'fail' : contradictedDropped ? 'pass' : 'n/a', {
+        contradictedDropped,
+        contradictedKept,
+        uncontradicted,
+        mockBroken,
+        nothingToName,
+        notAsked
+      })
     }
     {
       // A12: no elimination suggestion when speakers ≠ attendees + the user.
@@ -1411,13 +1449,17 @@ class Bench {
       const { buildBody } = await import('../webhooks')
       const readTranscript = P2_TOOLS.find((t) => t.def.name === 'readTranscript')
       // Word by word: a name on another cluster's words (the owner's Me, an auto cluster's word
-      // that keeps another tile's name) is not this cluster's.
+      // that keeps another tile's name) is not this cluster's. A word that can't be aligned
+      // can't be checked, so an output with unaligned words fails: only chat windows cut words,
+      // and chat may leave `CHAT_UNALIGNED_SHARE` of its words unaligned.
       let checked = 0
       let leaks = 0
       let letters = 0
       let words = 0
-      let unaligned = 0
+      let rowsNamed = 0
       const leaksBy: Record<string, number> = { prompt: 0, promptNoSeparation: 0, chat: 0, webhook: 0 }
+      const unalignedBy: Record<string, number> = { prompt: 0, promptNoSeparation: 0, chat: 0, webhook: 0 }
+      const tokensBy: Record<string, number> = { prompt: 0, promptNoSeparation: 0, chat: 0, webhook: 0 }
       const s = await this.ctx.settings.getAll()
       for (const id of [...live.map((n) => n.noteId), ...refeeds.map((r) => r.dump.noteId)]) {
         const chunks = await this.ctx.storage.getTranscript(id)
@@ -1425,6 +1467,7 @@ class Bench {
         const rows = (await this.ctx.storage.listSpeakerNameSuggestions(id)).filter((r) => r.passId === passId)
         if (!rows.some((r) => r.band === 'suggest' || r.band === 'tie')) continue
         const rowKeys = new Set(rows.map((r) => r.identityKey))
+        const rowNames = rows.flatMap((r) => r.candidates.map((c) => c.name))
         const note = await this.ctx.storage.getNote(id)
         const counts: Record<string, LeakCount> = {}
         let promptLines: string[] = []
@@ -1435,7 +1478,7 @@ class Bench {
           const { vars } = buildPromptInputs({ note, chunks, settings, language: s['asr.language'], locale: app.getLocale() })
           const lines = labelledLines(String(vars['transcript'] ?? ''))
           if (kind === 'prompt') promptLines = lines.map((l) => l.label)
-          counts[kind] = lineLeaks(chunks, rowKeys, lines)
+          counts[kind] = lineLeaks(chunks, rowKeys, lines, rowNames)
         }
         if (readTranscript) {
           const env = {
@@ -1450,21 +1493,34 @@ class Bench {
             scanned: new Map(),
             windows: new Map()
           }
-          counts['chat'] = lineLeaks(chunks, rowKeys, labelledLines((await runLocalTool(readTranscript, { meetingId: id }, env)).content))
+          counts['chat'] = lineLeaks(chunks, rowKeys, labelledLines((await runLocalTool(readTranscript, { meetingId: id }, env)).content), rowNames)
         }
         const body = await buildBody(this.ctx, { eventId: 'speaker-bench', eventType: 'note.summarized', occurredAt: new Date().toISOString(), note, includeTranscript: true, automation: null, test: true })
         const transcript = (JSON.parse(body) as { note?: { transcript?: { speaker: string; text: string }[] } }).note?.transcript ?? []
         counts['webhook'] = chunkLeaks(chunks, rowKeys, transcript)
         checked++
+        rowsNamed += namedRows(chunks, rowKeys)
         for (const [kind, c] of Object.entries(counts)) {
           words += c.words
-          unaligned += c.unaligned
           leaks += c.leaks
           leaksBy[kind] = (leaksBy[kind] ?? 0) + c.leaks
+          unalignedBy[kind] = (unalignedBy[kind] ?? 0) + c.unaligned
+          tokensBy[kind] = (tokensBy[kind] ?? 0) + c.tokens
         }
         if (promptLines.some((l) => /^Speaker [A-Z]+$/.test(l))) letters++
       }
-      this.check('A15', words ? (leaks ? 'fail' : 'pass') : 'n/a', { notes: checked, words, leaks, leaksBy, unaligned, notesWithLetters: letters })
+      const misaligned = Object.keys(unalignedBy).filter((k) => (unalignedBy[k] ?? 0) > (k === 'chat' ? CHAT_UNALIGNED_SHARE * (tokensBy[k] ?? 0) : 0))
+      this.check('A15', leaks || rowsNamed || misaligned.length ? 'fail' : words ? 'pass' : 'n/a', {
+        notes: checked,
+        words,
+        leaks,
+        leaksBy,
+        unalignedBy,
+        tokensBy,
+        misaligned,
+        rowsNamed,
+        notesWithLetters: letters
+      })
     }
 
     // A6 (relabel): no confirmed word changes, no LLM call, no auto lowered.

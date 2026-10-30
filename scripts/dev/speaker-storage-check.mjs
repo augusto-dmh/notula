@@ -22,10 +22,12 @@
 //    Forget all (each proven by a byte scan of a decrypted copy, free pages included, and an
 //    empty WAL), no blending across model ids, the sweeps, Delete person, the People list join
 //    and the logs. Also the pending request's span: the speaker's longest turn on its channel.
-// 4. The speaker bench's A7 and A15 on synthetic notes: an app auto drops under a contradicting
-//    mapping (the production `decide`), the bench's mock names the system clusters as someone
-//    else, and the prompt, chat and webhook outputs print a cluster with a suggestion row as
-//    its letter, word by word, while a real leak is still counted.
+// 4. The speaker bench's A3, A7 and A15 on synthetic notes: a voice that can't name its person
+//    automatically (a non-attendee's, or one with no calibrated condition, voice autos off, a
+//    space on the other channel, one confirmation, under 30 s) moves no auto (the production
+//    `decide`), an app auto drops under a contradicting mapping, the bench's mock names the
+//    system clusters as someone else, and the prompt, chat and webhook outputs print a cluster
+//    with a suggestion row as its letter, word by word, while a real leak is still counted.
 //
 // Exits 1 on any failure. `--keep` keeps the scratch folder.
 
@@ -264,18 +266,18 @@ function benchChecks(NEW) {
       channel: 'system', language: 'pt', bucket, autoEnabled: bucket === '>=30s', tauAuto: 0.97, tauSuggest: 0.75, margin: 0.1, tieMargin: 0.03, logistic: { a: 11, b: -6 }
     }))
     const calibration = { voice: true, file: { modelSha: 'm', reportHash: null, createdAt: '2026-10-30T00:00:00.000Z', benchVersion: 0, conditions } }
-    const space = (personId, i) => ({ personId, channel: 'system', confirmations: 3, exemplars: [voiceOf(i)] })
-    const run = (attendee, gallery) =>
+    const space = (personId, i, channel = 'system', confirmations = 3) => ({ personId, channel, confirmations, exemplars: [voiceOf(i)] })
+    const run = (attendee, gallery, { cal = calibration, r1CleanMs = 90_000 } = {}) =>
       new Map(
         NEW.decide.decide({
-          noteId: 'n', passId: 'p1', modelId: 'm', voices: true, selfVoice: true, hasLinkedEvent: true,
+          noteId: 'n', passId: 'p1', modelId: cal.file.modelSha, voices: true, selfVoice: true, hasLinkedEvent: true,
           clusters: [
-            cluster('r1', 90_000, [tile(0.8), tile(0.1, 'Bruno Lima')], voiceOf(1)),
+            { ...cluster('r1', 90_000, [tile(0.8), tile(0.1, 'Bruno Lima')], voiceOf(1)), cleanMs: r1CleanMs },
             cluster('r2', 10_000, [tile(1)], voiceOf(5)),
             cluster('r3', 60_000, [], voiceOf(2))
           ],
           candidates: [carla(attendee), bruno], gallery, negatives: [], llm: []
-        }, calibration).clusters.map((d) => [d.key.slice(5), d])
+        }, cal).clusters.map((d) => [d.key.slice(5), d])
       )
     const before = run(false, [space('bruno', 2)])
     const after = run(false, [space('bruno', 2), space('carla', 1)])
@@ -285,6 +287,27 @@ function benchChecks(NEW) {
     check('A3: a non-attendee\'s remembered voice turns no suggestion automatic, not even one her tile agrees with', [...before].every(([k, d]) => d.band === 'auto' || after.get(k).band !== 'auto'), { before: bands(before), after: bands(after) })
     check('A3: her voice still suggests her on her own turn', after.get('r1').band === 'suggest' && after.get('r1').candidates[0]?.personId === 'carla' && after.get('r1').voiceMatched.includes('carla'), bands(after))
     check('A3: as an attendee, her voice names r1 automatically', attending.get('r1').band === 'auto' && attending.get('r1').personId === 'carla', bands(attending))
+    // An attendee whose voice can't name her automatically here may not move her tile either:
+    // each gate of a voice auto but the score also keeps her voice out of the auto assignment.
+    const rises = (before, after) => [...after].filter(([k, d]) => d.band === 'auto' && (before.get(k).band !== 'auto' || before.get(k).personId !== d.personId)).map(([k]) => k)
+    const blocked = [
+      ['no condition in the file', [space('carla', 1)], { cal: { voice: true, file: { ...calibration.file, conditions: [] } } }],
+      ['only a space on the other channel', [space('carla', 1, 'mic')], {}],
+      ['one confirmation', [space('carla', 1, 'system', 1)], {}],
+      ['under 30 s of clean speech on her turn', [space('carla', 1)], { r1CleanMs: 25_000 }]
+    ]
+    for (const [why, voice, opts] of blocked) {
+      const b = run(true, [space('bruno', 2)], opts)
+      const a = run(true, [space('bruno', 2), ...voice], opts)
+      check(`A3: an attendee's voice with ${why} changes no automatic name`, rises(b, a).length === 0, { before: bands(b), after: bands(a) })
+    }
+    // The shipped calibration has every voice auto off: there, no voice gives or moves an auto.
+    const shipped = JSON.parse(readFileSync(join(ROOT, 'resources/speakers/calibration.json'), 'utf8'))
+    const cal = { voice: true, file: shipped }
+    const off = shipped.conditions.length > 0 && shipped.conditions.every((c) => !c.autoEnabled)
+    const sb = run(true, [], { cal })
+    const sa = run(true, [space('bruno', 2), space('carla', 1)], { cal })
+    check('A3: under the shipped calibration (voice autos off), remembered voices give or move no automatic name', off && rises(sb, sa).length === 0, { autoEnabledOff: off, before: bands(sb), after: bands(sa) })
     // The app rule alone, with no one remembered: a dominant tile on one cluster stays automatic.
     const alone = new Map(NEW.decide.decide({
       noteId: 'n', passId: 'p1', modelId: 'm', voices: true, selfVoice: true, hasLinkedEvent: true,
@@ -392,6 +415,22 @@ function benchChecks(NEW) {
     )
     // Ana's long turn is cut mid-word (the owner's too): only the cut words go unchecked.
     check('A15: a chat window that cuts a word leaves only the pieces unaligned', counts.chat.words < counts.prompt.words && counts.chat.words >= counts.prompt.words - 4 && counts.chat.unaligned <= 12, counts.chat)
+    check(
+      'A15: the prompt and webhook outputs align every word; chat stays within its tolerance',
+      counts.prompt.unaligned === 0 && counts.promptNoSeparation.unaligned === 0 && counts.webhook.unaligned === 0 && counts.chat.unaligned > 0 && counts.chat.unaligned <= BC.CHAT_UNALIGNED_SHARE * counts.chat.tokens,
+      { tolerance: BC.CHAT_UNALIGNED_SHARE, counts }
+    )
+    // A line that can't be aligned still counts under a row's name that no other cluster prints.
+    // Carla's name is also on two of Bruno's words, so a line under it may be his.
+    const rowNames = [...rows.flatMap((r) => r.candidates.map((c) => c.name)), 'Dana Example']
+    const lost = BC.lineLeaks(chunks, rowKeys, [...lines.prompt, { label: 'Carla Dias', text: 'cut pieces' }, { label: 'Dana Example', text: 'cut pieces' }], rowNames)
+    check('A15: an unaligned line under a row\'s suggested name is a leak, unless another cluster prints that name', lost.unaligned === 4 && lost.leaks === 2, lost)
+    // A row cluster whose words still carry an automatic name prints it: counted apart.
+    const stale = chunks.map((c) => (c.providerDetails.words[0]?.merged_spk === 'r3' ? { ...c, providerDetails: { ...c.providerDetails, words: c.providerDetails.words.map((w) => ({ ...w, auto_spk: 'Carla Dias', auto_pid: 'carla', auto_src: 'app' })) } } : c))
+    check('A15: a row cluster named automatically anyway is counted', BC.namedRows(chunks, rowKeys) === 0 && BC.namedRows(stale, rowKeys) === 1, { clean: BC.namedRows(chunks, rowKeys), stale: BC.namedRows(stale, rowKeys) })
+    // Ana's confirmed word may go out under her name only.
+    const asBruno = BC.lineLeaks(chunks, rowKeys, lines.prompt.map((l) => (/\br2(w|-long)/.test(l.text) ? { ...l, label: 'Bruno Lima' } : l)))
+    check('A15: a confirmed word printed under another name is a leak', asBruno.leaks === 430, asBruno)
 
     // A real leak is still found: Ana's turn printed under her suggested name, in each output kind.
     const leakyLines = lines.prompt.map((l) => (/\br2(w|-long)/.test(l.text) ? { ...l, label: 'Ana Souza' } : l))
