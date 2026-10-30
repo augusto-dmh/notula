@@ -102,6 +102,8 @@ export interface Settings {
   'capture.restartOnStillHere': boolean
   /** Word-level speaker turns ("Separate speakers (on-device)"). On by default: speaker profiles need it. */
   'transcription.diarization': boolean
+  /** Labs: multi-language cloud transcription is told the OS preferred languages. */
+  'transcription.languageHints': boolean
   'asr.deepgram.multilingualVersion': DeepgramMultilingualVersion
   'asr.assemblyai.multilingualModel': AssemblyAiMultilingualModel
   /** Favourite template ids. */
@@ -433,6 +435,7 @@ export const DEFAULT_SETTINGS: Settings = {
   'capture.llmAutoStop': false,
   'capture.restartOnStillHere': false,
   'transcription.diarization': true,
+  'transcription.languageHints': false,
   'asr.deepgram.multilingualVersion': 'default',
   'asr.assemblyai.multilingualModel': 'universal-3-5-pro',
   'templates.favoriteIds': [],

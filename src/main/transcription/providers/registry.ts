@@ -4,6 +4,7 @@
 // engine once its model is installed and covers the language.
 
 import type { AsrProviderId } from '@shared/types/transcript'
+import { systemLanguages } from '../../asr'
 import type { LocalModelManager } from '../../asr/models'
 import type { SecretsApi, SettingsApi } from '../../context'
 import { createAssemblyAiProvider } from './assemblyai'
@@ -15,8 +16,8 @@ export type AsrRegistry = Record<AsrProviderId, AsrProvider>
 
 export function createAsrRegistry(deps: { secrets: SecretsApi; settings: SettingsApi; models: LocalModelManager }): AsrRegistry {
   return {
-    deepgram: createDeepgramProvider(deps),
-    assemblyai: createAssemblyAiProvider(deps),
+    deepgram: createDeepgramProvider({ ...deps, systemLanguages }),
+    assemblyai: createAssemblyAiProvider({ ...deps, systemLanguages }),
     local: createLocalProvider({ models: deps.models, settings: deps.settings })
   }
 }

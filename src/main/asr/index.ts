@@ -23,7 +23,7 @@ import { ModelError, modelIdOf } from './models'
  * The OS preferred languages. Dev builds may override them with
  * `NOTULA_DEV_SYSTEM_LANGUAGES` (comma-separated) to exercise the new-profile default.
  */
-function systemLanguages(): string[] {
+export function systemLanguages(): string[] {
   const dev = !app.isPackaged ? process.env['NOTULA_DEV_SYSTEM_LANGUAGES']?.trim() : ''
   if (dev) {
     return dev

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Shared plumbing for cloud connections: socket events → AsrConnection events, the
-// per-socket timing anchor, and the liveness watchdog.
+// per-socket timing anchor, the liveness watchdog and the first-result timing.
 
 import { EventEmitter } from 'node:events'
 import type { AsrProviderId } from '@shared/types/transcript'
@@ -25,6 +25,9 @@ export abstract class CloudConnection extends EventEmitter<AsrConnectionEvents> 
   private lastAudioAt = 0
   private openedAt = 0
   private livenessTimer: NodeJS.Timeout | null = null
+  /** The first open of this connection, until its first non-empty result is logged. */
+  private firstOpenAt: number | null = null
+  private firstResultLogged = false
   protected closing = false
 
   abstract readonly providerId: AsrProviderId
@@ -42,6 +45,7 @@ export abstract class CloudConnection extends EventEmitter<AsrConnectionEvents> 
       this.baseEpochMs = null
       this.openedAt = Date.now()
       this.lastResultAt = 0
+      this.firstOpenAt ??= this.openedAt
       this.onSocketOpen()
       this.emit('open')
     })
@@ -68,6 +72,11 @@ export abstract class CloudConnection extends EventEmitter<AsrConnectionEvents> 
       } catch (err) {
         this.emit('error', { kind: 'parse', message: err instanceof Error ? err.message : String(err) })
       }
+    })
+    this.on('result', (r) => {
+      if (this.firstResultLogged || this.firstOpenAt === null || !r.text.trim()) return
+      this.firstResultLogged = true
+      log('info', 'asr:first-result', { socket: spec.name, ms: Date.now() - this.firstOpenAt })
     })
   }
 
@@ -132,9 +141,19 @@ export abstract class CloudConnection extends EventEmitter<AsrConnectionEvents> 
     if (now - since > this.livenessTimeoutMs) {
       this.emit('error', { kind: 'liveness', message: 'Missing transcription: no result while audio is being sent.' })
       this.lastResultAt = now
-      this.socket.forceReconnect('liveness timeout')
+      // The session may have failed over on this stall and closed the connection.
+      if (!this.closing) this.socket.forceReconnect('liveness timeout')
     }
   }
+}
+
+const hintsLoggedFor = new Map<AsrProviderId, string>()
+
+/** Logs a session's language hints once per provider; local only. */
+export function logLanguageHints(sessionId: string, provider: AsrProviderId, hints: readonly string[]): void {
+  if (hintsLoggedFor.get(provider) === sessionId) return
+  hintsLoggedFor.set(provider, sessionId)
+  log('info', 'asr:language-hints', { sessionId, provider, hints: hints.join(',') })
 }
 
 /** A number from an unknown field, or the fallback. */

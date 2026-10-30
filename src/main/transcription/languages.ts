@@ -48,6 +48,19 @@ export function assemblyMultiModel(model: AssemblyAiMultilingualModel): MultiMod
   return model
 }
 
+/**
+ * The language hints for a multilingual model: the OS preferred languages as base codes,
+ * in order and without duplicates, kept to the model's set. `pt-BR, en-US` gives `pt, en`.
+ */
+export function languageHints(systemLanguages: readonly string[], set: readonly string[]): string[] {
+  const out: string[] = []
+  for (const tag of systemLanguages) {
+    const code = baseCode(tag)
+    if (code && set.includes(code) && !out.includes(code)) out.push(code)
+  }
+  return out
+}
+
 /** The languages a provider declares (adapted: AssemblyAI's pro models cover `multi`; local per its model). */
 export function declares(provider: AsrProviderId, language: string, localCovers: (l: string) => boolean): boolean {
   if (provider === 'local') return localCovers(language)

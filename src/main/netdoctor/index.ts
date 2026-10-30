@@ -12,8 +12,8 @@
 // - Single flight, Cancel, the 120 s cap and progress. Probes run in main as
 //   async I/O. Keys stay in main: never in the report or the log.
 // - Local-only mode: nothing that would leave this machine is probed.
-// - The automatic probe runs once per app session when a source's failover
-//   is exhausted, and only writes a local log line.
+// - The automatic probe runs once per app session when a source's failover (its fallbacks
+//   or its failover cap) is exhausted, and only writes a local log line.
 //
 // Handlers and pushes write their channel literal.
 
@@ -331,5 +331,5 @@ async function autoProbe(ctx: MainContext, providers: AsrProviderId[]): Promise<
       websocket: { ms: ws.ms, outcome: ws.value?.outcome ?? null, error: ws.error }
     })
   }
-  log('info', 'asr-network-check', { trigger: 'fallbacks-used-up', proxyEnv: proxyEnvironment(), results })
+  log('info', 'asr-network-check', { trigger: 'failover-exhausted', proxyEnv: proxyEnvironment(), results })
 }

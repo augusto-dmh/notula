@@ -61,6 +61,7 @@ export type LabsSettingKey =
   | 'meetingDock.enabled'
   | 'liveContext.mode'
   | 'transcriptReport.enabled'
+  | 'transcription.languageHints'
   | 'companionCli.enabled'
   | 'updates.channel'
   | 'security.deviceLock'
@@ -258,6 +259,13 @@ export const LABS_FEATURES: readonly LabsFeature[] = [
     key: 'transcriptReport.enabled',
     label: 'Report transcript problems',
     description: 'Keep a note on this computer when a transcript goes wrong, to share when you choose.',
+    section: 'transcription',
+    kind: 'switch'
+  },
+  {
+    key: 'transcription.languageHints',
+    label: 'Language hints',
+    description: 'Tell multi-language transcription in advance which languages you speak, from your computer’s language settings.',
     section: 'transcription',
     kind: 'switch'
   },

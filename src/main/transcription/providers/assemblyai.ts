@@ -3,13 +3,14 @@
 // Auth (per AssemblyAI's public docs): the raw API key goes in the `Authorization` header
 // with no scheme.
 
+import { MULTI_LANGUAGE_SETS } from '@shared/types/languages'
 import type { AssemblyAiMultilingualModel, AssemblyAiRegion } from '@shared/types/settings'
 import type { AsrProviderId } from '@shared/types/transcript'
 import type { SecretsApi, SettingsApi } from '../../context'
 import { log } from '../../log'
 import { cleanKeywords } from '../keywords'
-import { cloudLanguage } from '../languages'
-import { CloudConnection, num, str } from './connection'
+import { assemblyMultiModel, cloudLanguage, languageHints } from '../languages'
+import { CloudConnection, logLanguageHints, num, str } from './connection'
 import { devAsrEndpoint } from './dev-endpoint'
 import { probeSocket } from './probe'
 import type { AsrConnectOptions, AsrProvider, AsrResult, AsrWord } from './types'
@@ -27,6 +28,8 @@ const TERMINATION_WAIT_MS = 5_000
 interface AssemblyDeps {
   secrets: SecretsApi
   settings: SettingsApi
+  /** The OS preferred languages, for the Labs language hints. */
+  systemLanguages(): string[]
 }
 
 /**
@@ -48,6 +51,8 @@ interface UrlOptions {
   model: string
   keyterms: string[]
   speakerLabels: boolean
+  /** `language_codes` for a multilingual model, read again for every dial. */
+  languageCodes: string[]
 }
 
 function buildUrl(o: UrlOptions): string {
@@ -57,6 +62,7 @@ function buildUrl(o: UrlOptions): string {
   q.set('filter_profanity', 'false')
   q.set('speech_model', o.model)
   if (o.language === 'multi') q.set('language_detection', 'true')
+  if (o.language === 'multi' && o.languageCodes.length) q.set('language_codes', JSON.stringify(o.languageCodes))
   // Only while Notula diarization is on, and only on a model that supports it.
   if (o.speakerLabels) q.set('speaker_labels', 'true')
   // A Heartbeat every 5 s keeps the 10 s liveness watchdog quiet through silence.
@@ -77,6 +83,15 @@ function speakerIndex(map: Map<string, number>, raw: unknown): number | undefine
   return n
 }
 
+/** The Labs language hints for one dial: only `multi`, where the model is multilingual. */
+async function hintsFor(deps: AssemblyDeps, o: UrlOptions, sessionId: string): Promise<string[]> {
+  if (o.language !== 'multi' || !(await deps.settings.get('transcription.languageHints'))) return []
+  // With `multi`, the speech model is the multilingual model chosen in settings.
+  const hints = languageHints(deps.systemLanguages(), MULTI_LANGUAGE_SETS[assemblyMultiModel(o.model as AssemblyAiMultilingualModel)])
+  logLanguageHints(sessionId, 'assemblyai', hints)
+  return hints
+}
+
 async function authHeaders(secrets: SecretsApi): Promise<Record<string, string> | null> {
   const key = await secrets.get('asr.assemblyai')
   return key ? { Authorization: key, ...VERSION_HEADER } : null
@@ -94,14 +109,15 @@ class AssemblyConnection extends CloudConnection {
   constructor(
     readonly model: string,
     private readonly opts: UrlOptions,
-    secrets: SecretsApi,
-    source: string
+    deps: AssemblyDeps,
+    o: AsrConnectOptions
   ) {
     super(
       {
-        name: `assemblyai:${source}`,
-        url: () => buildUrl(opts),
-        headers: () => authHeaders(secrets),
+        name: `assemblyai:${o.source}`,
+        // The language hints switch changed mid-session applies at the next connection.
+        url: async () => buildUrl({ ...opts, languageCodes: await hintsFor(deps, opts, o.sessionId) }),
+        headers: () => authHeaders(deps.secrets),
         minDelayMs: 200,
         maxDelayMs: 500,
         capDelayMs: 500
@@ -226,9 +242,9 @@ export function createAssemblyAiProvider(deps: AssemblyDeps): AsrProvider {
       const speakerLabels = isProModel(model) && (await deps.settings.get('transcription.diarization'))
       const conn = new AssemblyConnection(
         model,
-        { region, language: opts.language, model, keyterms: cleanKeywords(opts.keywords), speakerLabels },
-        deps.secrets,
-        opts.source
+        { region, language: opts.language, model, keyterms: cleanKeywords(opts.keywords), speakerLabels, languageCodes: [] },
+        deps,
+        opts
       )
       return conn.start()
     },
@@ -236,7 +252,7 @@ export function createAssemblyAiProvider(deps: AssemblyDeps): AsrProvider {
       const region = await deps.settings.get('asr.assemblyai.region')
       return probeSocket({
         name: 'assemblyai:test',
-        url: buildUrl({ region, language: 'en', model: 'universal-streaming-english', keyterms: [], speakerLabels: false }),
+        url: buildUrl({ region, language: 'en', model: 'universal-streaming-english', keyterms: [], speakerLabels: false, languageCodes: [] }),
         headers: await authHeaders(deps.secrets),
         goodbye: { type: 'Terminate' }
       })

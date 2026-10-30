@@ -6,7 +6,8 @@
 // The failover target is language-aware; a cloud source that fails can be bridged by
 // the local engine for a while; the local engine's progress acknowledges
 // audio; with diarization on, chunks keep their words (providerDetails) and the audio
-// is teed for the pass at stop.
+// is teed for the pass at stop. A stalled connection is redialed a few times before it
+// fails over, and a source fails over a limited number of times per session.
 
 import { randomUUID } from 'node:crypto'
 import type { AudioSource, IsoTime, SourceState } from '@shared/types/common'
@@ -26,6 +27,10 @@ import type { AsrConnection, AsrError, AsrResult } from './providers/types'
 const SOURCES: AudioSource[] = ['microphone', 'system']
 /** Consecutive failed attempts (no stable open in between) before a failover. */
 const FAILOVER_AFTER_FAILURES = 3
+/** Stall redials per connection while the source has somewhere else to go; the next stall fails over. */
+const STALL_REDIALS = 2
+/** Failovers per source per session, whatever the providers, on top of `FAILOVER_BUDGET`. */
+const SOURCE_FAILOVER_CAP = 4
 const SANITY_LOG_EVERY_MS = 10_000
 const FUTURE_TOLERANCE_MS = 2_000
 /** The whole stop drain of a session, unless the caller gives a tighter budget. */
@@ -75,6 +80,10 @@ class SourceStream {
   private conn: AsrConnection | null = null
   private providerIdx = 0
   private readonly failovers = new Map<AsrProviderId, number>()
+  /** Failovers of this source in this session, against `SOURCE_FAILOVER_CAP`. */
+  private handoffs = 0
+  /** Stall redials spent by the current connection. */
+  private stallRedials = 0
   private failures = 0
   private readonly segments = new Map<string, string>()
   private state: SourceState = 'inactive'
@@ -306,6 +315,7 @@ class SourceStream {
 
   private attach(conn: AsrConnection): void {
     this.conn = conn
+    this.stallRedials = 0
     conn.on('open', () => {
       if (this.conn !== conn) return
       this.lastErrorKind = null
@@ -361,19 +371,17 @@ class SourceStream {
     })
     // A stop in progress keeps this provider: sendBacklog retries it until the deadline.
     if (err.kind === 'parse' || this.draining) return
-    const now = err.kind === 'auth' || err.fatal === true
+    const refused = err.kind === 'auth' || err.fatal === true
+    const now = refused || (err.kind === 'liveness' && this.stallRedialsSpent(conn))
     if (now || this.failures >= FAILOVER_AFTER_FAILURES) {
       if (this.failover(conn, err)) return
       // Nowhere left to fail over to (budget spent, or no other provider).
-      if (!this.exhaustedReported) {
-        this.exhaustedReported = true
-        this.session.failoverExhausted(this.source)
-      }
+      this.reportExhausted()
     }
     // With nowhere to fail over, the socket keeps reconnecting on its own, so the source
     // stays "starting" (shown as reconnecting) and shows error only for a refused key
     // or a local engine that cannot start.
-    if (now) this.setState('error')
+    if (refused) this.setState('error')
     else if (this.state === 'active') this.setState('starting')
   }
 
@@ -384,17 +392,10 @@ class SourceStream {
   private failover(conn: AsrConnection, err: AsrError): boolean {
     const from = conn.providerId
     const used = this.failovers.get(from) ?? 0
-    if (used >= FAILOVER_BUDGET[from]) return false
+    if (used >= FAILOVER_BUDGET[from] || this.handoffs >= SOURCE_FAILOVER_CAP) return false
     // Local failing to start while it bridges a cloud source ends bridging here.
     if (from === 'local' && err.fatal && this.bridgeReturn) this.bridgeDisabled = true
-    const pick = pickFallback({
-      language: this.session.language,
-      failed: from,
-      candidates: this.session.chain.filter((p) => p !== from && !(p === 'local' && this.bridgeDisabled)),
-      evidence: this.session.evidence,
-      models: this.session.multiModels,
-      localCovers
-    })
+    const pick = this.pickTarget(from)
     log('info', 'asr:fallback', {
       source: this.source,
       from,
@@ -404,11 +405,58 @@ class SourceStream {
     })
     if (!pick.target) return false
     this.failovers.set(from, used + 1)
-    log('warn', 'asr:failover', { source: this.source, from, to: pick.target, used: used + 1 })
+    this.handoffs++
+    log('warn', 'asr:failover', { source: this.source, from, to: pick.target, used: used + 1, handoffs: this.handoffs })
     const bridging = this.bridgeReturn !== null
     this.switchTo(conn, pick.target)
     if (pick.target === 'local' && from !== 'local') this.armBridge(from)
     else if (from === 'local' && bridging) this.clearBridge()
+    // The last failover allowed: from here the source stays where it is and reconnects.
+    if (this.handoffs === SOURCE_FAILOVER_CAP) {
+      log('warn', 'asr:failover-cap-reached', { source: this.source, provider: pick.target, cap: SOURCE_FAILOVER_CAP })
+      this.reportExhausted()
+    }
+    return true
+  }
+
+  /** `transcription:failover-exhausted`, once per source. */
+  private reportExhausted(): void {
+    if (this.exhaustedReported) return
+    this.exhaustedReported = true
+    this.session.failoverExhausted(this.source)
+  }
+
+  private pickTarget(from: AsrProviderId): ReturnType<typeof pickFallback> {
+    return pickFallback({
+      language: this.session.language,
+      failed: from,
+      candidates: this.session.chain.filter((p) => p !== from && !(p === 'local' && this.bridgeDisabled)),
+      evidence: this.session.evidence,
+      models: this.session.multiModels,
+      localCovers
+    })
+  }
+
+  /** A failover away from `from` would find a target now, within both budgets. */
+  private canFailover(from: AsrProviderId): boolean {
+    if (this.handoffs >= SOURCE_FAILOVER_CAP) return false
+    if ((this.failovers.get(from) ?? 0) >= FAILOVER_BUDGET[from]) return false
+    return this.pickTarget(from).target !== null
+  }
+
+  /**
+   * A stall, before the connection redials. While the source has somewhere else to go,
+   * a connection gets `STALL_REDIALS` redials and the next stall fails over (true); an
+   * open does not give any back. With nowhere to go it redials on every stall.
+   */
+  private stallRedialsSpent(conn: AsrConnection): boolean {
+    if (!this.canFailover(conn.providerId)) return false
+    if (this.stallRedials < STALL_REDIALS) {
+      this.stallRedials++
+      log('info', 'asr:stall-redial', { source: this.source, provider: conn.providerId, used: this.stallRedials })
+      return false
+    }
+    log('warn', 'asr:stall-redials-spent', { source: this.source, provider: conn.providerId })
     return true
   }
 

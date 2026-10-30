@@ -3,13 +3,14 @@
 // Auth (per Deepgram's public docs): a raw API key goes in
 // `Authorization: Token <key>`; `Bearer` is only for short-lived JWTs.
 
+import { MULTI_LANGUAGE_SETS } from '@shared/types/languages'
 import type { DeepgramMultilingualVersion } from '@shared/types/settings'
 import type { AsrProviderId } from '@shared/types/transcript'
 import type { SecretsApi, SettingsApi } from '../../context'
 import { log } from '../../log'
 import { deepgramKeyterms } from '../keywords'
-import { cloudLanguage } from '../languages'
-import { CloudConnection, num, str } from './connection'
+import { cloudLanguage, deepgramMultiModel, languageHints } from '../languages'
+import { CloudConnection, logLanguageHints, num, str } from './connection'
 import { devAsrEndpoint } from './dev-endpoint'
 import { probeSocket } from './probe'
 import type { AsrConnectOptions, AsrProvider, AsrResult, AsrWord } from './types'
@@ -18,10 +19,14 @@ const ENDPOINT = 'wss://api.deepgram.com/v1/listen'
 const KEEPALIVE_MS = 3_000
 const LIVENESS_MS = 30_000
 const CLOSE_WAIT_MS = 5_000
+/** Base codes Deepgram takes under another tag in `language_hint`. */
+const HINT_TAGS: Record<string, string> = { yue: 'zh-HK' }
 
 interface DeepgramDeps {
   secrets: SecretsApi
   settings: SettingsApi
+  /** The OS preferred languages, for the Labs language hints. */
+  systemLanguages(): string[]
 }
 
 interface UrlOptions {
@@ -31,6 +36,8 @@ interface UrlOptions {
   keyterms: string[]
   /** `multi` with nova-3-mega sends `version=58-lang-beta`. */
   version: string | null
+  /** `language_hint` codes, read again for every dial. */
+  hints: string[]
 }
 
 /** The model version for a session: only `multi` uses the multilingual setting. */
@@ -51,10 +58,24 @@ function buildUrl(o: UrlOptions): string {
   if (o.language === 'multi') {
     q.set('language', 'multi')
     q.set('endpointing', '100')
+    for (const h of o.hints) q.append('language_hint', HINT_TAGS[h] ?? h)
   }
   if (o.version) q.set('version', o.version)
   for (const t of o.keyterms) q.append('keyterm', t)
   return `${devAsrEndpoint('deepgram') ?? ENDPOINT}?${q.toString()}`
+}
+
+/**
+ * The Labs language hints for one dial. Deepgram accepts `language_hint` only with
+ * `language=multi` on nova-3's current multilingual model, so a pinned version and
+ * other models get none.
+ */
+async function hintsFor(deps: DeepgramDeps, o: UrlOptions, sessionId: string): Promise<string[]> {
+  if (o.language !== 'multi' || o.version || o.model !== 'nova-3') return []
+  if (!(await deps.settings.get('transcription.languageHints'))) return []
+  const hints = languageHints(deps.systemLanguages(), MULTI_LANGUAGE_SETS[deepgramMultiModel('default')])
+  logLanguageHints(sessionId, 'deepgram', hints)
+  return hints
 }
 
 async function authHeaders(secrets: SecretsApi): Promise<Record<string, string> | null> {
@@ -71,15 +92,15 @@ class DeepgramConnection extends CloudConnection {
   constructor(
     readonly model: string,
     private readonly urlOpts: UrlOptions,
-    secrets: SecretsApi,
-    source: string
+    deps: DeepgramDeps,
+    o: AsrConnectOptions
   ) {
     super(
       {
-        name: `deepgram:${source}`,
-        // Keywords changed mid-session apply at the next connection.
-        url: () => buildUrl(urlOpts),
-        headers: () => authHeaders(secrets)
+        name: `deepgram:${o.source}`,
+        // Keywords and the language hints switch changed mid-session apply at the next connection.
+        url: async () => buildUrl({ ...urlOpts, hints: await hintsFor(deps, urlOpts, o.sessionId) }),
+        headers: () => authHeaders(deps.secrets)
       },
       LIVENESS_MS
     )
@@ -161,9 +182,9 @@ export function createDeepgramProvider(deps: DeepgramDeps): AsrProvider {
       const version = versionFor(opts.language, await deps.settings.get('asr.deepgram.multilingualVersion'))
       const conn = new DeepgramConnection(
         version ? 'nova-3-mega' : model,
-        { model, mipOptOut, language: opts.language, keyterms: deepgramKeyterms(opts.keywords), version },
-        deps.secrets,
-        opts.source
+        { model, mipOptOut, language: opts.language, keyterms: deepgramKeyterms(opts.keywords), version, hints: [] },
+        deps,
+        opts
       )
       return conn.start()
     },
@@ -172,7 +193,7 @@ export function createDeepgramProvider(deps: DeepgramDeps): AsrProvider {
       const mipOptOut = await deps.settings.get('asr.deepgram.mipOptOut')
       return probeSocket({
         name: 'deepgram:test',
-        url: buildUrl({ model, mipOptOut, language: 'en', keyterms: [], version: null }),
+        url: buildUrl({ model, mipOptOut, language: 'en', keyterms: [], version: null, hints: [] }),
         headers: await authHeaders(deps.secrets),
         goodbye: { type: 'CloseStream' }
       })

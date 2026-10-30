@@ -7,7 +7,9 @@
 // - unlimited retries; auth headers are fetched again for every attempt;
 // - control messages sent while disconnected are queued and flushed on reopen
 //   (audio is never queued here: the session's pending buffer owns it);
-// - each reopen emits `reconnect` with the retry count and the downtime.
+// - each reopen emits `reconnect` with the retry count and the downtime;
+// - the first open logs the time since the first dial, and each dial logs its URL at
+//   debug level, without credentials or vocabulary.
 
 import { EventEmitter } from 'node:events'
 import WebSocket from 'ws'
@@ -58,6 +60,8 @@ export class ReconnectingSocket extends EventEmitter<SocketEvents> {
   private lastFailureAuth = false
   private readonly controlQueue: string[] = []
   private everOpened = false
+  /** When the first attempt started, until the first open. */
+  private firstDialAt: number | null = null
 
   constructor(private readonly spec: SocketSpec) {
     super()
@@ -159,6 +163,7 @@ export class ReconnectingSocket extends EventEmitter<SocketEvents> {
 
   private async connect(): Promise<void> {
     if (this.closed) return
+    this.firstDialAt ??= Date.now()
     let headers: Record<string, string> | null
     let url: string
     try {
@@ -173,6 +178,7 @@ export class ReconnectingSocket extends EventEmitter<SocketEvents> {
       this.fail({ kind: 'auth', message: 'No key is set for this provider.' })
       return
     }
+    log('debug', 'asr:socket-dial', { socket: this.spec.name, url: loggableUrl(url) })
     let ws: WebSocket
     try {
       ws = new WebSocket(url, { headers, handshakeTimeout: this.spec.connectTimeoutMs ?? 4_000 })
@@ -223,6 +229,9 @@ export class ReconnectingSocket extends EventEmitter<SocketEvents> {
         this.attempt = 0
       }, this.spec.stableAfterMs ?? 5_000)
       for (const text of this.controlQueue.splice(0)) ws.send(text)
+      if (!this.everOpened && this.firstDialAt !== null) {
+        log('info', 'asr:first-open', { socket: this.spec.name, ms: Date.now() - this.firstDialAt })
+      }
       this.emit('open')
       if (this.everOpened) this.emit('reconnect', { retry, downMs })
       this.everOpened = true
@@ -290,6 +299,24 @@ export class ReconnectingSocket extends EventEmitter<SocketEvents> {
     this.retryTimer = null
     this.stableTimer = null
   }
+}
+
+/** Query values that never go to a log: credentials, and the user's vocabulary. */
+const SECRET_PARAM = /key|token|auth|secret/i
+const VOCABULARY_PARAMS = new Set(['keyterm', 'keyterms_prompt'])
+
+function loggableUrl(raw: string): string {
+  let u: URL
+  try {
+    u = new URL(raw)
+  } catch {
+    return '[unparsable]'
+  }
+  const q = new URLSearchParams()
+  for (const [k, v] of u.searchParams) {
+    if (!VOCABULARY_PARAMS.has(k)) q.append(k, SECRET_PARAM.test(k) ? '[redacted]' : v)
+  }
+  return `${u.protocol}//${u.host}${u.pathname}?${q.toString()}`
 }
 
 function errMessage(err: unknown): string {

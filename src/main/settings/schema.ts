@@ -200,6 +200,7 @@ const VALIDATORS: { [K in SettingKey]: Validator } = {
   'capture.llmAutoStop': bool,
   'capture.restartOnStillHere': bool,
   'transcription.diarization': bool,
+  'transcription.languageHints': bool,
   'asr.deepgram.multilingualVersion': oneOf('default', '58-lang-beta'),
   'asr.assemblyai.multilingualModel': oneOf('universal-3-5-pro', 'universal-3-6-pro'),
   'templates.favoriteIds': (v) => Array.isArray(v) && v.length <= 500 && v.every((x) => typeof x === 'string' && UUID.test(x)),
