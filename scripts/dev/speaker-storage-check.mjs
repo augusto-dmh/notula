@@ -22,6 +22,10 @@
 //    Forget all (each proven by a byte scan of a decrypted copy, free pages included, and an
 //    empty WAL), no blending across model ids, the sweeps, Delete person, the People list join
 //    and the logs. Also the pending request's span: the speaker's longest turn on its channel.
+// 4. The speaker bench's A7 and A15 on synthetic notes: an app auto drops under a contradicting
+//    mapping (the production `decide`), the bench's mock names the system clusters as someone
+//    else, and the prompt, chat and webhook outputs print a cluster with a suggestion row as
+//    its letter, word by word, while a real leak is still counted.
 //
 // Exits 1 on any failure. `--keep` keeps the scratch folder.
 
@@ -207,6 +211,146 @@ function compare(name, want, got) {
 
 const diffLines = (a, b) => [...a.filter((l) => !b.includes(l)).map((l) => `- ${l}`), ...b.filter((l) => !a.includes(l)).map((l) => `+ ${l}`)]
 
+// ---------- the bench's A7 and A15 ----------
+
+/**
+ * The speaker bench's A7 (a contradicting LLM reply drops an app auto) and A15 (a cluster with a
+ * suggestion row goes out as its letter), on synthetic notes: the production `decide` and output
+ * formatters, the bench's mock reply and its word-by-word leak count, and why the earlier,
+ * name-based count and first-come mock failed on a real run with nothing wrong in the app.
+ */
+function benchChecks(NEW) {
+  const BC = NEW['bench-checks']
+  const SP = NEW.speakers
+
+  // A7, the app: an individual tile on all of a system cluster's speech names it automatically,
+  // unless an accepted LLM mapping names it as someone else.
+  {
+    const cluster = { key: 'r:p1:r1', label: 'r1', channel: 'system', language: 'pt', speechMs: 60_000, cleanMs: 60_000, vector: null, tiles: [{ participantId: 't-ana', name: 'Ana Souza', share: 1, kind: 'individual' }], coverage: 1 }
+    const cand = (id, name, tileIds) => ({ id, personId: id, name, isSelf: false, attendee: true, known: false, tileIds, stampedOnSystem: tileIds.length > 0, hasAgreement: false, autoRecognize: true })
+    const input = (llm) => ({
+      noteId: 'n', passId: 'p1', modelId: null, voices: false, selfVoice: false, hasLinkedEvent: true,
+      clusters: [cluster], candidates: [cand('ana', 'Ana Souza', ['t-ana']), cand('bruno', 'Bruno Lima', [])], gallery: [], negatives: [], llm
+    })
+    const off = { voice: false, reason: 'missing', file: null }
+    const run = (llm) => NEW.decide.decide(input(llm), off).clusters[0]
+    const mapping = (candidateId, name) => ({ clusterKey: cluster.key, candidateId, name, evidence: ['named_then_replied'], selfIntroduced: false })
+    const plain = run([])
+    const agreeing = run([mapping('ana', 'Ana Souza')])
+    const contradicted = run([mapping('bruno', 'Bruno Lima')])
+    check('A7: the tile alone names the cluster automatically (app)', plain.band === 'auto' && plain.autoSrc === 'app' && plain.personId === 'ana', plain)
+    check('A7: a mapping that agrees with the tile keeps it automatic', agreeing.band === 'auto' && agreeing.personId === 'ana', agreeing)
+    check('A7: a mapping to someone else takes the automatic name away', contradicted.band !== 'auto' && contradicted.name === null, contradicted)
+  }
+
+  // A7, the bench's mock reply. A meeting with two candidates and four lettered clusters: a
+  // split of the user's voice and an unlabelled cluster appear first, on the mic.
+  {
+    const p = (name) => ({ name, email: `${name.split(' ')[0].toLowerCase()}@example.test` })
+    const clusters = [
+      { key: 'r:p1:r8', label: 'Speaker A', channel: 'mic', speechMs: 12_000, truth: p('Dana Example') },
+      { key: 'r:p1:r7', label: 'Speaker B', channel: 'mic', speechMs: 11_000, truth: null },
+      { key: 'r:p1:r1', label: 'Speaker C', channel: 'system', speechMs: 60_000, truth: p('Bruno Lima') },
+      { key: 'r:p1:r2', label: 'Speaker D', channel: 'system', speechMs: 40_000, truth: p('Ana Souza') }
+    ]
+    const cands = [{ id: 'c1', ...p('Ana Souza') }, { id: 'c2', ...p('Bruno Lima') }]
+    // The earlier mock: every lettered cluster in order, the first unused candidate that isn't its person.
+    const used = new Set()
+    const firstCome = new Map()
+    for (const c of clusters) {
+      const other = cands.find((j) => !used.has(j.id) && (!c.truth || (j.email !== c.truth.email && j.name !== c.truth.name)))
+      if (!other) continue
+      used.add(other.id)
+      firstCome.set(c.key, other.id)
+    }
+    check('A7 (why it failed): the first-come mock spends both candidates on the mic and leaves the app cluster uncontradicted', !firstCome.has('r:p1:r1') && !firstCome.has('r:p1:r2'), Object.fromEntries(firstCome))
+    const planned = new Map(BC.contradictingMappings(clusters, cands).map((m) => [m.key, m.candidate.id]))
+    check(
+      'A7: the mock names both system clusters as someone else, and no unlabelled cluster',
+      planned.get('r:p1:r1') === 'c1' && planned.get('r:p1:r2') === 'c2' && !planned.has('r:p1:r7') && !planned.has('r:p1:r8'),
+      Object.fromEntries(planned)
+    )
+    // A first choice that would block a later cluster gives way (a maximum matching).
+    const swap = BC.contradictingMappings(
+      [
+        { key: 'r:p1:r1', label: 'Speaker A', channel: 'system', speechMs: 60_000, truth: p('Bruno Lima') },
+        { key: 'r:p1:r2', label: 'Speaker B', channel: 'system', speechMs: 30_000, truth: p('Carla Dias') }
+      ],
+      [{ id: 'c1', ...p('Ana Souza') }, { id: 'c2', ...p('Carla Dias') }]
+    )
+    const sw = new Map(swap.map((m) => [m.key, m.candidate.id]))
+    check('A7: the mock contradicts as many clusters as the candidates allow', sw.get('r:p1:r1') === 'c2' && sw.get('r:p1:r2') === 'c1', Object.fromEntries(sw))
+  }
+
+  // A15: a decided note. Mic: the user (r9, the owner: Me) and a short split of their voice (r8,
+  // a row suggesting Me). System: Bruno (r1, auto by app; two words stamped with Carla's tile,
+  // which they keep), Ana (r2, a row suggesting Ana, one word she confirmed, and a long turn with
+  // no sentence end, so a chat window cuts it mid-word) and Carla (r3, a row suggesting Carla).
+  {
+    const base = Date.parse('2026-10-29T10:00:00.000Z')
+    const chunks = []
+    let n = 0
+    const say = (source, label, startS, count, extra = () => ({})) => {
+      const anchor = base + startS * 1000
+      const words = Array.from({ length: count }, (_, i) => ({ w: `${label}w${n}x${i}`, s_ms: i * 500, e_ms: i * 500 + 450, merged_spk: label, ...extra(i) }))
+      chunks.push({
+        id: `a15-${String(n++).padStart(3, '0')}`, document_id: 'a15', source, transcription_session_id: 's1', is_final: true, text: words.map((w) => w.w).join(' '),
+        start_timestamp: new Date(anchor).toISOString(), end_timestamp: new Date(anchor + count * 500).toISOString(),
+        providerDetails: { provider: 'local', words, wallClockAnchorMs: anchor, mergeScopeId: 'p1', named_pass: 'p1' }
+      })
+    }
+    const bruno = (i) => ({ att: 'Bruno Lima', auto_spk: 'Bruno Lima', auto_pid: 'bruno', auto_src: 'app', ...(i < 2 ? { att: 'Carla Dias' } : {}) })
+    for (let t = 0; t < 600; t += 60) say('microphone', 'r9', t, 40)
+    say('microphone', 'r8', 605, 24)
+    say('system', 'r1', 620, 60, bruno)
+    say('system', 'r2', 660, 30, (i) => (i === 3 ? { confirmed_spk: 'Ana Souza', confirmed_pid: 'ana' } : {}))
+    say('system', 'r1', 700, 30, bruno)
+    say('system', 'r3', 720, 30)
+    say('system', 'r2', 740, 400, (i) => ({ w: `r2-long-${i}` }))
+    const rows = [
+      { identityKey: 'r:p1:r8', band: 'suggest', candidates: [{ name: 'Me', source: 'voice' }] },
+      { identityKey: 'r:p1:r2', band: 'suggest', candidates: [{ name: 'Ana Souza', source: 'app' }] },
+      { identityKey: 'r:p1:r3', band: 'suggest', candidates: [{ name: 'Carla Dias', source: 'conversation' }] }
+    ]
+    const rowKeys = new Set(rows.map((r) => r.identityKey))
+    const prompt = NEW.transcript.formatTranscript(chunks, { wordLevel: true }).text
+    const promptOff = NEW.transcript.formatTranscript(chunks, { wordLevel: false }).text
+    const chat = NEW.windows
+      .transcriptWindows(SP.speakerTurns(chunks, { wordLevel: false, live: false }))
+      .map((w) => NEW.windows.renderWindow('a15', w))
+      .join('\n\n')
+    const labels = SP.chunkSpeakerLabels(chunks, { wordLevel: true })
+    const webhook = chunks.map((c) => ({ speaker: labels.get(c.id) ?? '', text: c.text }))
+    const lines = { prompt: BC.labelledLines(prompt), promptNoSeparation: BC.labelledLines(promptOff), chat: BC.labelledLines(chat) }
+    const outLabels = new Set([...Object.values(lines).flat().map((l) => l.label), ...webhook.map((e) => e.speaker)])
+    check('A15 (fixture): the outputs print Me, Bruno, Carla on two of his words, Ana on her confirmed word, and letters', ['Me', 'Bruno Lima', 'Carla Dias', 'Ana Souza', 'Speaker A', 'Speaker C', 'Speaker D'].every((l) => outLabels.has(l)), [...outLabels])
+
+    // The earlier count: a row's candidate name anywhere as a label, unless some cluster is named it.
+    const { identities } = SP.speakerIdentities(chunks, { live: false })
+    const named = new Set(identities.filter((i) => i.name).map((i) => i.name.toLowerCase()))
+    const outputs = { ...Object.fromEntries(Object.entries(lines).map(([k, v]) => [k, v.map((l) => l.label)])), webhook: webhook.map((e) => e.speaker) }
+    let byName = 0
+    for (const ls of Object.values(outputs)) for (const r of rows) for (const c of r.candidates) if (!named.has(c.name.toLowerCase()) && ls.some((l) => l.toLowerCase() === c.name.toLowerCase())) byName++
+    check('A15 (why it failed): the name-based count finds leaks in outputs that print every row cluster as its letter', byName > 0, { leaks: byName })
+
+    const counts = { ...Object.fromEntries(Object.entries(lines).map(([k, v]) => [k, BC.lineLeaks(chunks, rowKeys, v)])), webhook: BC.chunkLeaks(chunks, rowKeys, webhook) }
+    check(
+      'A15: word by word, no row cluster goes out under anything but its letter (its confirmed word excepted)',
+      Object.values(counts).every((c) => c.leaks === 0 && c.words > 0) && counts.prompt.words === 24 + 30 + 30 + 400 && counts.prompt.unaligned === 0,
+      counts
+    )
+    // Ana's long turn is cut mid-word (the owner's too): only the cut words go unchecked.
+    check('A15: a chat window that cuts a word leaves only the pieces unaligned', counts.chat.words < counts.prompt.words && counts.chat.words >= counts.prompt.words - 4 && counts.chat.unaligned <= 12, counts.chat)
+
+    // A real leak is still found: Ana's turn printed under her suggested name, in each output kind.
+    const leakyLines = lines.prompt.map((l) => (/\br2(w|-long)/.test(l.text) ? { ...l, label: 'Ana Souza' } : l))
+    const leakyHook = webhook.map((e) => (e.text.startsWith('r2') ? { ...e, speaker: 'Ana Souza' } : e))
+    const lineLeak = BC.lineLeaks(chunks, rowKeys, leakyLines)
+    const hookLeak = BC.chunkLeaks(chunks, rowKeys, leakyHook)
+    check('A15: a row cluster printed under its suggested name is a leak (lines and per-chunk)', lineLeak.leaks === 429 && hookLeak.leaks === 2, { lineLeak, hookLeak })
+  }
+}
+
 // ---------- run ----------
 
 const SPEAKER_TABLES = [
@@ -226,7 +370,7 @@ try {
   mkdirSync(scratch, { recursive: true })
   console.log(`Building the storage engines (${PREV_REV} and this tree)…`)
   const OLD = await bundle(sourceTree(PREV_REV, join(OUT, 'prev-src')), 'prev', ['engine'])
-  const NEW = await bundle(ROOT, 'new', ['engine', '../speakers/pending-span'])
+  const NEW = await bundle(ROOT, 'new', ['engine', '../speakers/pending-span', '../speakers/bench-checks', '../speakers/decide', '../enhance/transcript', '../chat/windows', '../../shared/lib/speakers'])
   const keyHex = randomBytes(32).toString('hex')
 
   // A fresh database of this tree: the schema an upgrade must reach.
@@ -402,6 +546,10 @@ try {
     check('a span on the mic channel never resolves to a system speaker', SPAN.clusterForSpan(chunks, 'p1', { ...ana, source: 'microphone' }) === 'r:p1:r9')
     check('a cluster of another pass has no span', SPAN.pendingSpanOf(chunks, 'p2', 'r:p1:r1') === null)
   }
+
+  // ---------- the bench's A7 and A15, on synthetic notes ----------
+
+  benchChecks(NEW)
 
   // ---------- the speaker-profile storage API on the upgraded file ----------
 

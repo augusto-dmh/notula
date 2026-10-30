@@ -45,6 +45,7 @@ import { loadOrCreateKey } from '../storage/keyfile'
 import { DB_FILE } from '../storage/protocol'
 import { getTranscriptionManager } from '../transcription/manager'
 import { getAttribution } from './attribution'
+import { chunkLeaks, contradictingMappings, labelledLines, lineLeaks, type LeakCount, type MockCandidate, type MockCluster } from './bench-checks'
 import { calibrationState, getCalibration, parseCalibration, type SpeakerCalibrationState } from './calibration'
 import { decideCluster, noteCandidates, noteLanguage, passClusters, pendingByCluster, tileKinds, type PassClusterStats } from './candidates'
 import { decide, type DecideCandidate, type DecideCluster, type DecideLlmMapping, type DecideVoiceSpace } from './decide'
@@ -325,6 +326,8 @@ class Bench {
   private mockUrl = ''
   private mockMode: 'abstain' | 'contradict' = 'abstain'
   private mockNote: { noteId: string; feedStartMs: number; labels: LabelSpan[] } | null = null
+  /** The clusters the contradicting reply named as someone else, by note. */
+  private readonly contradicted = new Map<string, Set<string>>()
   /** The note the running feed created. */
   private feeding: string | null = null
   mockCalls = 0
@@ -504,11 +507,14 @@ class Bench {
     })
   }
 
-  /** Abstains, or names every labelled cluster as another candidate with `certain` evidence. */
+  /**
+   * Abstains, or names every labelled cluster it can as another candidate with `certain`
+   * evidence, and keeps which clusters it contradicted, for A7.
+   */
   private async mockSpeakerReply(prompt: string): Promise<unknown> {
     const target = this.mockNote
     if (this.mockMode !== 'contradict' || !target) return { mappings: [], extra_speakers_likely: null }
-    const cands: { id: string; name: string; email: string }[] = []
+    const cands: MockCandidate[] = []
     let inCands = false
     for (const line of prompt.split('\n')) {
       if (line.startsWith('CANDIDATES:')) {
@@ -527,24 +533,23 @@ class Bench {
     const stats = passClusters(chunks, passId)
     const { identities } = speakerIdentities(chunks, { live: false })
     const segs = this.segments(chunks, target.feedStartMs)
-    const used = new Set<string>()
-    const mappings: unknown[] = []
+    const clusters: MockCluster[] = []
     for (const id of identities) {
-      if (!id.letterLabel || !stats.has(id.key)) continue
-      const s = stats.get(id.key) as PassClusterStats
+      const s = stats.get(id.key)
+      if (!id.letterLabel || !s) continue
       const truth = truthOf(segs.get(id.key) ?? [], s.channel, target.labels)
-      const truthPerson = truth ? this.people.get(truth) : undefined
-      const other = cands.find((c) => !used.has(c.id) && (!truthPerson || (c.email !== truthPerson.email && foldName(c.name) !== foldName(truthPerson.name))))
-      if (!other) continue
-      used.add(other.id)
-      mappings.push({
-        label: id.letterLabel,
-        candidate: other.id,
-        name: other.name,
-        confidence: 'certain',
-        evidence: [{ type: 'named_then_replied', quote: `${other.name}, over to you` }]
-      })
+      const p = truth ? this.people.get(truth) : undefined
+      clusters.push({ key: id.key, label: id.letterLabel, channel: s.channel, speechMs: s.speechMs, truth: p ? { name: p.name, email: p.email } : null })
     }
+    const planned = contradictingMappings(clusters, cands)
+    this.contradicted.set(target.noteId, new Set(planned.map((m) => m.key)))
+    const mappings = planned.map(({ label, candidate }) => ({
+      label,
+      candidate: candidate.id,
+      name: candidate.name,
+      confidence: 'certain',
+      evidence: [{ type: 'named_then_replied', quote: `${candidate.name}, over to you` }]
+    }))
     return { mappings, extra_speakers_likely: false }
   }
 
@@ -1336,11 +1341,15 @@ class Bench {
     }
     for (const r of refeeds) this.results.feeds.push(r.dump)
     {
-      // A7: each baseline auto cluster, by its labelled person, against the same person in the re-feed.
+      // A7: each baseline auto cluster, by its labelled person, against the same person in the
+      // re-feed. Under the contradicting reply only the clusters it named as someone else count:
+      // the owner is never offered to the LLM step, and a meeting with fewer candidates than
+      // labelled clusters leaves some uncontradicted.
       let appDropped = 0
       let appKept = 0
       let contradictedDropped = 0
       let contradictedKept = 0
+      let uncontradicted = 0
       for (const r of refeeds) {
         const base = baseline.get(r.base)
         if (!base || (r.kind !== 'no-app' && r.kind !== 'contradict')) continue
@@ -1349,22 +1358,25 @@ class Bench {
           const t = base.truth.get(k)
           if (t && b.band === 'auto') autoBy.set(t, b.src)
         }
+        const sent = this.contradicted.get(r.dump.noteId) ?? new Set<string>()
         for (const c of r.dump.clusters) {
           const t = truthOf(c.segments, c.channel, r.meeting.labels)
+          if (r.kind === 'contradict' && sent.has(c.key)) {
+            // A contradicted cluster is never auto, whatever the baseline named.
+            if (c.band === 'auto') contradictedKept++
+            else if (t && autoBy.has(t)) contradictedDropped++
+            continue
+          }
           if (!t || !autoBy.has(t)) continue
-          const src = autoBy.get(t)
-          if (r.kind === 'no-app' && src === 'app') {
+          if (r.kind === 'contradict') uncontradicted++
+          else if (autoBy.get(t) === 'app') {
             if (c.band === 'auto') appKept++
             else appDropped++
-          }
-          if (r.kind === 'contradict') {
-            if (c.band === 'auto' && c.auto?.person === t) contradictedKept++
-            else contradictedDropped++
           }
         }
       }
       const any = appDropped + appKept + contradictedDropped + contradictedKept
-      this.check('A7:app-removed+contradicted', any ? (appKept || contradictedKept ? 'fail' : 'pass') : 'n/a', { appDropped, appKept, contradictedDropped, contradictedKept })
+      this.check('A7:app-removed+contradicted', any ? (appKept || contradictedKept ? 'fail' : 'pass') : 'n/a', { appDropped, appKept, contradictedDropped, contradictedKept, uncontradicted })
     }
     {
       // A12: no elimination suggestion when speakers ≠ attendees + the user.
@@ -1380,37 +1392,41 @@ class Bench {
       this.check('A12', refeeds.some((r) => r.kind === 'no-show' || r.kind === 'extra-guest') ? (elimination ? 'fail' : 'pass') : 'n/a', { rows, elimination })
     }
 
-    // A15: no suggest or tie name as a speaker label in what goes out: the summary prompt's
-    // transcript (with Separate speakers as set, and off), a chat readTranscript and a webhook body.
+    // A15: in notes with suggest or tie rows, no word of a cluster with a row (suggest, tie or
+    // none) goes out under anything but its letter, unless the user confirmed that word: the
+    // summary prompt's transcript (with Separate speakers as set, and off), a chat readTranscript
+    // and a webhook body.
     {
       const { buildPromptInputs } = await import('../enhance/inputs')
       const { P2_TOOLS, runLocalTool } = await import('../chat/tools')
       const { buildBody } = await import('../webhooks')
       const readTranscript = P2_TOOLS.find((t) => t.def.name === 'readTranscript')
+      // Word by word: a name on another cluster's words (the owner's Me, an auto cluster's word
+      // that keeps another tile's name) is not this cluster's.
       let checked = 0
       let leaks = 0
       let letters = 0
+      let words = 0
+      let unaligned = 0
       const leaksBy: Record<string, number> = { prompt: 0, promptNoSeparation: 0, chat: 0, webhook: 0 }
       const s = await this.ctx.settings.getAll()
-      const lineLabels = (text: string): string[] =>
-        text
-          .split('\n')
-          .map((l) => /^([^:]{1,80}): /.exec(l)?.[1]?.trim() ?? '')
-          .filter(Boolean)
       for (const id of [...live.map((n) => n.noteId), ...refeeds.map((r) => r.dump.noteId)]) {
-        const rows = (await this.ctx.storage.listSpeakerNameSuggestions(id)).filter((r) => r.band === 'suggest' || r.band === 'tie')
-        if (!rows.length) continue
-        const note = await this.ctx.storage.getNote(id)
         const chunks = await this.ctx.storage.getTranscript(id)
-        const { identities } = speakerIdentities(chunks.filter((c) => c.is_final), { live: false })
-        const named = new Set(identities.filter((i) => i.name).map((i) => foldName(i.name as string)))
-        const outputs: Record<string, string[]> = {}
+        const passId = currentPassId(chunks.filter((c) => c.is_final))
+        const rows = (await this.ctx.storage.listSpeakerNameSuggestions(id)).filter((r) => r.passId === passId)
+        if (!rows.some((r) => r.band === 'suggest' || r.band === 'tie')) continue
+        const rowKeys = new Set(rows.map((r) => r.identityKey))
+        const note = await this.ctx.storage.getNote(id)
+        const counts: Record<string, LeakCount> = {}
+        let promptLines: string[] = []
         for (const [kind, settings] of [
           ['prompt', s],
           ['promptNoSeparation', { ...s, 'transcription.diarization': false }]
         ] as const) {
           const { vars } = buildPromptInputs({ note, chunks, settings, language: s['asr.language'], locale: app.getLocale() })
-          outputs[kind] = lineLabels(String(vars['transcript'] ?? ''))
+          const lines = labelledLines(String(vars['transcript'] ?? ''))
+          if (kind === 'prompt') promptLines = lines.map((l) => l.label)
+          counts[kind] = lineLeaks(chunks, rowKeys, lines)
         }
         if (readTranscript) {
           const env = {
@@ -1425,24 +1441,21 @@ class Bench {
             scanned: new Map(),
             windows: new Map()
           }
-          outputs['chat'] = lineLabels((await runLocalTool(readTranscript, { meetingId: id }, env)).content)
+          counts['chat'] = lineLeaks(chunks, rowKeys, labelledLines((await runLocalTool(readTranscript, { meetingId: id }, env)).content))
         }
         const body = await buildBody(this.ctx, { eventId: 'speaker-bench', eventType: 'note.summarized', occurredAt: new Date().toISOString(), note, includeTranscript: true, automation: null, test: true })
-        const transcript = (JSON.parse(body) as { note?: { transcript?: { speaker?: string }[] } }).note?.transcript ?? []
-        outputs['webhook'] = transcript.map((t) => t.speaker ?? '').filter(Boolean)
+        const transcript = (JSON.parse(body) as { note?: { transcript?: { speaker: string; text: string }[] } }).note?.transcript ?? []
+        counts['webhook'] = chunkLeaks(chunks, rowKeys, transcript)
         checked++
-        for (const [kind, labels] of Object.entries(outputs)) {
-          for (const r of rows) {
-            for (const c of r.candidates) {
-              if (named.has(foldName(c.name)) || !labels.some((l) => foldName(l) === foldName(c.name))) continue
-              leaks++
-              leaksBy[kind] = (leaksBy[kind] ?? 0) + 1
-            }
-          }
+        for (const [kind, c] of Object.entries(counts)) {
+          words += c.words
+          unaligned += c.unaligned
+          leaks += c.leaks
+          leaksBy[kind] = (leaksBy[kind] ?? 0) + c.leaks
         }
-        if ((outputs['prompt'] ?? []).some((l) => /^Speaker [A-Z]+$/.test(l))) letters++
+        if (promptLines.some((l) => /^Speaker [A-Z]+$/.test(l))) letters++
       }
-      this.check('A15', checked ? (leaks ? 'fail' : 'pass') : 'n/a', { notes: checked, leaks, leaksBy, notesWithLetters: letters })
+      this.check('A15', words ? (leaks ? 'fail' : 'pass') : 'n/a', { notes: checked, words, leaks, leaksBy, unaligned, notesWithLetters: letters })
     }
 
     // A6 (relabel): no confirmed word changes, no LLM call, no auto lowered.
