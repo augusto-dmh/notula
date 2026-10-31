@@ -19,6 +19,7 @@
 
 import { GEMINI_PRESET, parseRetiredModel, type LlmProviderId } from '@shared/types/enhance'
 import { enhanceError, EnhanceError } from '../enhance/errors'
+import { log } from '../log'
 import { checkIntercepted, LlmInterceptedError } from './intercept'
 import { noteRetiredModel } from './retired'
 import {
@@ -31,6 +32,7 @@ import {
   type LlmChatRequest,
   type LlmImage,
   type LlmProvider,
+  type LlmPurpose,
   type LlmRequest,
   type LlmStopReason,
   type LlmStreamEvent
@@ -108,13 +110,23 @@ function tokenField(baseUrl: string): 'max_completion_tokens' | 'max_tokens' {
  * short task's budget (voice typing allows 10 s). It takes the purpose's effort as
  * `reasoning_effort`; other servers get nothing, since some reject the field.
  */
-function effortField(baseUrl: string, effort: 'low' | 'medium' | 'high'): { reasoning_effort?: string } {
+function effortField(baseUrl: string, effort: 'minimal' | 'low' | 'medium' | 'high'): { reasoning_effort?: string } {
+  return isGemini(baseUrl) ? { reasoning_effort: effort } : {}
+}
+
+function isGemini(baseUrl: string): boolean {
   try {
-    return new URL(baseUrl).hostname === GEMINI_PRESET.host ? { reasoning_effort: effort } : {}
+    return new URL(baseUrl).hostname === GEMINI_PRESET.host
   } catch {
-    return {}
+    return false
   }
 }
+
+/**
+ * Short tasks a person waits on. Even at `low`, Gemini's Flash models think for several
+ * seconds, which outlasts voice typing's 10 s budget; these ask for `minimal`.
+ */
+const QUICK_PURPOSES: ReadonlySet<LlmPurpose> = new Set<LlmPurpose>(['dictation-format', 'dictation-learn', 'off-record-check'])
 
 /**
  * Drops a leading `<think>…</think>` block, which many local reasoning models write
@@ -259,10 +271,14 @@ export function createOpenAiCompatibleProvider(opts: Options): LlmProvider {
       ],
       stream,
       ...(typeof req.temperature === 'number' ? { temperature: req.temperature } : {}),
-      ...effortField(baseUrl, PURPOSE_EFFORT[req.purpose]),
+      ...effortField(baseUrl, minimalFor(req) ? 'minimal' : PURPOSE_EFFORT[req.purpose]),
       [tokenField(baseUrl)]: req.maxTokens
     })
   }
+
+  // A model that rejects `minimal` gets `low` from then on (see post).
+  let minimalOk = true
+  const minimalFor = (req: LlmRequest): boolean => minimalOk && QUICK_PURPOSES.has(req.purpose) && isGemini(baseUrl)
 
   async function post(req: LlmRequest, stream: boolean, signal: AbortSignal): Promise<Response> {
     if (!baseUrl) throw enhanceError('no-model', 'No base URL is set for this provider.')
@@ -277,6 +293,15 @@ export function createOpenAiCompatibleProvider(opts: Options): LlmProvider {
       })
     } catch (err) {
       throw networkError(opts.id, baseUrl, err)
+    }
+    if (!res.ok && res.status === 400 && minimalFor(req)) {
+      const text = await res.text().catch(() => '')
+      if (/reasoning|thinking/i.test(text)) {
+        minimalOk = false
+        log('info', 'llm:minimal-effort-unsupported', { provider: opts.id })
+        return post(req, stream, signal)
+      }
+      throw await errorFromResponse(opts.id, new Response(text, { status: res.status }), req.model?.trim() || model)
     }
     if (!res.ok) throw await errorFromResponse(opts.id, res, req.model?.trim() || model)
     try {

@@ -254,6 +254,7 @@ export async function formatDictation(ctx: MainContext, input: FormatInput): Pro
       log('info', 'dictation-cleanup-failed', { reason: stop ?? 'empty', failure: 'reply', ms: Date.now() - t0 })
       return finish(raw, 'raw', 'reply')
     }
+    log('debug', 'dictation:formatted', { ms: Date.now() - t0, budgetMs: budget })
     return finish(out, 'llm')
   } catch (err) {
     const failure = failureOf(err)
