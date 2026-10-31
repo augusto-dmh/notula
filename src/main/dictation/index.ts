@@ -29,9 +29,10 @@
 //   Retry; the pill's retry card re-transcribes the last saved attempt into the focused app.
 // - Usage: every finish writes the speech meter's total (`speech_duration_ms`); delivered
 //   text writes its `word_count`, and each dictionary term in it gets one more use.
-// - After a paste (Windows, screen context on, onboarding closed), ./observe.ts watches the
-//   field: a correction committed with Return or Tab can teach the dictionary (./learn.ts), and
-//   a duplicated paste raises the neutral conflict card.
+// - After a paste (Windows, onboarding closed), ./observe.ts watches the field when "Learn words"
+//   or screen context is on: with "Learn words", a correction made within 30 s can teach the
+//   dictionary (./learn.ts); with screen context, a duplicated paste raises the neutral conflict
+//   card. The reading stays on this computer.
 // - The conflict card ("another app may also answer this shortcut"): a duplicate paste, or the
 //   toggle failing to register while armed. Shown at once, then only after gaps of 1, 2 and 5
 //   days (`dictation.conflictWarningShownAt`); the shortcut row keeps a note until it changes.
@@ -768,7 +769,8 @@ export function registerDictation(ctx: MainContext): void {
   }
 
   const observePaste = (sess: Session, text: string, prior: DeskContext | null): void => {
-    if (process.platform !== 'win32' || !screenOn() || !text) return
+    // Learning reads the field on its own switch; the duplicate check stays with screen context.
+    if (process.platform !== 'win32' || !text || !(s('dictation.learnWords', true) || screenOn())) return
     // The onboarding's practice boxes are Notula's own window.
     if (!s('dictation.onboardingCompleted', false) && ownApp(prior?.process ?? sess.target.app)) return
     watcher?.stop('stopped')
@@ -777,9 +779,9 @@ export function registerDictation(ctx: MainContext): void {
     hook.onCommit = () => w.stop('committed')
     hook.watch(true)
     void w
-      .watch(text, prior)
+      .watch(text, prior, screenOn())
       .then((o) => {
-        log('debug', 'dictation:observed', { outcome: o.outcome, usable: o.usable })
+        log('debug', 'dictation:observed', { outcome: o.outcome, usable: o.usable, ...o.diag })
         if (o.outcome === 'duplicated' && o.duplicate) {
           log('info', 'dictation:duplicated', { pastedWords: o.duplicate.pastedWords, wordGap: o.duplicate.wordGap })
           raiseConflict(sess.trigger ?? 'dictation')

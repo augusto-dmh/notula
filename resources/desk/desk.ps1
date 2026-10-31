@@ -8,6 +8,10 @@
 #   context     -> {result, process, title, field:{name,type,password,editable,multiline}, before, after, selection}
 #                  multiline: ES_MULTILINE of the field's own edit window; null without one
 #                  result: captured | empty | secure_input | error
+#   field       -> {result, pid, window, before, selection, after, cutBefore, cutAfter}
+#                  the paste watcher's light read: the foreground window and the text within
+#                  2,000 characters of the caret; cut* = the window cut the text there.
+#                  result: read | no-focus | secure | no-text | wide-selection
 #   modifiers   -> {held:bool}   (Shift, Ctrl, Alt, Win)
 #   paste       -> {sent:bool}   (Ctrl+V into the foreground window)
 #   fullscreen  -> {fullscreen:bool, x, y}  (the foreground window covers its whole monitor;
@@ -198,6 +202,55 @@ function Context {
   return $out
 }
 
+# The paste watcher reads twice a second for up to 30 s, so this skips the process lookup and
+# reads only a window around the caret, never the whole document. Character moves keep the
+# window the same on every provider.
+function Field {
+  $span = 2000
+  $h = [NotulaDesk]::GetForegroundWindow()
+  $procId = [uint32]0
+  [void][NotulaDesk]::GetWindowThreadProcessId($h, [ref]$procId)
+  $out = @{ result = 'no-focus'; pid = [int]$procId; window = [string][int64]$h; before = ''; selection = ''; after = ''; cutBefore = $false; cutAfter = $false }
+  $el = [System.Windows.Automation.AutomationElement]::FocusedElement
+  if ($null -eq $el) { return $out }
+  if ($el.Current.IsPassword) { $out.result = 'secure'; return $out }
+  $out.result = 'no-text'
+  $tp = $null
+  try { $tp = $el.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern) } catch {}
+  if ($null -ne $tp) {
+    $sel = $tp.GetSelection()
+    if ($sel.Length -eq 0) { return $out }
+    $s = $sel[0]
+    $selText = $s.GetText($span + 1)
+    if ($selText.Length -gt $span) { $out.result = 'wide-selection'; return $out }
+    $start = [System.Windows.Automation.Text.TextPatternRangeEndpoint]::Start
+    $end = [System.Windows.Automation.Text.TextPatternRangeEndpoint]::End
+    $ch = [System.Windows.Automation.Text.TextUnit]::Character
+    $b = $s.Clone()
+    $b.MoveEndpointByRange($end, $s, $start)
+    $moved = $b.MoveEndpointByUnit($start, $ch, -$span)
+    $out.before = $b.GetText(-1)
+    $out.cutBefore = ([math]::Abs($moved) -ge $span)
+    $a = $s.Clone()
+    $a.MoveEndpointByRange($start, $s, $end)
+    $moved = $a.MoveEndpointByUnit($end, $ch, $span)
+    $out.after = $a.GetText(-1)
+    $out.cutAfter = ($moved -ge $span)
+    $out.selection = $selText
+    $out.result = 'read'
+    return $out
+  }
+  $vp = $null
+  try { $vp = $el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern) } catch {}
+  if ($null -ne $vp) {
+    $v = [string]$vp.Current.Value
+    $out.before = Clip $v (2 * $span) $true
+    $out.cutBefore = ($v.Length -gt 2 * $span)
+    $out.result = 'read'
+  }
+  return $out
+}
+
 function Modifiers {
   $held = [NotulaDesk]::Held(0x10) -or [NotulaDesk]::Held(0x11) -or [NotulaDesk]::Held(0x12) -or [NotulaDesk]::Held(0x5B) -or [NotulaDesk]::Held(0x5C)
   return @{ held = [bool]$held }
@@ -226,6 +279,7 @@ while ($true) {
       'ping' { $r = @{} }
       'foreground' { $r = Foreground }
       'context' { $r = Context }
+      'field' { $r = Field }
       'modifiers' { $r = Modifiers }
       'paste' { $r = Paste }
       'dblclick' { $r = @{ ms = [int][NotulaDeskTime]::GetDoubleClickTime() } }

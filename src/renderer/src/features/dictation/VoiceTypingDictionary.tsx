@@ -7,8 +7,8 @@
 // - Each row has star, edit and delete. Delete removes the term (it is never learned back) with
 //   an Undo toast. Learned rows say so.
 // - The limits (300 terms, 20 starred) answer inline.
-// - The learn switch (`dictation.learnWords`), with a note that it needs screen context and an
-//   AI provider.
+// - The learn switch (`dictation.learnWords`). Learning reads the field on this computer and
+//   doesn't need screen context; only the fixed words go to the AI provider.
 
 import { useEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent } from 'react'
 import { parseError } from '@shared/errors'
@@ -157,7 +157,6 @@ export function VoiceTypingDictionaryView(): JSX.Element | null {
   }, [live, query])
 
   if (!prefs) return null
-  const screenOn = prefs['voiceTyping.screenContext'] && prefs['dictation.screenContext']
 
   const add = (): void => {
     const term = query.trim()
@@ -224,11 +223,7 @@ export function VoiceTypingDictionaryView(): JSX.Element | null {
         <div className="settings-card">
           <SettingsRow
             title="Learn from my corrections"
-            description={
-              screenOn
-                ? 'When you fix a name Notula typed and press Enter or Tab, Notula adds the new spelling. Needs an AI provider.'
-                : 'Needs screen context and an AI provider. Turn on screen context on the Voice typing page.'
-            }
+            description="Notula learns, on this computer, from words you fix right after dictating. Only the fixed words go to your AI provider to check."
             control={<Switch checked={prefs['dictation.learnWords']} label="Learn from my corrections" onChange={(on) => setPrefs({ 'dictation.learnWords': on })} />}
           />
         </div>

@@ -6,6 +6,7 @@
 // for "Mute other audio while dictating").
 // It also hosts the dictation bar's key hook: `startHook` /
 // `sendHook` / `stopHook`, with its events and its exit on `onHook`.
+// The paste watcher reads with `field` (Windows): a light read near the caret.
 
 import { join } from 'node:path'
 import { utilityProcess, type UtilityProcess } from 'electron'
@@ -26,6 +27,20 @@ export interface DeskContext extends DeskForeground {
   before: string
   after: string
   selection: string
+}
+
+/** The paste watcher's read: the foreground window and the text near the caret, or why not. */
+export interface DeskField {
+  result: 'read' | 'no-focus' | 'secure' | 'no-text' | 'wide-selection'
+  pid: number
+  /** The foreground window's handle. */
+  window: string
+  before: string
+  selection: string
+  after: string
+  /** The helper's window cut the text before or after the caret. */
+  cutBefore: boolean
+  cutAfter: boolean
 }
 
 type Reply = Record<string, unknown> & { ok: boolean; error?: string }
@@ -170,6 +185,40 @@ export class Desk {
       before: String(r['before'] ?? ''),
       after: String(r['after'] ?? ''),
       selection: String(r['selection'] ?? '')
+    }
+  }
+
+  /** Like `ask`, but says whether the helper failed or never replied, for the watcher's logs. */
+  private async request(op: 'field', timeoutMs: number): Promise<Reply | 'no-reply' | 'error'> {
+    if (!(await this.start().catch(() => false)) || !this.proc) return 'no-reply'
+    const id = this.nextId++
+    const proc = this.proc
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id)
+        resolve('no-reply')
+      }, timeoutMs)
+      this.pending.set(id, (r) => {
+        clearTimeout(timer)
+        resolve(!r ? 'no-reply' : r.ok ? r : 'error')
+      })
+      proc.postMessage({ type: 'req', id, op })
+    })
+  }
+
+  /** Windows only. */
+  async field(timeoutMs: number): Promise<DeskField | 'no-reply' | 'error'> {
+    const r = await this.request('field', timeoutMs)
+    if (typeof r === 'string') return r
+    return {
+      result: (r['result'] as DeskField['result']) ?? 'no-text',
+      pid: Number(r['pid'] ?? 0),
+      window: String(r['window'] ?? ''),
+      before: String(r['before'] ?? ''),
+      selection: String(r['selection'] ?? ''),
+      after: String(r['after'] ?? ''),
+      cutBefore: r['cutBefore'] === true,
+      cutAfter: r['cutAfter'] === true
     }
   }
 

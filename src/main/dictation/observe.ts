@@ -1,62 +1,49 @@
 // SPDX-License-Identifier: Apache-2.0
 // Watching a field after a paste (Windows only for now): every 500 ms for up to 30 s the desk
-// helper re-reads the focused field. Watching stops on Return or Tab (the key hook's `commit`),
-// at the next dictation, when the field disappears, or at 30 s.
+// helper reads the text within 2,000 characters of the caret (`field`). Watching stops on Return
+// or Tab (the key hook's `commit`), at the next dictation, when the field is gone, or at 30 s.
 //
-// - The edit is usable for word learning only when watching stopped on Return or Tab, the last
-//   reading is at most 1.5 s old, and the text changed since the first reading after the paste.
-// - Duplicate paste: when the field holds the pasted words twice more than it did before the
+// - The field is followed by what stays put while the user edits: the foreground window (its
+//   process and handle), and the words around the paste (./edits.ts `sameField`). Clicks and
+//   selections inside it change neither.
+// - A read that fails, times out (1.5 s), finds no focused text or finds another window or field
+//   is a miss. Misses are tolerated for 2.5 s; after that the field is gone.
+// - The edit is usable for word learning when the text changed since the first reading that shows
+//   the paste, and the last reading is settled: on Return or Tab, at most 1.5 s old; otherwise
+//   equal to the reading before it, so a word half typed when the user moved on isn't learned.
+// - Duplicate paste (screen context on): when the field holds the pasted words twice more than it did before the
 //   paste, and the second copy starts within 3 words of the first one's end, watching stops with
 //   `duplicated`. The field is never edited.
-// Nothing read here leaves the device; only counts are logged.
+// Nothing read here leaves the device; only counts and the reason a read missed are logged.
 
 import { DICTATION_LIMITS as L } from '@shared/types/dictation'
-import type { DeskContext, Desk } from './desk'
+import type { Desk, DeskContext } from './desk'
+import { findDuplicate, occurrences, pastedRange, readingWords, sameField, wordsOf } from './edits'
 
 export type ObserveOutcome = 'committed' | 'timeout' | 'next-dictation' | 'field-gone' | 'duplicated' | 'stopped'
 
+/** Why a read didn't count. */
+export type ObserveMiss = 'no-reply' | 'error' | 'no-focus' | 'secure' | 'no-text' | 'wide-selection' | 'other-window' | 'other-field'
+
 export interface Observation {
   outcome: ObserveOutcome
-  /** The first reading after the paste and the last one, as word lists. */
+  /** The first reading that shows the paste and the last one, as word lists. */
   before: string[] | null
   after: string[] | null
   /** Where the pasted words sit in `before` ([start, end) word indexes), when found. */
   pasted: [number, number] | null
-  /** The edit can be learned from (committed, fresh, changed). */
+  /** The edit can be learned from (changed and settled). */
   usable: boolean
   duplicate: { pastedWords: number; wordGap: number } | null
+  /** For the log: counts and reasons only. */
+  diag: { reads: number; misses: number; lastMiss: ObserveMiss | null; slowestMs: number; baseline: boolean; changed: boolean; settled: boolean }
 }
 
-/** Whitespace-separated tokens. */
-export const wordsOf = (text: string): string[] => text.split(/\s+/).filter(Boolean)
-
-/** A token compared without case or surrounding punctuation. */
-const bare = (w: string): string => w.normalize('NFC').toLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '')
+const READ_MS = 1_500
+const MISS_MS = 2_500
 
 const fieldText = (c: DeskContext): string => `${c.before}${c.selection}${c.after}`
-
-/** Every start index where `needle` occurs in `hay` (bare comparison). */
-function occurrences(hay: readonly string[], needle: readonly string[]): number[] {
-  const out: number[] = []
-  if (!needle.length) return out
-  const h = hay.map(bare)
-  const n = needle.map(bare)
-  for (let i = 0; i + n.length <= h.length; i++) if (n.every((w, j) => h[i + j] === w)) out.push(i)
-  return out
-}
-
-/** Two copies of the pasted words, the second starting within 3 words of the first one's end. */
-export function findDuplicate(text: readonly string[], pasted: readonly string[], copiesBefore: number): { pastedWords: number; wordGap: number } | null {
-  // A single word is too common to tell a duplicate paste from a repeat.
-  if (pasted.length < 2) return null
-  const at = occurrences(text, pasted)
-  if (at.length < copiesBefore + 2) return null
-  for (let k = 1; k < at.length; k++) {
-    const gap = at[k]! - (at[k - 1]! + pasted.length)
-    if (gap >= 0 && gap <= L.duplicateGapWords) return { pastedWords: pasted.length, wordGap: gap }
-  }
-  return null
-}
+const same = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((w, i) => w === b[i])
 
 export class PasteWatcher {
   private stopWith: ObserveOutcome | null = null
@@ -71,43 +58,79 @@ export class PasteWatcher {
     this.wake?.()
   }
 
-  /** `prior` is the field read before the paste; `pasted` the delivered text. */
-  async watch(pasted: string, prior: DeskContext | null): Promise<Observation> {
+  /** `prior` is the field read before the paste; `pasted` the delivered text; `duplicates` checks for a duplicate paste. */
+  async watch(pasted: string, prior: DeskContext | null, duplicates: boolean): Promise<Observation> {
     const pastedWords = wordsOf(pasted)
     const copiesBefore = prior?.result === 'captured' ? occurrences(wordsOf(fieldText(prior)), pastedWords).length : 0
     const startedAt = Date.now()
     let first: string[] | null = null
+    let range: [number, number] | null = null
+    let previous: string[] | null = null
     let last: string[] | null = null
     let lastAt = 0
-    let identity: string | null = null
+    let window: string | null = null
+    let missSince: number | null = null
+    let lastMiss: ObserveMiss | null = null
+    let reads = 0
+    let misses = 0
+    let slowestMs = 0
+
     const result = (outcome: ObserveOutcome, duplicate: Observation['duplicate'] = null): Observation => {
-      const changed = !!first && !!last && first.join(' ') !== last.join(' ')
-      const usable = outcome === 'committed' && changed && Date.now() - lastAt <= L.observeFreshMs
-      let range: [number, number] | null = null
-      if (first) {
-        const at = occurrences(first, pastedWords)
-        const start = at[at.length - 1]
-        if (start !== undefined) range = [start, start + pastedWords.length]
+      const changed = !!first && !!last && !same(first, last)
+      const settled = outcome === 'committed' ? Date.now() - lastAt <= L.observeFreshMs : !!previous && !!last && same(previous, last)
+      const learnable = outcome === 'committed' || outcome === 'timeout' || outcome === 'field-gone' || outcome === 'next-dictation'
+      return {
+        outcome,
+        before: first,
+        after: last,
+        pasted: range,
+        usable: learnable && changed && settled,
+        duplicate,
+        diag: { reads, misses, lastMiss, slowestMs, baseline: !!first, changed, settled }
       }
-      return { outcome, before: first, after: last, pasted: range, usable, duplicate }
+    }
+    const miss = (why: ObserveMiss): boolean => {
+      misses++
+      lastMiss = why
+      missSince ??= Date.now()
+      return Date.now() - missSince >= MISS_MS
     }
 
     for (;;) {
       if (this.stopWith) return result(this.stopWith)
       if (Date.now() - startedAt >= L.observeMaxMs) return result('timeout')
-      const c = await this.desk.context(L.contextMs)
+      const t0 = Date.now()
+      const r = await this.desk.field(READ_MS)
+      reads++
+      slowestMs = Math.max(slowestMs, Date.now() - t0)
       if (this.stopWith) return result(this.stopWith)
-      if (c.result !== 'captured' || !c.field) return result('field-gone')
-      const id = `${c.process}\u0000${c.field.name}\u0000${c.field.type}`
-      if (identity === null) identity = id
-      else if (identity !== id) return result('field-gone')
-      const words = wordsOf(fieldText(c))
-      // The first reading that shows the paste landed is the baseline.
-      if (!first && occurrences(words, pastedWords).length > copiesBefore) first = words
-      last = words
-      lastAt = Date.now()
-      const dup = findDuplicate(words, pastedWords, copiesBefore)
-      if (dup) return result('duplicated', dup)
+      let gone = false
+      if (typeof r === 'string') gone = miss(r)
+      else if (r.result !== 'read') gone = miss(r.result)
+      else if (window !== null && window !== `${r.pid}:${r.window}`) gone = miss('other-window')
+      else {
+        window ??= `${r.pid}:${r.window}`
+        const words = readingWords(r)
+        if (!first) {
+          // The first reading that shows the paste landed is the baseline.
+          if (occurrences(words, pastedWords).length > copiesBefore) {
+            first = words
+            range = pastedRange(words, pastedWords)
+            last = words
+            lastAt = Date.now()
+          }
+          missSince = null
+        } else if (range && !sameField(first, range, words)) gone = miss('other-field')
+        else {
+          missSince = null
+          previous = last
+          last = words
+          lastAt = Date.now()
+        }
+        const dup = duplicates && !gone && last === words ? findDuplicate(words, pastedWords, copiesBefore, L.duplicateGapWords) : null
+        if (dup) return result('duplicated', dup)
+      }
+      if (gone) return result('field-gone')
       await new Promise<void>((resolve) => {
         const t = setTimeout(resolve, L.observeEveryMs)
         this.wake = () => {
