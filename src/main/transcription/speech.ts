@@ -24,6 +24,7 @@
 import { EventEmitter } from 'node:events'
 import { net } from 'electron'
 import { DEFAULT_SETTINGS, type Settings } from '@shared/types/settings'
+import { dictationLanguage } from '@shared/types/dictation'
 import { localLanguageCode, type AsrProviderId, type CloudAsrProviderId, type LocalAsrModelId } from '@shared/types/transcript'
 import type { LocalModelManager } from '../asr/models'
 import type { MainContext } from '../context'
@@ -638,10 +639,7 @@ class SpeechService implements SpeechApi {
 
   /** The language dictation would ask for now (as dictation/index.ts derives it). */
   private warmLanguage(): string {
-    const stored = this.settings['dictation.language']
-    if (stored) return stored
-    const asr = this.settings['asr.language']
-    return asr === 'multi' ? 'auto' : asr === 'pt-BR' ? 'pt' : 'en'
+    return dictationLanguage(this.settings['dictation.languages'], true)
   }
 
   private release(conn: LocalConnection, healthy: boolean): void {

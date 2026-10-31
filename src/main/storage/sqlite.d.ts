@@ -36,6 +36,7 @@ declare module 'better-sqlite3-multiple-ciphers' {
       exec(source: string): this
       pragma(source: string, options?: { simple?: boolean }): unknown
       transaction<F extends (...args: never[]) => unknown>(fn: F): Transaction<F>
+      function(name: string, options: { deterministic?: boolean }, fn: (...args: unknown[]) => unknown): this
       close(): this
     }
 

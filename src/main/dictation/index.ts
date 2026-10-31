@@ -12,28 +12,43 @@
 //   The applier goes to `ctx.shortcuts`; the shortcut setter validates through it.
 // - The pill (kind `dictation-pill`) exists hidden while armed, shows inactive while the
 //   state is not `idle`, never takes focus, and captures the microphone (start push → audio sends).
-// - Session: language, foreground app and category, screen context (600 ms), keyterms,
-//   `ctx.speech` recognizer, failed-audio file (NAU1) when retention is on, the attempt
-//   row; finish → recognize → format (`dictation-format`) → deliver (./delivery.ts).
+// - Session: languages, foreground app and destination, screen context (600 ms), keyterms
+//   (the user's name, the dictionary, recent people, the screen), `ctx.speech` recognizer,
+//   the retry audio file (NAU1) unless retention is `never`, the attempt row; finish →
+//   recognize → format (`dictation-format`) → deliver (./delivery.ts). A recording stops
+//   itself at 1,195 s and finishes normally.
 // - While a session is active: the power-save blocker while recording, and bus
-//   `update:delay` (`dictationActive`) every second.
-// - Retention sweeps 5 min after start, hourly, and on a retention change; Retry re-reads
-//   the stored audio. A saved failure shows the pill's retry card: Retry re-transcribes the
-//   last saved attempt (as the settings Retry does) and delivers it into the focused app.
+//   `update:delay` (`dictationActive`) every second. With `dictation.muteOtherAudio`, system
+//   output is muted from the start of recording until processing begins (never during a
+//   meeting capture); only what Notula muted is restored, on every exit path, and a marker
+//   file left by a crash is cleared at the next start.
+// - Retention (`dictation.localRetention`): `keep` keeps the text, with retry audio for 24 h;
+//   `24h` forgets text and audio after 24 h; `never` writes only the text-free usage fields.
+//   Sweeps run 5 min after start, hourly, and at once on a change.
+//   A saved failure (or a canceled attempt with at least 300 ms of speech) keeps its audio for
+//   Retry; the pill's retry card re-transcribes the last saved attempt into the focused app.
 // - Usage: every finish writes the speech meter's total (`speech_duration_ms`); delivered
-//   text writes its `word_count`. Clear all and Delete forget a dictation (its text and audio)
-//   but keep a row that has a word count.
+//   text writes its `word_count`, and each dictionary term in it gets one more use.
+// - After a paste (Windows, screen context on, onboarding closed), ./observe.ts watches the
+//   field: a correction committed with Return or Tab can teach the dictionary (./learn.ts), and
+//   a duplicated paste raises the neutral conflict card.
+// - The conflict card ("another app may also answer this shortcut"): a duplicate paste, or the
+//   toggle failing to register while armed. Shown at once, then only after gaps of 1, 2 and 5
+//   days (`dictation.conflictWarningShownAt`); the shortcut row keeps a note until it changes.
+//   It never names an app.
+// - Microphone health from the pill: silence shows a check-your-mic card until signal returns;
+//   the device in use is remembered in `dictation.lastMicrophone`, and changes are logged.
 // - Chat voice input: its own recognizer per session id, audio on
 //   the same audio channel from the main window, plain text back, never formatted or pasted.
 // - The dictation bar: the pill's always-visible bar
-//   mode (./dictation-bar.ts), hold and hands-free chords through the key hook (./hook.ts and the
-//   pure ./chord-machine.ts), and Start or stop recording on `shortcuts.recordToggle`. A session
+//   mode (./dictation-bar.ts), hold and hands-free chord lists through the key hook (./hook.ts and
+//   the pure ./chord-machine.ts), and Start or stop recording on `shortcuts.recordToggle`. A session
 //   starts the mic at once and buffers audio until the recognizer exists (a hold is short);
 //   with the hook available, Esc comes from the hook instead of a global Escape registration.
 //   The Ctrl+Shift+Space toggle stays registered as the fallback.
 
 import { randomUUID } from 'node:crypto'
-import { mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { app, globalShortcut, ipcMain, net, powerSaveBlocker, screen, systemPreferences, type BrowserWindow } from 'electron'
 import type { InvokeChannel, InvokeRes, PushChannel, SendChannel } from '@shared/ipc'
@@ -41,15 +56,22 @@ import { notulaError } from '@shared/errors'
 import {
   DICTATION_DEFAULT_SHORTCUT,
   DICTATION_LIMITS as L,
+  dictationLanguage,
+  PRACTICE_LABELS,
   type DictationAttempt,
+  type DictationCard,
+  type DictationConflictNote,
   type DictationDeliveryFailure,
   type DictationFailureReason,
+  type DictationLocalRetention,
   type DictationMicError,
-  type DictationRetention,
+  type DictationSound,
   type DictationState,
-  type DictationStatus
+  type DictationStatus,
+  type DictationTerm,
+  type DictationTermResult
 } from '@shared/types/dictation'
-import { DICTATION_BAR_LIMITS, parseChord, shortcutLabel, type DictationBarAction } from '@shared/types/dictation-bar'
+import { DICTATION_BAR_LIMITS, hookEntryLabel, parseChord, shortcutLabel, type DictationBarAction } from '@shared/types/dictation-bar'
 import type { Settings } from '@shared/types/settings'
 import type { AsrProviderId } from '@shared/types/transcript'
 import type { MainContext } from '../context'
@@ -58,20 +80,27 @@ import { openSettingsSection, showMainWindow } from '../lifecycle'
 import { log } from '../log'
 import type { DictationAttemptRow } from '../storage/api'
 import { RecognizerError, type SpeechRecognizer } from '../transcription/api'
-import { buildContextBlock, buildKeyterms } from './context'
+import { buildContextBlock, buildKeyterms, rankTerms, termsUsedIn } from './context'
 import { deliver } from './delivery'
 import { setDictationBusy } from './activity'
 import { Desk, type DeskContext } from './desk'
 import type { ChordEffect } from './chord-machine'
 import { DictationBar } from './dictation-bar'
-import { formatDictation, styleFor } from './format'
+import { formatDictation, midSentence, toneFor } from './format'
 import { HookShortcuts } from './hook'
-import { classifyTarget, finalHint, type Target } from './targets'
+import { candidates, judge } from './learn'
+import { PasteWatcher } from './observe'
+import { classifyTarget, finalTarget, type FinalTarget, type Target } from './targets'
 
 const PLATFORM_OK = process.platform === 'win32' || process.platform === 'darwin'
-const RETENTION_MS: Record<Exclude<DictationRetention, 'off'>, number> = { '24h': 86_400_000, '7d': 7 * 86_400_000, '14d': 14 * 86_400_000 }
 const SHORTCUT_TAKEN = 'This shortcut is used by another app.'
 const AUTO_DISMISS_MS = 5_000
+const DAY_MS = 86_400_000
+const PEOPLE_TTL_MS = 600_000
+/** The formatter's dictionary: the best-ranked live terms. */
+const FORMAT_TERMS = 60
+
+type Trigger = DictationConflictNote['id'] | null
 
 interface Session {
   id: string
@@ -81,6 +110,7 @@ interface Session {
   startContext: DeskContext | null
   keyterms: string[]
   screenTerms: string[]
+  terms: DictationTerm[]
   recognizer: SpeechRecognizer | null
   writer: FramedWriter | null
   audioKey: Buffer | null
@@ -92,6 +122,10 @@ interface Session {
   failed: DictationFailureReason | null
   /** False while a hold chord is down (push-to-talk); true for toggles, clicks and locks. */
   handsFree: boolean
+  /** The shortcut row that started it (the conflict note's row); null for a click. */
+  trigger: Trigger
+  /** Notula muted system output for this session. */
+  muted: boolean
   /** Audio that arrived before the recognizer existed. */
   pending: Buffer[]
   /** Settles when the start sequence ends (ready, failed or abandoned). */
@@ -173,11 +207,17 @@ export function registerDictation(ctx: MainContext): void {
   let retrying = false
   let blocker: number | null = null
   let delayTimer: ReturnType<typeof setInterval> | null = null
+  let watcher: PasteWatcher | null = null
+  /** The terms the last learned card offers to undo. */
+  let learned: DictationTerm[] = []
+  let people: { at: number; names: string[] } | null = null
   const sessionStartedAt = new Date().toISOString()
   const audioDir = join(ctx.userDataPath, 'dictation-audio')
+  const muteMarker = join(ctx.userDataPath, 'dictation-muted')
   const chats = new Map<string, { recognizer: SpeechRecognizer; timer: ReturnType<typeof setTimeout> }>()
 
   const s = <K extends keyof Settings>(k: K, fallback: Settings[K]): Settings[K] => (settings ? settings[k] : fallback)
+  const screenOn = (): boolean => s('voiceTyping.screenContext', false) && s('dictation.screenContext', true)
 
   // ---------- state and the pill ----------
 
@@ -230,10 +270,11 @@ export function registerDictation(ctx: MainContext): void {
     if (w) w.webContents.send('dictation:state' satisfies PushChannel, state)
   }
 
-  const setState = (next: Partial<DictationState> & { kind: DictationState['kind'] }): void => {
+  /** `sound` plays only while `dictation.sounds` is on. */
+  const setState = (next: Partial<DictationState> & { kind: DictationState['kind'] }, sound: DictationSound | null = null): void => {
     if (dismissTimer) clearTimeout(dismissTimer)
     dismissTimer = null
-    state = { ready: false, handsFree: false, reason: null, type: null, ...next }
+    state = { ready: false, handsFree: false, reason: null, type: null, card: null, ...next, sound: sound && s('dictation.sounds', false) ? sound : null }
     setDictationBusy(state.kind === 'recording' || state.kind === 'processing')
     pushState()
     const w = livePill()
@@ -246,7 +287,15 @@ export function registerDictation(ctx: MainContext): void {
     }
     if (state.kind === 'idle' || !w) return
     const persistent = state.kind === 'error' && (state.reason === 'mic_denied' || state.reason === 'mic_missing')
-    const ms = state.kind === 'empty' || state.kind === 'copied' || state.kind === 'pasted' ? L.copiedMs : state.kind === 'saved' || state.kind === 'error' ? AUTO_DISMISS_MS : 0
+    const noticeMs = state.card?.kind === 'learned' ? L.learnedCardMs : state.card?.kind === 'conflict' ? 15_000 : AUTO_DISMISS_MS
+    const ms =
+      state.kind === 'empty' || state.kind === 'copied' || state.kind === 'pasted'
+        ? L.copiedMs
+        : state.kind === 'saved' || state.kind === 'error'
+          ? AUTO_DISMISS_MS
+          : state.kind === 'notice'
+            ? noticeMs
+            : 0
     if (ms && !persistent) armDismiss(ms)
   }
 
@@ -259,8 +308,19 @@ export function registerDictation(ctx: MainContext): void {
     }, ms)
   }
 
+  /** A card over the idle pill; never over a dictation in progress. */
+  const showNotice = (card: DictationCard): boolean => {
+    if (session || retrying || state.kind === 'recording' || state.kind === 'processing') return false
+    setState({ kind: 'notice', card }, 'notice')
+    return true
+  }
+
   const historyChanged = (): void => {
     for (const wc of ctx.windows.targets()) wc.send('dictation:history-changed' satisfies PushChannel)
+  }
+
+  const termsChanged = (): void => {
+    for (const wc of ctx.windows.targets()) wc.send('dictation:terms-changed' satisfies PushChannel)
   }
 
   // ---------- activity side effects ----------
@@ -281,6 +341,52 @@ export function registerDictation(ctx: MainContext): void {
       if (powerSaveBlocker.isStarted(blocker)) powerSaveBlocker.stop(blocker)
       blocker = null
     }
+  }
+
+  // ---------- muting other audio ----------
+
+  /** A marker left by a crash or a quit mid-recording: Notula muted the output and never restored it. */
+  const clearStaleMute = (): void => {
+    if (!existsSync(muteMarker)) return
+    void desk.unmute().then((ok) => {
+      log('info', 'dictation:mute-restored', { stale: true, ok })
+      try {
+        unlinkSync(muteMarker)
+      } catch {
+        /* the next start tries again */
+      }
+    })
+  }
+
+  const muteFor = (sess: Session): void => {
+    if (!s('dictation.muteOtherAudio', true) || process.platform !== 'win32') return
+    // A meeting being captured is never muted.
+    if (ctx.capture.isCapturing()) return
+    void desk.mute().then((changed) => {
+      if (!changed) return
+      try {
+        writeFileSync(muteMarker, sess.id)
+      } catch {
+        /* the restore below still runs */
+      }
+      // The session may have ended while the helper answered.
+      if (session !== sess || sess.finishing || sess.cancelled) return void restoreMute(sess, true)
+      sess.muted = true
+    })
+  }
+
+  const restoreMute = (sess: Session, force = false): void => {
+    if (!sess.muted && !force) return
+    sess.muted = false
+    void desk.unmute().then((ok) => {
+      if (ok) {
+        try {
+          unlinkSync(muteMarker)
+        } catch {
+          /* already gone */
+        }
+      }
+    })
   }
 
   // ---------- Escape while recording ----------
@@ -307,16 +413,19 @@ export function registerDictation(ctx: MainContext): void {
     w.webContents.send('dictation:capture' satisfies PushChannel, { action, sessionId: id, microphone: action === 'start' ? s('dictation.microphone', null) : null })
   }
 
-  const language = (): string => {
-    const stored = s('dictation.language', null)
-    if (stored) return stored
-    const asr = s('asr.language', 'en')
-    return asr === 'multi' ? 'auto' : asr === 'pt-BR' ? 'pt' : 'en'
+  /** The provider the choice resolves to before the recognizer opens (`auto` = `asr.provider`). */
+  const chosenProvider = (): AsrProviderId => {
+    const choice = s('dictation.asr', 'auto')
+    return choice === 'auto' ? s('asr.provider', 'deepgram') : choice
   }
+  const englishOnly = (): boolean => chosenProvider() === 'local'
+  const language = (): string => dictationLanguage(s('dictation.languages', []), englishOnly())
 
-  const retention = (): DictationRetention => s('dictation.failedAudioRetention', null) ?? '24h'
+  const retention = (): DictationLocalRetention => s('dictation.localRetention', 'keep')
 
   const endSession = (): void => {
+    const sess = session
+    if (sess) restoreMute(sess)
     session = null
     hook.setActive(false)
     hook.sessionEnded()
@@ -331,51 +440,72 @@ export function registerDictation(ctx: MainContext): void {
     await ctx.storage.deleteDictationAttempts({ ids: [sess.id] }).catch(() => undefined)
   }
 
+  /** Keeps the attempt's audio for Retry (24 h); false when there is nothing to keep. */
+  const keepAudio = async (sess: Session, status: 'failed' | 'cancelled', reason: DictationFailureReason | null): Promise<boolean> => {
+    if (retention() === 'never' || !sess.writer || sess.meter.speechMs < L.minSpeechMs) return false
+    try {
+      const r = await sess.writer.close()
+      sess.writer = null
+      await ctx.storage.updateDictationAttempt(sess.id, {
+        status,
+        failure_reason: reason,
+        audio_duration_ms: Math.round((r.plainBytes / 32_000) * 1_000),
+        audio_purge_at: new Date(Date.parse(sess.createdAt) + L.retryAudioMs).toISOString(),
+        speech_duration_ms: sess.meter.speechMs
+      })
+      return true
+    } catch (err) {
+      log('warn', 'dictation:audio-save-failed', { err: err instanceof Error ? err.name : 'error' })
+      return false
+    }
+  }
+
   const fail = async (sess: Session, reason: DictationFailureReason): Promise<void> => {
     if (session !== sess || sess.cancelled) return
     sess.failed = reason
     sess.recognizer?.cancel()
     capture('cancel', sess.id)
-    const keep = retention() !== 'off' && sess.writer !== null && sess.meter.speechMs >= L.minSpeechMs
-    let saved = false
-    if (keep && sess.writer) {
-      try {
-        const r = await sess.writer.close()
-        sess.writer = null
-        const ttl = RETENTION_MS[retention() as Exclude<DictationRetention, 'off'>] ?? RETENTION_MS['24h']
-        await ctx.storage.updateDictationAttempt(sess.id, {
-          status: 'failed',
-          failure_reason: reason,
-          audio_duration_ms: Math.round((r.plainBytes / 32_000) * 1_000),
-          audio_purge_at: new Date(Date.parse(sess.createdAt) + ttl).toISOString(),
-          speech_duration_ms: sess.meter.speechMs
-        })
-        saved = true
-        lastSaved = sess.id
-      } catch (err) {
-        log('warn', 'dictation:audio-save-failed', { err: err instanceof Error ? err.name : 'error' })
-      }
-    }
-    if (!saved) await discardAttempt(sess)
+    restoreMute(sess)
+    const saved = await keepAudio(sess, 'failed', reason)
+    if (saved) lastSaved = sess.id
+    else await discardAttempt(sess)
     log('info', 'dictation:failed', { reason, saved })
     endSession()
-    setState(saved ? { kind: 'saved' } : { kind: 'error', reason })
+    setState(saved ? { kind: 'saved' } : { kind: 'error', reason }, 'notice')
     if (saved) historyChanged()
   }
 
-  const start = (type: 'shortcut' | 'click', handsFree = true): void => {
+  /** Recent meeting attendees' names, cached for 10 minutes. */
+  const recentPeople = async (): Promise<string[]> => {
+    if (people && Date.now() - people.at < PEOPLE_TTL_MS) return people.names
+    const me = s('profile.email', '')
+    try {
+      const rows = await ctx.storage.listPeople({ filter: 'all', myEmails: me ? [me] : [] })
+      const names = rows
+        .filter((p) => !p.isSelf && p.name && !p.name.includes('@'))
+        .slice(0, L.keytermsPeople * 2)
+        .map((p) => p.name)
+      people = { at: Date.now(), names }
+      return names
+    } catch {
+      return []
+    }
+  }
+
+  const start = (type: 'shortcut' | 'click', handsFree: boolean, trigger: Trigger): void => {
     if (!armed || session || retrying) return
     if (dismissTimer) clearTimeout(dismissTimer)
+    watcher?.stop('next-dictation')
     const id = randomUUID()
-    const lang = language()
     const sess: Session = {
       id,
       createdAt: new Date().toISOString(),
-      language: lang,
+      language: language(),
       target: classifyTarget('', ''),
       startContext: null,
       keyterms: [],
       screenTerms: [],
+      terms: [],
       recognizer: null,
       writer: null,
       audioKey: null,
@@ -386,6 +516,8 @@ export function registerDictation(ctx: MainContext): void {
       finishing: false,
       failed: null,
       handsFree,
+      trigger,
+      muted: false,
       pending: [],
       setup: Promise.resolve()
     }
@@ -394,10 +526,12 @@ export function registerDictation(ctx: MainContext): void {
     escapeOn(true)
     setBlocker(true)
     setActive(true)
-    setState({ kind: 'recording', ready: false, handsFree, type })
+    setState({ kind: 'recording', ready: false, handsFree, type }, handsFree ? 'lock' : 'start')
     log('info', 'dictation:started', { type, handsFree })
     // The mic starts at once; its audio waits in `pending` until the recognizer exists.
     capture('start', id)
+    clearStaleMute()
+    muteFor(sess)
     sess.setup = setupSession(sess, type).catch((err: unknown) =>
       log('warn', 'dictation:setup-failed', { err: err instanceof Error ? err.message : String(err) })
     )
@@ -408,17 +542,22 @@ export function registerDictation(ctx: MainContext): void {
     const lang = sess.language
 
     // Context first (600 ms), so the keyterms reach the recognizer.
-    const screenOn = s('voiceTyping.screenContext', false) && s('dictation.screenContext', true)
-    const fg = await desk.foreground(L.contextMs).catch(() => null)
+    const [fg, terms, names] = await Promise.all([
+      desk.foreground(L.contextMs).catch(() => null),
+      ctx.storage.listDictationTerms().catch(() => [] as DictationTerm[]),
+      recentPeople()
+    ])
     sess.target = classifyTarget(fg?.process ?? '', fg?.title ?? '', null, fg?.bundle ?? null)
-    if (screenOn) sess.startContext = await desk.context(L.contextMs)
+    sess.terms = terms
+    if (screenOn()) sess.startContext = await desk.context(L.contextMs)
     if (session !== sess || sess.cancelled) return
-    const terms = buildKeyterms(s('dictation.dictionary', []), sess.startContext, sess.target)
-    sess.keyterms = terms.keyterms
-    sess.screenTerms = terms.screen
+    const userName = s('profile.name', '').trim() || null
+    const built = buildKeyterms({ userName, terms, people: names }, sess.startContext, sess.target)
+    sess.keyterms = built.keyterms
+    sess.screenTerms = built.screen
 
-    // The attempt row, with an audio file when retention is on.
-    if (retention() !== 'off') {
+    // The attempt row, with a retry audio file unless retention is `never`.
+    if (retention() !== 'never') {
       try {
         mkdirSync(audioDir, { recursive: true })
         sess.audioKey = randomKey()
@@ -462,7 +601,7 @@ export function registerDictation(ctx: MainContext): void {
       return fail(sess, recognizerReason(err))
     }
     if (session !== sess || sess.cancelled || sess.finishing) return
-    setState({ kind: 'recording', ready: true, handsFree: sess.handsFree, type })
+    setState({ kind: 'recording', ready: true, handsFree: sess.handsFree, type, card: state.card ?? null })
   }
 
   const finish = async (): Promise<void> => {
@@ -470,7 +609,8 @@ export function registerDictation(ctx: MainContext): void {
     if (!sess || sess.finishing || sess.cancelled) return
     sess.finishing = true
     escapeOn(false)
-    setState({ kind: 'processing' })
+    restoreMute(sess)
+    setState({ kind: 'processing' }, 'finish')
     capture('stop', sess.id)
     setBlocker(false)
     // The pill keeps a 100 ms tail; give its last chunk time to arrive.
@@ -502,24 +642,30 @@ export function registerDictation(ctx: MainContext): void {
     if (!raw) {
       await discardAttempt(sess)
       endSession()
-      if (sess.meter.speechMs >= L.minSpeechMs) setState({ kind: 'empty' })
+      if (sess.meter.speechMs >= L.minSpeechMs) setState({ kind: 'empty' }, 'notice')
       else setState({ kind: 'idle' })
       log('info', 'dictation:empty', { speechMs: sess.meter.speechMs })
       return
     }
-    const screenOn = s('voiceTyping.screenContext', false) && s('dictation.screenContext', true)
-    const contextBlock = screenOn ? buildContextBlock(field?.result === 'captured' ? field : sess.startContext, sess.target, sess.screenTerms) : ''
+    const contextBlock = screenOn() ? buildContextBlock(field?.result === 'captured' ? field : sess.startContext, sess.target, sess.screenTerms) : ''
     // A release reading without a field falls back to the start context when there is one.
-    const hintField = field?.field || field?.result === 'secure_input' || !screenOn || !sess.startContext ? field : sess.startContext
-    const hint = finalHint(sess.target, hintField)
-    const tone = styleFor(s('dictation.styles', { email: null, work: null, casual: null, other: null }), sess.target.category, sess.target.hint)
+    const hintField = field?.field || field?.result === 'secure_input' || !screenOn() || !sess.startContext ? field : sess.startContext
+    const where = practiceTarget(hintField) ?? finalTarget(sess.target, hintField)
+    const tone = toneFor(s('dictation.styles', { email: null, 'work-chat': null, 'personal-chat': null, other: null }), where.destination)
+    const caretBefore = field?.result === 'captured' ? field.before : ''
     const formatted = await formatDictation(ctx, {
       raw,
       tone,
-      hint,
-      language: detected ?? sess.language,
+      destination: where.destination,
+      singleLine: where.singleLine,
+      emailField: where.emailField,
+      languages: s('dictation.languages', []),
+      detected,
+      midSentence: !field?.selection && midSentence(caretBefore),
       contextBlock,
-      dictionary: s('dictation.dictionary', [])
+      dictionary: rankTerms(sess.terms)
+        .slice(0, FORMAT_TERMS)
+        .map((t) => t.term)
     })
     if (session !== sess || sess.cancelled) return
     const d = await deliver(desk, formatted.text, field, () => session === sess)
@@ -527,13 +673,14 @@ export function registerDictation(ctx: MainContext): void {
     sess.writer = null
     const status = d.outcome
     const delivered = d.outcome !== 'delivery_failed' && !!formatted.text
+    const keepText = retention() !== 'never'
     try {
       await ctx.storage.updateDictationAttempt(sess.id, {
         status,
         failure_reason: d.outcome === 'delivery_failed' ? 'clipboard_failed' : null,
         language: detected ?? sess.language,
         audio_duration_ms: audioMs || Math.round((sess.audioBytes / 32_000) * 1_000),
-        text: formatted.text,
+        text: keepText ? formatted.text : null,
         audio_purge_at: null,
         speech_duration_ms: sess.meter.speechMs,
         ...(delivered ? { word_count: wordCount(formatted.text) } : {})
@@ -541,12 +688,25 @@ export function registerDictation(ctx: MainContext): void {
     } catch (err) {
       log('warn', 'dictation:attempt-update-failed', { err: err instanceof Error ? err.message : String(err) })
     }
-    log('debug', 'dictation-done', { outcome: status, path: formatted.path, category: sess.target.category, hint, chars: formatted.text.length })
+    if (delivered) {
+      const used = termsUsedIn(formatted.text, sess.terms)
+      if (used.length) void ctx.storage.recordDictationTermUse(used).catch(() => undefined)
+    }
+    log('debug', 'dictation-done', {
+      outcome: status,
+      path: formatted.path,
+      destination: where.destination,
+      singleLine: where.singleLine,
+      tone,
+      chars: formatted.text.length
+    })
     endSession()
     historyChanged()
-    if (d.outcome === 'pasted') setState({ kind: 'pasted' })
-    else if (d.outcome === 'clipboard') setState({ kind: 'copied', reason: d.reason as DictationDeliveryFailure })
-    else setState({ kind: 'error', reason: 'clipboard_failed' })
+    if (d.outcome === 'pasted') {
+      setState({ kind: 'pasted' })
+      observePaste(sess, formatted.text, field)
+    } else if (d.outcome === 'clipboard') setState({ kind: 'copied', reason: d.reason as DictationDeliveryFailure })
+    else setState({ kind: 'error', reason: 'clipboard_failed', card: keepText ? { kind: 'in-history' } : null }, 'notice')
   }
 
   const cancel = async (why: string): Promise<void> => {
@@ -559,10 +719,14 @@ export function registerDictation(ctx: MainContext): void {
     sess.cancelled = true
     sess.recognizer?.cancel()
     capture('cancel', sess.id)
-    await discardAttempt(sess)
+    restoreMute(sess)
+    // A canceled attempt with real speech keeps its audio, so it can be retried.
+    const kept = why !== 'tap' && why !== 'disarmed' ? await keepAudio(sess, 'cancelled', null) : false
+    if (!kept) await discardAttempt(sess)
     endSession()
     setState({ kind: 'idle' })
-    log('info', 'dictation:cancelled', { why })
+    if (kept) historyChanged()
+    log('info', 'dictation:cancelled', { why, kept })
   }
 
   const onPress = (): void => {
@@ -580,8 +744,103 @@ export function registerDictation(ctx: MainContext): void {
     if (sinceLast < L.repeatIgnoreMs) return
     if (session) return // still processing the previous one
     startPress = now
-    start('shortcut')
+    start('shortcut', true, 'dictation')
     hook.sessionStartedElsewhere()
+  }
+
+  // ---------- watching the field after a paste ----------
+
+  const ownApp = (process: string): boolean => {
+    const own = app.getName().toLowerCase()
+    const p = process.toLowerCase().replace(/\.exe$/, '')
+    return p === own || p === 'electron'
+  }
+
+  /** The onboarding's practice boxes, in Notula's own window, format as an AI prompt or an email. */
+  const practiceTarget = (field: DeskContext | null): FinalTarget | null => {
+    if (!field?.field || !ownApp(field.process)) return null
+    if (field.field.name === PRACTICE_LABELS.aiChat) return { destination: 'ai-chat', singleLine: false, emailField: null }
+    if (field.field.name === PRACTICE_LABELS.email) return { destination: 'email', singleLine: false, emailField: 'body' }
+    return null
+  }
+
+  const observePaste = (sess: Session, text: string, prior: DeskContext | null): void => {
+    if (process.platform !== 'win32' || !screenOn() || !text) return
+    // The onboarding's practice boxes are Notula's own window.
+    if (!s('dictation.onboardingCompleted', false) && ownApp(prior?.process ?? sess.target.app)) return
+    watcher?.stop('stopped')
+    const w = new PasteWatcher(desk)
+    watcher = w
+    hook.onCommit = () => w.stop('committed')
+    hook.watch(true)
+    void w
+      .watch(text, prior)
+      .then((o) => {
+        log('debug', 'dictation:observed', { outcome: o.outcome, usable: o.usable })
+        if (o.outcome === 'duplicated' && o.duplicate) {
+          log('info', 'dictation:duplicated', { pastedWords: o.duplicate.pastedWords, wordGap: o.duplicate.wordGap })
+          raiseConflict(sess.trigger ?? 'dictation')
+          return
+        }
+        if (o.usable && o.before && o.after && o.pasted) void learnFrom(o.before, o.after, o.pasted)
+      })
+      .catch((err: unknown) => log('warn', 'dictation:observe-failed', { err: err instanceof Error ? err.message : String(err) }))
+      .finally(() => {
+        if (watcher !== w) return
+        watcher = null
+        hook.onCommit = null
+        hook.watch(false)
+      })
+  }
+
+  const learnFrom = async (before: string[], after: string[], pasted: [number, number]): Promise<void> => {
+    if (!s('dictation.learnWords', true)) return log('info', 'dictation:learn-skipped', { reason: 'off' })
+    const terms = await ctx.storage.listDictationTerms().catch(() => [] as DictationTerm[])
+    if (terms.filter((t) => t.deleted_at === null).length >= 300) return log('info', 'dictation:learn-skipped', { reason: 'full' })
+    const list = candidates(before, after, pasted, terms)
+    if (!list.length) return
+    const accepted = await judge(ctx, list).catch(() => [] as string[])
+    if (accepted === null) return log('info', 'dictation:learn-skipped', { reason: 'no-llm' })
+    log('info', 'dictation:learn-judged', { candidates: list.length, accepted: accepted.length })
+    const added: DictationTerm[] = []
+    for (const term of accepted) {
+      const r = await ctx.storage.addDictationTerm({ term, source: 'learned' }).catch(() => null)
+      if (r?.ok && r.term.source === 'learned' && r.term.deleted_at === null) added.push(r.term)
+    }
+    if (!added.length) return
+    termsChanged()
+    if (state.kind === 'idle' || state.kind === 'pasted') {
+      learned = added
+      showNotice({ kind: 'learned', words: added.map((t) => t.term) })
+    }
+  }
+
+  // ---------- the conflict card ----------
+
+  const conflictValue = (id: DictationConflictNote['id']): string => {
+    const key = id === 'dictation' ? 'dictation.shortcut' : id === 'dictationHold' ? 'shortcuts.dictationHold' : 'shortcuts.dictationHandsFree'
+    return JSON.stringify(settings?.[key] ?? null)
+  }
+
+  /** Another app may also answer this shortcut: the note on its row, and the card when its gap has passed. */
+  const raiseConflict = (id: DictationConflictNote['id']): void => {
+    if (!settings) return
+    const note: DictationConflictNote = { id, value: conflictValue(id) }
+    const current = settings['dictation.conflictShortcut']
+    if (current?.id !== note.id || current.value !== note.value) void ctx.settings.set('dictation.conflictShortcut', note)
+    const shown = settings['dictation.conflictWarningShownAt']
+    const last = shown.length ? Date.parse(shown[shown.length - 1]!) : NaN
+    const gaps = L.conflictGapsDays
+    const gapDays = shown.length === 0 ? 0 : gaps[Math.min(shown.length - 1, gaps.length - 1)]!
+    if (shown.length && Number.isFinite(last) && Date.now() - last < gapDays * DAY_MS) return
+    if (!showNotice({ kind: 'conflict' })) return
+    log('info', 'dictation:conflict-shown', { id, times: shown.length + 1 })
+    void ctx.settings.set('dictation.conflictWarningShownAt', [...shown, new Date().toISOString()].slice(-10))
+  }
+
+  const conflictNow = (): DictationConflictNote['id'] | null => {
+    const note = settings?.['dictation.conflictShortcut']
+    return note && note.value === conflictValue(note.id) ? note.id : null
   }
 
   // ---------- the hook chords ----------
@@ -594,13 +853,13 @@ export function registerDictation(ctx: MainContext): void {
         case 'start-hands-free':
           if (!armed || suspended || session) break
           startPress = Date.now()
-          start('shortcut', e === 'start-hands-free')
+          start('shortcut', e === 'start-hands-free', e === 'start-hold' ? 'dictationHold' : 'dictationHandsFree')
           break
         case 'lock': {
           const sess = session
           if (!sess || sess.finishing || sess.cancelled) break
           sess.handsFree = true
-          setState({ kind: 'recording', ready: state.ready, handsFree: true, type: state.type })
+          setState({ kind: 'recording', ready: state.ready, handsFree: true, type: state.type, card: state.card ?? null }, 'lock')
           break
         }
         case 'finish':
@@ -626,7 +885,7 @@ export function registerDictation(ctx: MainContext): void {
 
   const hook = new HookShortcuts(desk, onChord, pushHookStatus)
 
-  const effectiveOf = (id: 'dictationHold' | 'dictationHandsFree' | 'recordToggle'): string => {
+  const effectiveOf = (id: 'recordToggle'): string => {
     try {
       return ctx.shortcuts.effective(id)
     } catch {
@@ -634,12 +893,25 @@ export function registerDictation(ctx: MainContext): void {
     }
   }
 
+  const entriesOf = (id: 'dictationHold' | 'dictationHandsFree'): { keys: string; doubleTap: boolean }[] => {
+    try {
+      return ctx.shortcuts.entries(id)
+    } catch {
+      return []
+    }
+  }
+
   const configureHook = (): void => {
     if (!armed) return hook.configure(null)
+    const chord = (keys: string): string[] | null => parseChord(keys, process.platform)
+    const chords = (list: { keys: string }[]): string[][] => list.map((e) => chord(e.keys)).filter((c): c is string[] => !!c)
+    const handsFree = entriesOf('dictationHandsFree')
     hook.configure({
-      hold: parseChord(effectiveOf('dictationHold'), process.platform),
-      handsFree: parseChord(effectiveOf('dictationHandsFree'), process.platform),
-      record: recordViaHook ? parseChord(recordViaHook, process.platform) : null,
+      hold: chords(entriesOf('dictationHold')),
+      handsFree: chords(handsFree.filter((e) => !e.doubleTap)),
+      // Double tap waits for the macOS helper.
+      doubleTap: process.platform === 'win32' ? chords(handsFree.filter((e) => e.doubleTap)) : [],
+      record: recordViaHook ? chord(recordViaHook) : null,
       tapMs: DICTATION_BAR_LIMITS.tapMs
     })
   }
@@ -692,16 +964,16 @@ export function registerDictation(ctx: MainContext): void {
       if (sess) return
       if (state.kind === 'error' && state.reason === 'mic_denied') setState({ kind: 'idle' })
       startPress = Date.now()
-      start('click')
+      start('click', true, null)
       hook.sessionStartedElsewhere()
     },
     keytips: () => {
       const hookOk = hook.status.available
-      const hold = effectiveOf('dictationHold')
-      const handsFree = effectiveOf('dictationHandsFree')
+      const hold = entriesOf('dictationHold')[0]
+      const handsFree = entriesOf('dictationHandsFree')[0]
       return {
-        dictate: shortcutLabel(hookOk && hold ? hold : (registered ?? effectiveShortcut()), process.platform),
-        handsFree: hookOk ? shortcutLabel(handsFree, process.platform) : '',
+        dictate: shortcutLabel(hookOk && hold ? hold.keys : (registered ?? effectiveShortcut()), process.platform),
+        handsFree: hookOk && handsFree ? hookEntryLabel(handsFree, process.platform) : '',
         record: shortcutLabel(recordRegistered ?? (recordViaHook && hookOk ? recordViaHook : ''), process.platform)
       }
     }
@@ -733,6 +1005,11 @@ export function registerDictation(ctx: MainContext): void {
     return { ok: true, error: null }
   }
 
+  /** Arming or resuming: a toggle that won't register raises the conflict card. */
+  const registerArmed = (): void => {
+    if (!register(effectiveShortcut()).ok) raiseConflict('dictation')
+  }
+
   const effectiveShortcut = (): string => {
     try {
       return ctx.shortcuts.effective('dictation')
@@ -747,15 +1024,16 @@ export function registerDictation(ctx: MainContext): void {
     if (on) {
       if (!livePill()) pill = createPill()
       if (!suspended) {
-        register(effectiveShortcut())
+        registerArmed()
         registerRecord(effectiveOf('recordToggle'))
       }
-      void desk.start()
+      void desk.start().then(() => clearStaleMute())
       configureHook()
       bar.setArmed(true)
       log('info', 'dictation:armed')
     } else {
       void cancel('disarmed')
+      watcher?.stop('stopped')
       unregister()
       unregisterRecord()
       hook.configure(null)
@@ -765,7 +1043,10 @@ export function registerDictation(ctx: MainContext): void {
       const w = livePill()
       pill = null
       if (w) w.destroy()
-      desk.stop()
+      // Give a pending unmute a moment before the helper stops.
+      setTimeout(() => {
+        if (!armed) desk.stop()
+      }, 500).unref()
       ctx.speech.setLocalWarm(false)
       log('info', 'dictation:disarmed')
     }
@@ -798,16 +1079,22 @@ export function registerDictation(ctx: MainContext): void {
 
   const sweep = async (): Promise<void> => {
     const r = retention()
-    const cutoff = r === 'off' ? Date.now() : Date.now() - RETENTION_MS[r]
+    const now = Date.now()
     try {
       const rows = await ctx.storage.listDictationAttempts(1_000)
       const live = session?.id
-      const old = rows.filter((a) => a.id !== live && Date.parse(a.created_at) < cutoff)
-      const drop = old.filter((a) => !a.text && (a.has_audio || a.status === 'recording' || a.status === 'failed')).map((a) => a.id)
+      const others = rows.filter((a) => a.id !== live)
+      // Text and audio: all of it for `never`, after 24 h for `24h`; `keep` keeps the text.
+      const forgetBefore = r === 'never' ? now : r === '24h' ? now - DAY_MS : null
+      const forget = forgetBefore === null ? [] : others.filter((a) => Date.parse(a.created_at) < forgetBefore && (a.text || a.has_audio)).map((a) => a.id)
+      if (forget.length) await ctx.storage.deleteDictationAttempts({ ids: forget, forget: true })
+      // Retry audio lasts 24 h; a row with neither text nor audio after that goes.
+      const old = others.filter((a) => !forget.includes(a.id) && Date.parse(a.created_at) < now - L.retryAudioMs)
+      const drop = old.filter((a) => !a.text && (a.has_audio || a.status === 'recording' || a.status === 'failed' || a.status === 'cancelled')).map((a) => a.id)
       if (drop.length) await ctx.storage.deleteDictationAttempts({ ids: drop })
       for (const a of old) if (a.text && a.has_audio) await ctx.storage.updateDictationAttempt(a.id, { audio_purge_at: null })
-      if (drop.length || old.some((a) => a.text && a.has_audio)) historyChanged()
-      log('debug', 'dictation:sweep', { retention: r, removed: drop.length })
+      if (forget.length || drop.length || old.some((a) => a.text && a.has_audio)) historyChanged()
+      log('debug', 'dictation:sweep', { retention: r, forgotten: forget.length, removed: drop.length })
     } catch (err) {
       log('warn', 'dictation:sweep-failed', { err: err instanceof Error ? err.message : String(err) })
     }
@@ -857,9 +1144,14 @@ export function registerDictation(ctx: MainContext): void {
       const next = effectiveShortcut()
       if (next !== registered) register(next)
     }
-    if (e.keys.includes('dictation.failedAudioRetention') && prev?.['dictation.failedAudioRetention'] !== e.settings['dictation.failedAudioRetention']) {
+    if (e.keys.includes('dictation.localRetention') && prev?.['dictation.localRetention'] !== e.settings['dictation.localRetention']) {
       void sweep()
     }
+    if (e.keys.includes('dictation.muteOtherAudio') && !e.settings['dictation.muteOtherAudio'] && session) restoreMute(session)
+  })
+  app.on('before-quit', () => {
+    // The helper may be gone before an unmute lands; the marker covers that at the next start.
+    if (session) restoreMute(session)
   })
   app.on('will-quit', () => {
     arm(false)
@@ -873,8 +1165,7 @@ export function registerDictation(ctx: MainContext): void {
   // ---------- status ----------
 
   const asrState = async (): Promise<{ asr: AsrProviderId | null; asrError: 'no-provider' | null }> => {
-    const choice = s('dictation.asr', 'auto')
-    const provider: AsrProviderId = choice === 'auto' ? s('asr.provider', 'deepgram') : choice
+    const provider = chosenProvider()
     if (provider === 'local') return { asr: 'local', asrError: null }
     const has = await ctx.secrets.has(provider === 'deepgram' ? 'asr.deepgram' : 'asr.assemblyai').catch(() => false)
     return has ? { asr: provider, asrError: null } : { asr: null, asrError: 'no-provider' }
@@ -893,7 +1184,10 @@ export function registerDictation(ctx: MainContext): void {
       holdMode: false,
       hook: hook.status,
       ...asr,
-      accessibility: process.platform === 'darwin' ? (systemPreferences.isTrustedAccessibilityClient(false) ? 'granted' : 'missing') : 'not-needed'
+      accessibility: process.platform === 'darwin' ? (systemPreferences.isTrustedAccessibilityClient(false) ? 'granted' : 'missing') : 'not-needed',
+      conflict: conflictNow(),
+      englishOnly: englishOnly(),
+      systemLanguages: [...new Set(app.getPreferredSystemLanguages().map((l) => l.split('-')[0]!.toLowerCase()))]
     }
     return status
   })
@@ -959,19 +1253,44 @@ export function registerDictation(ctx: MainContext): void {
     }
     sess.audioBytes += pcm.length
     sess.meter.feed(pcm)
-  })
-
-  ipcMain.on('dictation:capture-event' satisfies SendChannel, (e, p: { sessionId?: unknown; type?: unknown; error?: unknown }) => {
-    if (ctx.windows.kindOf(e.sender) !== 'dictation-pill') return
-    const sess = session
-    if (!sess || sess.id !== p?.sessionId) return
-    if (p.type === 'error') {
-      const err = (['mic_denied', 'mic_missing', 'mic_busy', 'mic_lost'] as DictationMicError[]).includes(p.error as DictationMicError)
-        ? (p.error as DictationMicError)
-        : 'mic_missing'
-      void fail(sess, err)
+    // The longest recording: it stops itself and finishes normally.
+    if (!sess.finishing && sess.audioBytes / 2 >= L.maxSamples) {
+      log('info', 'dictation:max_length', { samples: Math.round(sess.audioBytes / 2) })
+      void finish()
     }
   })
+
+  ipcMain.on(
+    'dictation:capture-event' satisfies SendChannel,
+    (e, p: { sessionId?: unknown; type?: unknown; error?: unknown; health?: unknown; device?: { deviceId?: unknown; label?: unknown } }) => {
+      if (ctx.windows.kindOf(e.sender) !== 'dictation-pill') return
+      const sess = session
+      if (!sess || sess.id !== p?.sessionId) return
+      if (p.type === 'error') {
+        const err = (['mic_denied', 'mic_missing', 'mic_busy', 'mic_lost'] as DictationMicError[]).includes(p.error as DictationMicError)
+          ? (p.error as DictationMicError)
+          : 'mic_missing'
+        void fail(sess, err)
+        return
+      }
+      if (p.type === 'ready' && p.device && typeof p.device.deviceId === 'string' && typeof p.device.label === 'string') {
+        const device = { deviceId: p.device.deviceId.slice(0, 500), label: p.device.label.slice(0, 500) }
+        const last = s('dictation.lastMicrophone', null)
+        if (!last || last.deviceId !== device.deviceId || last.label !== device.label) {
+          log('info', 'dictation:mic-changed', { first: last === null })
+          void ctx.settings.set('dictation.lastMicrophone', device)
+        }
+        return
+      }
+      if (p.type === 'health') {
+        log(p.health === 'stall' ? 'warn' : 'info', 'dictation:mic-health', { health: String(p.health) })
+        if (state.kind !== 'recording' || sess.finishing) return
+        // The platform can't tell a shut lid yet, so silence always gets the check-your-mic card.
+        if (p.health === 'silent' && state.card?.kind !== 'mic-silent') setState({ ...state, card: { kind: 'mic-silent' } })
+        else if (p.health === 'signal' && state.card) setState({ ...state, card: null })
+      }
+    }
+  )
 
   let lastClick = 0
   ipcMain.on('dictation:pill-action' satisfies SendChannel, (e, p: { action?: unknown; hovered?: unknown }) => {
@@ -989,21 +1308,35 @@ export function registerDictation(ctx: MainContext): void {
       case 'cancel':
         void cancel('pill')
         return
-      case 'show-settings': {
+      case 'show-settings':
+      case 'change-shortcut': {
         setState({ kind: 'idle' })
         const main = showMainWindow() ?? ctx.windows.main()
         main?.webContents.send('settings:open' satisfies PushChannel, { section: 'voice-typing' })
+        return
+      }
+      case 'keep-going':
+        if (state.kind === 'notice') setState({ kind: 'idle' })
+        return
+      case 'undo-learned': {
+        const undo = learned
+        learned = []
+        if (state.kind === 'notice') setState({ kind: 'idle' })
+        void Promise.all(undo.map((t) => ctx.storage.removeDictationTerm(t.id).catch(() => null))).then(() => {
+          log('info', 'dictation:learn-undone', { terms: undo.length })
+          termsChanged()
+        })
         return
       }
       case 'retry':
         void retryFromPill()
         return
       case 'open-history':
-        if (state.kind === 'saved') setState({ kind: 'idle' })
+        if (state.kind === 'saved' || state.kind === 'error') setState({ kind: 'idle' })
         openSettingsSection('voice-typing-history', 'dictation-pill')
         return
       case 'dismiss':
-        if (state.kind === 'saved') setState({ kind: 'idle' })
+        if (state.kind === 'saved' || state.kind === 'notice') setState({ kind: 'idle' })
         return
       case 'click': {
         const now = Date.now()
@@ -1015,7 +1348,7 @@ export function registerDictation(ctx: MainContext): void {
           setState({ kind: 'idle' })
         } else if (state.kind === 'idle' || state.kind === 'empty') {
           startPress = now
-          start('click')
+          start('click', true, null)
           hook.sessionStartedElsewhere()
         }
         return
@@ -1075,13 +1408,15 @@ export function registerDictation(ctx: MainContext): void {
     historyChanged()
   })
 
-  /** The saved audio, transcribed and formatted again: the row's language, no style, hint or screen context. */
+  /** The saved audio, transcribed and formatted again: the row's language, no style, destination or screen context. */
   const retranscribe = async (row: SavedRow): Promise<string> => {
+    const terms = await ctx.storage.listDictationTerms().catch(() => [] as DictationTerm[])
+    const userName = s('profile.name', '').trim() || null
     const recognizer = ctx.speech.openRecognizer({
       purpose: 'dictation',
       choice: s('dictation.asr', 'auto'),
       language: row.language ?? language(),
-      keyterms: buildKeyterms(s('dictation.dictionary', []), null, classifyTarget('', '')).keyterms
+      keyterms: buildKeyterms({ userName, terms, people: [] }, null, classifyTarget('', '')).keyterms
     })
     let raw = ''
     try {
@@ -1092,17 +1427,38 @@ export function registerDictation(ctx: MainContext): void {
       raw = (await recognizer.finish()).text.trim()
     } catch (err) {
       recognizer.cancel()
-      log('info', 'dictation:retry-failed', { reason: err instanceof RecognizerError ? err.reason : 'error' })
+      const reason = err instanceof RecognizerError ? err.reason : 'error'
+      log('info', 'dictation:retry-failed', { reason })
+      if (reason === 'offline' || !net.isOnline()) throw notulaError('provider-error', 'You’re offline')
       throw notulaError('provider-error', 'Retry failed')
     }
     if (!raw) throw notulaError('provider-error', 'No speech was found. Try dictating again.')
-    const formatted = await formatDictation(ctx, { raw, tone: null, hint: null, language: row.language, contextBlock: '', dictionary: s('dictation.dictionary', []) })
+    const formatted = await formatDictation(ctx, {
+      raw,
+      tone: null,
+      destination: 'other',
+      singleLine: false,
+      emailField: null,
+      languages: s('dictation.languages', []),
+      detected: row.language,
+      midSentence: false,
+      contextBlock: '',
+      dictionary: rankTerms(terms)
+        .slice(0, FORMAT_TERMS)
+        .map((t) => t.term)
+    })
     return formatted.text
   }
 
   /** Both Retry paths write `retried`, the text and its word count, and drop the audio. */
   const retried = (id: string, text: string): Promise<DictationAttempt> =>
-    ctx.storage.updateDictationAttempt(id, { status: 'retried', text, failure_reason: null, audio_purge_at: null, word_count: text ? wordCount(text) : null })
+    ctx.storage.updateDictationAttempt(id, {
+      status: 'retried',
+      text: retention() === 'never' ? null : text,
+      failure_reason: null,
+      audio_purge_at: null,
+      word_count: text ? wordCount(text) : null
+    })
 
   const savedRow = async (id: string | null): Promise<SavedRow | null> => {
     const row = id ? await ctx.storage.getDictationAttempt(id) : null
@@ -1119,7 +1475,7 @@ export function registerDictation(ctx: MainContext): void {
       if (!row) {
         log('info', 'dictation:pill-retry-failed', { reason: 'no_audio' })
         lastSaved = null
-        setState({ kind: 'error', reason: 'processing_failed' })
+        setState({ kind: 'error', reason: 'processing_failed' }, 'notice')
         return
       }
       let text: string
@@ -1127,14 +1483,14 @@ export function registerDictation(ctx: MainContext): void {
         text = await retranscribe(row)
       } catch (err) {
         log('info', 'dictation:pill-retry-failed', { reason: err instanceof Error ? err.message : 'error' })
-        setState({ kind: 'saved' })
+        setState({ kind: 'saved' }, 'notice')
         return
       }
       const field = await desk.context(L.contextMs).catch(() => null)
       const d = await deliver(desk, text, field, () => session === null)
       if (d.outcome === 'delivery_failed') {
         log('info', 'dictation:pill-retry-failed', { reason: 'delivery_failed' })
-        setState({ kind: 'saved' })
+        setState({ kind: 'saved' }, 'notice')
         return
       }
       await retried(row.id, text).catch((err: unknown) =>
@@ -1162,11 +1518,55 @@ export function registerDictation(ctx: MainContext): void {
     return updated
   })
 
+  // ---------- the dictionary ----------
+
+  const termResult = (r: DictationTermResult): DictationTermResult => {
+    if (r.ok) termsChanged()
+    return r
+  }
+
+  ipcMain.handle('dictation:terms-list' satisfies InvokeChannel, async (): Promise<InvokeRes<'dictation:terms-list'>> => ctx.storage.listDictationTerms())
+
+  ipcMain.handle('dictation:terms-add' satisfies InvokeChannel, async (_e, p: { term?: unknown }): Promise<InvokeRes<'dictation:terms-add'>> => {
+    if (typeof p?.term !== 'string' || p.term.length > 200) throw notulaError('invalid-input', 'term is required')
+    return termResult(await ctx.storage.addDictationTerm({ term: p.term, source: 'manual' }))
+  })
+
+  ipcMain.handle(
+    'dictation:terms-update' satisfies InvokeChannel,
+    async (_e, p: { id?: unknown; term?: unknown; starred?: unknown }): Promise<InvokeRes<'dictation:terms-update'>> => {
+      if (typeof p?.id !== 'string') throw notulaError('invalid-input', 'id is required')
+      if (p.term !== undefined && (typeof p.term !== 'string' || p.term.length > 200)) throw notulaError('invalid-input', 'term must be text')
+      if (p.starred !== undefined && typeof p.starred !== 'boolean') throw notulaError('invalid-input', 'starred must be a boolean')
+      return termResult(
+        await ctx.storage.updateDictationTerm({
+          id: p.id,
+          ...(typeof p.term === 'string' ? { term: p.term } : {}),
+          ...(typeof p.starred === 'boolean' ? { starred: p.starred } : {})
+        })
+      )
+    }
+  )
+
+  ipcMain.handle('dictation:terms-remove' satisfies InvokeChannel, async (_e, p: { id?: unknown }): Promise<InvokeRes<'dictation:terms-remove'>> => {
+    if (typeof p?.id !== 'string') throw notulaError('invalid-input', 'id is required')
+    return termResult(await ctx.storage.removeDictationTerm(p.id))
+  })
+
+  ipcMain.handle('dictation:terms-restore' satisfies InvokeChannel, async (_e, p: { id?: unknown }): Promise<InvokeRes<'dictation:terms-restore'>> => {
+    if (typeof p?.id !== 'string') throw notulaError('invalid-input', 'id is required')
+    return termResult(await ctx.storage.restoreDictationTerm(p.id))
+  })
+
   // ---------- chat voice input ----------
 
   ipcMain.handle('dictation:chat-start' satisfies InvokeChannel, async (e): Promise<InvokeRes<'dictation:chat-start'>> => {
     if (ctx.windows.kindOf(e.sender) !== 'main') throw notulaError('invalid-input', 'chat voice input runs in the main window')
-    const recognizer = ctx.speech.openRecognizer({ purpose: 'chat-voice', choice: s('dictation.asr', 'auto'), language: language(), keyterms: s('dictation.dictionary', []) })
+    const terms = await ctx.storage.listDictationTerms().catch(() => [] as DictationTerm[])
+    const keyterms = rankTerms(terms)
+      .slice(0, L.keytermsMax)
+      .map((t) => t.term)
+    const recognizer = ctx.speech.openRecognizer({ purpose: 'chat-voice', choice: s('dictation.asr', 'auto'), language: language(), keyterms })
     try {
       await recognizer.ready
     } catch (err) {

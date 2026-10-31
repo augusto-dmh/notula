@@ -12,6 +12,9 @@
 #   paste       -> {sent:bool}   (Ctrl+V into the foreground window)
 #   fullscreen  -> {fullscreen:bool, x, y}  (the foreground window covers its whole monitor;
 #                  x, y = that monitor's top-left in physical pixels)
+#   dblclick    -> {ms}          (the double-click interval, GetDoubleClickTime)
+#   mute        -> {changed:bool} (mutes the default output; changed = false when it already was)
+#   unmute      -> {changed:bool} (unmutes the default output)
 # The script exits when its owner process is gone (Windows does not end children with
 # their parent) or when stdin closes.
 
@@ -65,6 +68,68 @@ public static class NotulaDesk {
     if (r.Left <= m.Left && r.Top <= m.Top && r.Right >= m.Right && r.Bottom >= m.Bottom) return new int[] { m.Left, m.Top };
     return null;
   }
+}
+'@
+
+# The default output's mute switch (Core Audio). Optional: without it, mute and unmute fail.
+$script:AudioOk = $false
+try {
+  Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+[ComImport, Guid("5CDF2C82-841E-4546-9722-0CF74078229A"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface INotulaEndpointVolume {
+  int RegisterControlChangeNotify(IntPtr p);
+  int UnregisterControlChangeNotify(IntPtr p);
+  int GetChannelCount(out uint c);
+  int SetMasterVolumeLevel(float l, IntPtr ctx);
+  int SetMasterVolumeLevelScalar(float l, IntPtr ctx);
+  int GetMasterVolumeLevel(out float l);
+  int GetMasterVolumeLevelScalar(out float l);
+  int SetChannelVolumeLevel(uint ch, float l, IntPtr ctx);
+  int SetChannelVolumeLevelScalar(uint ch, float l, IntPtr ctx);
+  int GetChannelVolumeLevel(uint ch, out float l);
+  int GetChannelVolumeLevelScalar(uint ch, out float l);
+  int SetMute([MarshalAs(UnmanagedType.Bool)] bool mute, IntPtr ctx);
+  int GetMute([MarshalAs(UnmanagedType.Bool)] out bool mute);
+}
+[ComImport, Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface INotulaMMDevice {
+  int Activate(ref Guid iid, int clsCtx, IntPtr p, [MarshalAs(UnmanagedType.IUnknown)] out object o);
+}
+[ComImport, Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface INotulaMMDeviceEnumerator {
+  int EnumAudioEndpoints(int flow, int mask, out IntPtr devices);
+  int GetDefaultAudioEndpoint(int flow, int role, out INotulaMMDevice device);
+}
+[ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")] class NotulaMMDeviceEnumerator {}
+public static class NotulaAudio {
+  static INotulaEndpointVolume Endpoint() {
+    var e = (INotulaMMDeviceEnumerator)(new NotulaMMDeviceEnumerator());
+    INotulaMMDevice dev;
+    Marshal.ThrowExceptionForHR(e.GetDefaultAudioEndpoint(0, 1, out dev));
+    var iid = typeof(INotulaEndpointVolume).GUID;
+    object o;
+    Marshal.ThrowExceptionForHR(dev.Activate(ref iid, 23, IntPtr.Zero, out o));
+    return (INotulaEndpointVolume)o;
+  }
+  public static bool SetMute(bool on) {
+    var v = Endpoint();
+    bool was;
+    Marshal.ThrowExceptionForHR(v.GetMute(out was));
+    if (was == on) return false;
+    Marshal.ThrowExceptionForHR(v.SetMute(on, IntPtr.Zero));
+    return true;
+  }
+}
+'@
+  $script:AudioOk = $true
+} catch {}
+
+Add-Type -TypeDefinition @'
+using System.Runtime.InteropServices;
+public static class NotulaDeskTime {
+  [DllImport("user32.dll")] public static extern uint GetDoubleClickTime();
 }
 '@
 
@@ -163,6 +228,15 @@ while ($true) {
       'context' { $r = Context }
       'modifiers' { $r = Modifiers }
       'paste' { $r = Paste }
+      'dblclick' { $r = @{ ms = [int][NotulaDeskTime]::GetDoubleClickTime() } }
+      'mute' {
+        if (-not $script:AudioOk) { throw "audio unavailable" }
+        $r = @{ changed = [bool][NotulaAudio]::SetMute($true) }
+      }
+      'unmute' {
+        if (-not $script:AudioOk) { throw "audio unavailable" }
+        $r = @{ changed = [bool][NotulaAudio]::SetMute($false) }
+      }
       'fullscreen' {
         $m = [NotulaDesk]::FullscreenMonitor()
         if ($null -eq $m) { $r = @{ fullscreen = $false } } else { $r = @{ fullscreen = $true; x = $m[0]; y = $m[1] } }

@@ -7,16 +7,22 @@
 //   (the helper is not started); a helper that fails before `ready` is `helper-failed`; one that
 //   dies or reports `lost` afterwards is `lost` and is restarted (up to 3 times in a row).
 // - The helper is told which keys the chords use and, while a dictation runs, to report Esc.
+// - Double tap waits the OS double-click interval (the desk helper's `dblclick`, 400 ms when it
+//   can't say). When keys stop arriving for 2 s while some are held and the OS reports no
+//   modifier down, the machine forgets them and re-arms (a lock screen eats key-ups).
+// - While a paste is watched (./observe.ts), the helper reports Return and Tab as `commit`.
 
 import { systemPreferences } from 'electron'
 import type { HookStatus } from '@shared/types/dictation-bar'
 import { log } from '../log'
-import { IDLE, sessionEnded, sessionStartedElsewhere, setSuspended, step, type ChordConfig, type ChordEffect, type ChordState } from './chord-machine'
+import { IDLE, rearm, sessionEnded, sessionStartedElsewhere, setSuspended, step, type ChordConfig, type ChordEffect, type ChordState } from './chord-machine'
 import type { Desk } from './desk'
 
 const READY_MS = 20_000
 const RETRY_MS = 5_000
 const MAX_RETRIES = 3
+const STALE_KEYS_MS = 2_000
+const DOUBLE_TAP_FALLBACK_MS = 400
 
 export class HookShortcuts {
   private machine: ChordState = { ...IDLE }
@@ -27,6 +33,12 @@ export class HookShortcuts {
   private retries = 0
   private readyTimer: ReturnType<typeof setTimeout> | null = null
   private retryTimer: ReturnType<typeof setTimeout> | null = null
+  private staleTimer: ReturnType<typeof setInterval> | null = null
+  private lastKeyAt = 0
+  private doubleTapMs = DOUBLE_TAP_FALLBACK_MS
+  private watching = false
+  /** Return or Tab while a paste is watched. */
+  onCommit: (() => void) | null = null
   status: HookStatus = { available: false }
 
   constructor(
@@ -50,7 +62,7 @@ export class HookShortcuts {
 
   /** null = no hook chord set, or Voice typing disarmed: the helper stops. */
   configure(cfg: ChordConfig | null): void {
-    this.cfg = cfg && (cfg.hold || cfg.handsFree || cfg.record) ? cfg : null
+    this.cfg = cfg && (cfg.hold.length || cfg.handsFree.length || cfg.doubleTap?.length || cfg.record) ? cfg : null
     this.machine = { ...IDLE, suspended: this.machine.suspended }
     if (!this.cfg) {
       this.retries = 0
@@ -87,7 +99,8 @@ export class HookShortcuts {
   stop(): void {
     if (this.readyTimer) clearTimeout(this.readyTimer)
     if (this.retryTimer) clearTimeout(this.retryTimer)
-    this.readyTimer = this.retryTimer = null
+    if (this.staleTimer) clearInterval(this.staleTimer)
+    this.readyTimer = this.retryTimer = this.staleTimer = null
     if (this.running) this.desk.stopHook()
     this.running = false
     this.ready = false
@@ -97,11 +110,23 @@ export class HookShortcuts {
   private sendConfig(): void {
     const cfg = this.cfg
     if (!cfg || !this.ready) return
-    const chords = [cfg.hold, cfg.handsFree, cfg.record].filter((c): c is string[] => !!c)
+    const chords = [...cfg.hold, ...cfg.handsFree, ...(cfg.doubleTap ?? []), ...(cfg.record ? [cfg.record] : [])]
     const mods = new Set(['ctrl', 'alt', 'shift', 'win', 'cmd'])
-    const keys = [...new Set(chords.flat().filter((k) => !mods.has(k)))]
+    const keys = [...new Set(chords.flat().filter((k) => !mods.has(k.replace(/_r$/, ''))))]
     this.desk.sendHook({ op: 'config', keys, chords })
     this.desk.sendHook({ op: 'active', on: this.active })
+    if (this.watching) this.desk.sendHook({ op: 'watch', on: true })
+  }
+
+  /** Keys held with no event for a while: ask the OS, and re-arm when nothing is down. */
+  private checkStale(): void {
+    if (!this.machine.held.length || Date.now() - this.lastKeyAt < STALE_KEYS_MS) return
+    this.lastKeyAt = Date.now()
+    void this.desk.modifiersHeld().then((held) => {
+      if (held !== false || !this.machine.held.length || Date.now() - this.lastKeyAt < STALE_KEYS_MS - 100) return
+      log('info', 'dictation-bar:hook-rearmed', { held: this.machine.held.length })
+      this.machine = rearm(this.machine)
+    })
   }
 
   private onMessage(m: Record<string, unknown>): void {
@@ -127,6 +152,16 @@ export class HookShortcuts {
         this.ready = true
         this.sendConfig()
         this.setStatus({ available: true })
+        if (!this.staleTimer) this.staleTimer = setInterval(() => this.checkStale(), 1_000)
+        if (process.platform === 'win32') {
+          void this.desk.ask('dblclick', 1_500).then((r) => {
+            const ms = Number(r?.['ms'])
+            this.doubleTapMs = Number.isFinite(ms) && ms >= 100 && ms <= 5_000 ? ms : DOUBLE_TAP_FALLBACK_MS
+          })
+        }
+        return
+      case 'commit':
+        this.onCommit?.()
         return
       case 'lost':
         // Re-installing failed: restart the helper.
@@ -143,7 +178,8 @@ export class HookShortcuts {
       case 'key': {
         if (!this.cfg || typeof m['k'] !== 'string') return
         this.retries = 0
-        const r = step(this.machine, this.cfg, { key: m['k'], down: m['d'] === 1, at: Date.now() })
+        this.lastKeyAt = Date.now()
+        const r = step(this.machine, { ...this.cfg, doubleTapMs: this.doubleTapMs }, { key: m['k'], down: m['d'] === 1, at: Date.now() })
         this.machine = r.state
         if (r.effects.length) this.onEffects(r.effects)
         return
@@ -156,6 +192,18 @@ export class HookShortcuts {
     if (on === this.active) return
     this.active = on
     if (this.ready) this.desk.sendHook({ op: 'active', on })
+  }
+
+  /** Report Return and Tab (`onCommit`) while a paste is watched. Windows only. */
+  watch(on: boolean): void {
+    if (on === this.watching) return
+    this.watching = on
+    if (this.ready) this.desk.sendHook({ op: 'watch', on })
+  }
+
+  /** The helper is up and reporting keys. */
+  get isReady(): boolean {
+    return this.ready
   }
 
   setSuspended(on: boolean): void {

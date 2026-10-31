@@ -322,7 +322,8 @@ function placeholderShortcuts(settings: SettingsApi, bus: MainBus): ShortcutsApi
   const stored = new Map<CustomisableShortcutId, string | null>()
   const read = (all: Settings): void => {
     for (const id of Object.keys(CUSTOMISABLE_SHORTCUTS) as CustomisableShortcutId[]) {
-      stored.set(id, all[CUSTOMISABLE_SHORTCUTS[id].settingKey])
+      const v = all[CUSTOMISABLE_SHORTCUTS[id].settingKey]
+      stored.set(id, typeof v === 'string' ? v : null)
     }
   }
   void settings
@@ -332,6 +333,7 @@ function placeholderShortcuts(settings: SettingsApi, bus: MainBus): ShortcutsApi
   bus.on('settings:changed', (e) => read(e.settings))
   return {
     effective: (id) => stored.get(id) ?? defaultShortcut(id, process.platform),
+    entries: () => [],
     validate: () => null,
     registerApplier: () => () => undefined
   }

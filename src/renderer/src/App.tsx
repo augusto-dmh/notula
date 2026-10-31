@@ -64,6 +64,8 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'meeting-notice',
   'transcription-rules',
   'voice-typing-history',
+  'voice-typing-styles',
+  'voice-typing-dictionary',
   'sources'
 ]
 

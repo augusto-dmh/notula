@@ -114,3 +114,51 @@
   color: var(--fg-3);
   font-size: var(--text-xs);
 }
+
+/* List rows (hold and hands-free): one capsule per entry, with its remove button. */
+.ks-list {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  row-gap: 6px;
+}
+
+.ks-entry {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 2px 2px 4px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+
+.ks-entry.is-default {
+  border-style: dashed;
+}
+
+.ks-entry__keys {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ks-entry__twice {
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+}
+
+.ks-entry__remove {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg-3);
+  cursor: pointer;
+}
+
+.ks-entry__remove:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--fg);
+}

@@ -12,6 +12,7 @@ import { join } from 'node:path'
 import Database from 'better-sqlite3-multiple-ciphers'
 import type { ErrorCode } from '@shared/errors'
 import { PREFS_VERSION } from '@shared/types/settings'
+import { normaliseTerm } from '@shared/types/dictation'
 import * as actionItems from './action-items-repo'
 import type { StorageIdentity } from './api'
 import * as attachments from './attachments-repo'
@@ -20,6 +21,7 @@ import * as calendar from './calendar-repo'
 import * as chat from './chat-repo'
 import * as companyIcons from './company-icons-repo'
 import * as dictation from './dictation-repo'
+import * as dictationTerms from './dictation-terms-repo'
 import * as dataExport from './export-repo'
 import * as folders from './folders-repo'
 import * as followUp from './follow-up-repo'
@@ -413,6 +415,12 @@ export class StorageEngine {
     getDictationAttempt: (id) => dictation.getDictationAttempt(this.need(), id),
     deleteDictationAttempts: (q) => dictation.deleteDictationAttempts(this.need(), q),
     markInterruptedDictations: () => dictation.markInterruptedDictations(this.need()),
+    listDictationTerms: () => dictationTerms.listDictationTerms(this.need()),
+    addDictationTerm: (p) => dictationTerms.addDictationTerm(this.need(), p),
+    updateDictationTerm: (p) => dictationTerms.updateDictationTerm(this.need(), p),
+    removeDictationTerm: (id) => dictationTerms.removeDictationTerm(this.need(), id),
+    restoreDictationTerm: (id) => dictationTerms.restoreDictationTerm(this.need(), id),
+    recordDictationTermUse: (ids) => dictationTerms.recordDictationTermUse(this.need(), ids),
     listScratchpadDays: (today) => scratchpad.listScratchpadDays(this.need(), today),
     getScratchpadDay: (date) => scratchpad.getScratchpadDay(this.need(), date),
     saveScratchpadDay: (date, content, hasText) => scratchpad.saveScratchpadDay(this.need(), date, content, hasText),
@@ -799,6 +807,8 @@ export class StorageEngine {
       db.pragma(`key = "x'${keyHex}'"`)
       // Any read fails with SQLITE_NOTADB when the key does not match.
       db.prepare('SELECT count(*) FROM sqlite_master').get()
+      // The dictionary's term id, for migration 14's import (the same rule as the repo's).
+      db.function('dictation_term_id', { deterministic: true }, (t) => (typeof t === 'string' ? normaliseTerm(t) : null))
       return db
     } catch (err) {
       db.close()

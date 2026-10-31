@@ -3,12 +3,14 @@
 // scripted key-event sequences to the pure state machine; no hook, no injected keys.
 // Run: node scripts/dev/chord-harness.ts   (Node's type stripping; exits 1 on a failure)
 
-import { IDLE, sessionEnded, sessionStartedElsewhere, setSuspended, step, type ChordConfig, type ChordEffect, type ChordState } from '../../src/main/dictation/chord-machine.ts'
+import { IDLE, rearm, sessionEnded, sessionStartedElsewhere, setSuspended, step, type ChordConfig, type ChordEffect, type ChordState } from '../../src/main/dictation/chord-machine.ts'
 
-const WIN: ChordConfig = { hold: ['ctrl', 'win'], handsFree: ['ctrl', 'space', 'win'], tapMs: 150 }
-const MAC: ChordConfig = { hold: ['alt', 'ctrl'], handsFree: ['alt', 'ctrl', 'space'], tapMs: 150 }
+const WIN: ChordConfig = { hold: [['ctrl', 'win']], handsFree: [['ctrl', 'space', 'win']], tapMs: 150 }
+const MAC: ChordConfig = { hold: [['alt', 'ctrl']], handsFree: [['alt', 'ctrl', 'space']], tapMs: 150 }
+/** The derived hands-free list: the hold chord's double tap, and chord+Space. */
+const WIN_DT: ChordConfig = { ...WIN, doubleTap: [['ctrl', 'win']], doubleTapMs: 400 }
 
-type Ev = [key: string, down: boolean, at: number] | ['@ended'] | ['@elsewhere'] | ['@suspend', boolean]
+type Ev = [key: string, down: boolean, at: number] | ['@ended'] | ['@elsewhere'] | ['@suspend', boolean] | ['@rearm']
 
 interface Case {
   name: string
@@ -131,7 +133,7 @@ const CASES: Case[] = [
   },
   {
     name: 'hold chord off (empty) → hands-free chord still starts directly',
-    cfg: { hold: null, handsFree: ['ctrl', 'space', 'win'], tapMs: 150 },
+    cfg: { hold: [], handsFree: [['ctrl', 'space', 'win']], tapMs: 150 },
     events: [d('ctrl', 0), d('win', 5), d('space', 10), u('space', 40), u('win', 50), u('ctrl', 60)],
     effects: ['start-hands-free'],
     masks: 1,
@@ -168,6 +170,52 @@ const CASES: Case[] = [
     masks: 1
   },
   {
+    name: 'double tap of the hold chord within the interval → hands-free',
+    cfg: WIN_DT,
+    events: [d('ctrl', 0), d('win', 10), u('win', 100), u('ctrl', 110), d('ctrl', 300), d('win', 310), u('win', 360), u('ctrl', 370)],
+    effects: ['start-hold', 'discard', 'start-hands-free'],
+    mode: 'handsFree'
+  },
+  {
+    name: 'double tap too slow → a second hold',
+    cfg: WIN_DT,
+    events: [d('ctrl', 0), d('win', 10), u('win', 100), u('ctrl', 110), d('ctrl', 900), d('win', 910), u('win', 1600), u('ctrl', 1610)],
+    effects: ['start-hold', 'discard', 'start-hold', 'finish']
+  },
+  {
+    name: 'double tap, then one press of the chord → finish',
+    cfg: WIN_DT,
+    events: [d('ctrl', 0), d('win', 10), u('win', 100), u('ctrl', 110), d('ctrl', 300), d('win', 310), u('win', 360), u('ctrl', 370), d('ctrl', 3000), d('win', 3010), u('win', 3100), u('ctrl', 3110)],
+    effects: ['start-hold', 'discard', 'start-hands-free', 'finish'],
+    mode: 'idle'
+  },
+  {
+    name: 'double tap of a chord that is not a hold chord → hands-free',
+    cfg: { ...WIN, doubleTap: [['alt', 'ctrl']], doubleTapMs: 400 },
+    events: [d('ctrl', 0), d('alt', 10), u('alt', 80), u('ctrl', 90), d('ctrl', 200), d('alt', 210), u('alt', 260), u('ctrl', 270)],
+    effects: ['start-hands-free'],
+    mode: 'handsFree'
+  },
+  {
+    name: 'a right-side chord ignores the left key',
+    cfg: { hold: [['ctrl_r', 'win']], handsFree: [], tapMs: 150 },
+    events: [d('ctrl', 0), d('win', 10), u('win', 600), u('ctrl', 610), d('ctrl_r', 1000), d('win', 1010), u('win', 1700), u('ctrl_r', 1710)],
+    effects: ['start-hold', 'finish']
+  },
+  {
+    name: 'second hold chord in the list starts a hold',
+    cfg: { hold: [['ctrl', 'win'], ['alt', 'shift']], handsFree: [], tapMs: 150 },
+    events: [d('shift', 0), d('alt', 10), u('alt', 700), u('shift', 710)],
+    effects: ['start-hold', 'finish'],
+    masks: 0
+  },
+  {
+    name: 'keys stuck after a lost key-up → re-arm, then the chord works',
+    cfg: WIN,
+    events: [d('ctrl', 0), d('win', 10), u('win', 600), ['@rearm'], d('ctrl', 5000), d('win', 5010), u('win', 5700), u('ctrl', 5710)],
+    effects: ['start-hold', 'finish', 'start-hold', 'finish']
+  },
+  {
     name: 'repeat chord after finish starts a new hold',
     cfg: WIN,
     events: [d('ctrl', 0), d('win', 10), u('win', 500), d('win', 700), u('win', 1400), u('ctrl', 1500)],
@@ -185,6 +233,7 @@ for (const c of CASES) {
     if (ev[0] === '@ended') s = sessionEnded(s)
     else if (ev[0] === '@elsewhere') s = sessionStartedElsewhere(s)
     else if (ev[0] === '@suspend') s = setSuspended(s, ev[1] as boolean)
+    else if (ev[0] === '@rearm') s = rearm(s)
     else {
       const r = step(s, c.cfg, { key: ev[0], down: ev[1] as boolean, at: ev[2] as number })
       s = r.state

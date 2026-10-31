@@ -8,8 +8,11 @@
 //   microphone, then the system default (`dictation.microphone` null = built-in if present).
 // - A track that ends is re-acquired once; if that fails the error is `mic_lost`.
 // - Stop keeps a 100 ms tail.
+// - Health: a frame is signal when any sample isn't zero. The mic is silent after 3 s with no
+//   signal yet, or 5 s once signal was heard; the mark clears when signal returns. Nothing heard
+//   in the first 5 s reopens the mic once. No frames for 2 s is a stall.
 
-import type { DictationMicError, DictationMicrophone } from '@shared/types/dictation'
+import { DICTATION_LIMITS as L, type DictationMicError, type DictationMicHealth, type DictationMicrophone } from '@shared/types/dictation'
 import workletUrl from '../capture/worklet.ts?worker&url'
 
 const RATE = 16_000
@@ -57,19 +60,72 @@ export class MicCapture {
   private node: AudioWorkletNode | null = null
   private stopped = false
   private reacquired = false
+  private reopened = false
+  private choice: DictationMicrophone | null = null
+  private startedAt = 0
+  private lastFrameAt = 0
+  private lastSignalAt = 0
+  private heard = false
+  private silent = false
+  private stalled = false
+  private health: ReturnType<typeof setInterval> | null = null
 
   constructor(
     private readonly onChunk: (pcm: Uint8Array) => void,
     private readonly onLevel: (level: number) => void,
-    private readonly onError: (e: DictationMicError | 'transcription_start') => void
+    private readonly onError: (e: DictationMicError | 'transcription_start') => void,
+    private readonly onHealth: (h: DictationMicHealth) => void = () => undefined
   ) {}
 
-  async start(choice: DictationMicrophone | null): Promise<void> {
+  /** Resolves with the device in use. */
+  async start(choice: DictationMicrophone | null): Promise<{ deviceId: string; label: string } | null> {
     const ctx = new AudioContext({ sampleRate: RATE, latencyHint: 'interactive', sinkId: { type: 'none' } } as AudioContextOptions)
     this.ctx = ctx
+    this.choice = choice
     await ctx.audioWorklet.addModule(workletUrl)
     await this.acquire(choice, true)
     if (ctx.state === 'suspended') await ctx.resume()
+    this.startedAt = this.lastFrameAt = Date.now()
+    this.health = setInterval(() => this.checkHealth(), 250)
+    const track = this.stream?.getAudioTracks()[0]
+    return track ? { deviceId: track.getSettings().deviceId ?? '', label: track.label } : null
+  }
+
+  private checkHealth(): void {
+    if (this.stopped) return
+    const now = Date.now()
+    if (now - this.lastFrameAt > L.micStallMs) {
+      if (!this.stalled) this.onHealth('stall')
+      this.stalled = true
+    } else this.stalled = false
+    const quietFor = this.heard ? now - this.lastSignalAt : now - this.startedAt
+    if (!this.silent && quietFor > (this.heard ? L.micSilentAfterSignalMs : L.micSilentMs)) {
+      this.silent = true
+      this.onHealth('silent')
+    }
+    // Nothing at all in the first 5 s: reopen the device once.
+    if (!this.heard && !this.reopened && now - this.startedAt > L.micReopenMs) {
+      this.reopened = true
+      this.onHealth('reopened')
+      this.node?.disconnect()
+      this.stream?.getTracks().forEach((t) => t.stop())
+      this.acquire(this.choice, false).catch(() => this.onError('mic_lost'))
+    }
+  }
+
+  private frame(s: Float32Array): void {
+    this.lastFrameAt = Date.now()
+    for (let i = 0; i < s.length; i++) {
+      if (s[i] !== 0) {
+        this.heard = true
+        this.lastSignalAt = this.lastFrameAt
+        if (this.silent) {
+          this.silent = false
+          this.onHealth('signal')
+        }
+        return
+      }
+    }
   }
 
   private async acquire(choice: DictationMicrophone | null, echo: boolean): Promise<void> {
@@ -96,6 +152,7 @@ export class MicCapture {
     node.port.onmessage = (e: MessageEvent<{ samples: Float32Array }>) => {
       if (this.stopped) return
       const s = e.data.samples
+      this.frame(s)
       let sum = 0
       for (let i = 0; i < s.length; i++) sum += (s[i] as number) ** 2
       this.onLevel(Math.min(1, Math.sqrt(sum / Math.max(1, s.length)) * 6))
@@ -125,6 +182,8 @@ export class MicCapture {
 
   release(): void {
     this.stopped = true
+    if (this.health) clearInterval(this.health)
+    this.health = null
     this.node?.port.postMessage({ type: 'stop' })
     this.node?.disconnect()
     this.node = null

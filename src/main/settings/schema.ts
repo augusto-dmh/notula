@@ -4,7 +4,7 @@
 // rows that fail them to `settings_rejected`. Keep this file free of
 // Electron imports: the notula-storage utility process bundles it.
 
-import { DICTATION_LANGUAGE_LISTS, DICTATION_LIMITS } from '@shared/types/dictation'
+import { DICTATION_LANGUAGE_LISTS, DICTATION_LIMITS, DICTATION_STYLE_KEYS } from '@shared/types/dictation'
 import { DEFAULT_SETTINGS, JARGON_LIMITS, type SettingKey, type Settings } from '@shared/types/settings'
 import { SOURCES_LIMITS } from '@shared/types/sources'
 
@@ -142,8 +142,19 @@ const transcriptionRules: Validator = (v) => {
   return true
 }
 
-const DICTATION_CATEGORIES = ['email', 'work', 'casual', 'other'] as const
 const DICTATION_TONES = ['formal', 'casual', 'relaxed', 'excited'] as const
+
+const dictationLanguage = (v: unknown): boolean =>
+  typeof v === 'string' && (DICTATION_LANGUAGE_LISTS.a.includes(v) || DICTATION_LANGUAGE_LISTS.b.includes(v))
+
+/** Up to 3 unique non-empty chord texts. */
+const holdChords: Validator = (v) =>
+  Array.isArray(v) && v.length <= DICTATION_LIMITS.maxShortcutEntries && new Set(v).size === v.length && v.every(text(60, { nonEmpty: true }))
+
+const handsFreeEntries: Validator = (v) =>
+  Array.isArray(v) &&
+  v.length <= DICTATION_LIMITS.maxShortcutEntries &&
+  v.every((x) => text(60, { nonEmpty: true })(x) || (isObject(x) && text(60, { nonEmpty: true })(x['keys']) && x['doubleTap'] === true && Object.keys(x).length === 2))
 
 const shortStrings =
   (maxItems: number, maxChars: number): Validator =>
@@ -308,31 +319,30 @@ const VALIDATORS: { [K in SettingKey]: Validator } = {
   'dictation.shortcut': nullOr(text(100, { nonEmpty: true })),
   'dictationBar.enabled': bool,
   'dictationBar.snoozeUntil': nullOr(integer(0, Number.MAX_SAFE_INTEGER)),
-  'shortcuts.dictationHold': nullOr(text(60)),
-  'shortcuts.dictationHandsFree': nullOr(text(60)),
+  'shortcuts.dictationHold': nullOr(holdChords),
+  'shortcuts.dictationHandsFree': nullOr(handsFreeEntries),
   'shortcuts.recordToggle': nullOr(text(100, { nonEmpty: true })),
-  'dictation.language': (v) =>
-    v === null ||
-    v === 'auto' ||
-    (typeof v === 'string' && (DICTATION_LANGUAGE_LISTS.a.includes(v) || DICTATION_LANGUAGE_LISTS.b.includes(v))),
+  'dictation.languages': (v) =>
+    Array.isArray(v) && v.length <= DICTATION_LIMITS.maxLanguages && new Set(v).size === v.length && v.every(dictationLanguage),
   'dictation.microphone': (v) =>
     v === null ||
     v === 'system-default' ||
     (isObject(v) && text(500, { nonEmpty: true })(v['deviceId']) && text(500)(v['label'])),
   'dictation.asr': oneOf('auto', 'deepgram', 'assemblyai', 'local'),
   'dictation.screenContext': bool,
+  // A tone the key doesn't allow is kept and read as automatic.
   'dictation.styles': (v) =>
     isObject(v) &&
-    Object.keys(v).length === DICTATION_CATEGORIES.length &&
-    DICTATION_CATEGORIES.every((c) => Object.hasOwn(v, c) && (v[c] === null || oneOf(...DICTATION_TONES)(v[c]))),
-  'dictation.dictionary': (v) =>
-    Array.isArray(v) &&
-    v.length <= DICTATION_LIMITS.dictionaryMax &&
-    new Set(v.map((t) => (typeof t === 'string' ? t.trim().toLowerCase() : t))).size === v.length &&
-    v.every(jargonTerm),
-  'dictation.dictionaryRemoved': (v) =>
-    Array.isArray(v) && v.length <= 500 && v.every((x) => typeof x === 'string' && x.length <= 50),
-  'dictation.failedAudioRetention': nullOr(oneOf('off', '24h', '7d', '14d')),
+    Object.keys(v).length === DICTATION_STYLE_KEYS.length &&
+    DICTATION_STYLE_KEYS.every((c) => Object.hasOwn(v, c) && (v[c] === null || oneOf(...DICTATION_TONES)(v[c]))),
+  'dictation.learnWords': bool,
+  'dictation.localRetention': oneOf('keep', '24h', 'never'),
+  'dictation.sounds': bool,
+  'dictation.muteOtherAudio': bool,
+  'dictation.conflictWarningShownAt': (v) => Array.isArray(v) && v.length <= 10 && v.every(isoTime),
+  'dictation.conflictShortcut': (v) =>
+    v === null || (isObject(v) && oneOf('dictation', 'dictationHold', 'dictationHandsFree')(v['id']) && text(1_000)(v['value'])),
+  'dictation.lastMicrophone': (v) => v === null || (isObject(v) && text(500)(v['deviceId']) && text(500)(v['label'])),
   'dictation.onboardingCompleted': bool,
   'privacy.localOnly': bool,
   'window.repositionForMeetings': bool,

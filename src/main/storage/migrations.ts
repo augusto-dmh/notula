@@ -1578,12 +1578,83 @@ const ATTACHMENT_CAPTURE = `
 ALTER TABLE attachments ADD capture TEXT;
 `
 
+/**
+ * Version 14: the voice typing dictionary. Terms move out of the `dictation.dictionary` setting
+ * into `dictation_terms`, keyed by the normalised term (`dictation_term_id`, registered on every
+ * connection by engine.ts); removed words come along soft-deleted so they are never learned back.
+ * Usage stays in `dictation_term_usage` and never leaves the device. The voice typing settings
+ * move to their new shapes in the same step: style keys `work` → `work-chat` and `casual` →
+ * `personal-chat` (a tone the new key doesn't allow becomes null), single hook chords become
+ * one-item lists, `dictation.language` becomes the `dictation.languages` list and
+ * `dictation.failedAudioRetention` becomes `dictation.localRetention`.
+ */
+const DICTATION_DICTIONARY = `
+CREATE TABLE dictation_terms (
+  id TEXT PRIMARY KEY,
+  term TEXT NOT NULL,
+  source TEXT NOT NULL CHECK (source IN ('manual', 'learned', 'imported')),
+  starred INTEGER NOT NULL DEFAULT 0 CHECK (starred IN (0, 1)),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  deleted_at TEXT
+);
+
+CREATE TABLE dictation_term_usage (
+  term_id TEXT PRIMARY KEY REFERENCES dictation_terms (id) ON DELETE CASCADE ON UPDATE CASCADE,
+  use_count INTEGER NOT NULL DEFAULT 0,
+  last_used_at TEXT
+);
+
+INSERT OR IGNORE INTO dictation_terms (id, term, source, starred, created_at, updated_at, deleted_at)
+SELECT dictation_term_id(j.value), trim(j.value), 'imported', 0, ${NOW}, ${NOW}, NULL
+FROM settings s, json_each(s.value) j
+WHERE s.key = 'dictation.dictionary' AND json_valid(s.value) AND json_type(s.value) = 'array'
+  AND j.type = 'text' AND length(trim(j.value)) BETWEEN 1 AND 50 AND instr(j.value, ',') = 0
+ORDER BY j.key;
+
+INSERT OR IGNORE INTO dictation_terms (id, term, source, starred, created_at, updated_at, deleted_at)
+SELECT dictation_term_id(j.value), trim(j.value), 'imported', 0, ${NOW}, ${NOW}, ${NOW}
+FROM settings s, json_each(s.value) j
+WHERE s.key = 'dictation.dictionaryRemoved' AND json_valid(s.value) AND json_type(s.value) = 'array'
+  AND j.type = 'text' AND length(trim(j.value)) BETWEEN 1 AND 50 AND instr(j.value, ',') = 0;
+
+UPDATE settings SET value = '[]', updated_at = ${NOW} WHERE key IN ('dictation.dictionary', 'dictation.dictionaryRemoved');
+
+UPDATE settings SET updated_at = ${NOW}, value = json_object(
+  'email', CASE WHEN json_extract(value, '$.email') IN ('formal', 'casual', 'excited') THEN json_extract(value, '$.email') END,
+  'work-chat', CASE WHEN json_extract(value, '$.work') IN ('formal', 'casual', 'excited') THEN json_extract(value, '$.work') END,
+  'personal-chat', CASE WHEN json_extract(value, '$.casual') IN ('formal', 'casual', 'relaxed') THEN json_extract(value, '$.casual') END,
+  'other', CASE WHEN json_extract(value, '$.other') IN ('formal', 'casual', 'excited') THEN json_extract(value, '$.other') END
+)
+WHERE key = 'dictation.styles' AND json_valid(value) AND json_type(value) = 'object';
+
+UPDATE settings SET updated_at = ${NOW},
+  value = CASE WHEN json_extract(value, '$') = '' THEN '[]' ELSE json_array(json_extract(value, '$')) END
+WHERE key IN ('shortcuts.dictationHold', 'shortcuts.dictationHandsFree') AND json_valid(value) AND json_type(value) = 'text';
+
+INSERT OR REPLACE INTO settings (owner_id, key, value, updated_at)
+SELECT owner_id, 'dictation.languages',
+  CASE WHEN json_valid(value) AND json_type(value) = 'text' AND json_extract(value, '$') NOT IN ('', 'auto')
+    THEN json_array(json_extract(value, '$')) ELSE '[]' END,
+  ${NOW}
+FROM settings WHERE key = 'dictation.language';
+
+DELETE FROM settings WHERE key = 'dictation.language';
+
+INSERT OR REPLACE INTO settings (owner_id, key, value, updated_at)
+SELECT owner_id, 'dictation.localRetention', CASE WHEN value = '"off"' THEN '"never"' ELSE '"keep"' END, ${NOW}
+FROM settings WHERE key = 'dictation.failedAudioRetention';
+
+DELETE FROM settings WHERE key = 'dictation.failedAudioRetention';
+`
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: BASELINE_VERSION, name: 'baseline', sql: BASELINE },
   { version: 9, name: 'sources-and-imports', sql: SOURCES_AND_IMPORTS },
   { version: 10, name: 'dictation-usage', sql: DICTATION_USAGE },
   { version: 11, name: 'action-item-drafts', sql: ACTION_ITEM_DRAFTS },
   { version: 12, name: 'speaker-profiles', sql: SPEAKER_PROFILES },
+  { version: 14, name: 'dictation-dictionary', sql: DICTATION_DICTIONARY },
   { version: 15, name: 'user-context-entries', sql: USER_CONTEXT_ENTRIES },
   { version: 16, name: 'mcp-usage', sql: MCP_USAGE },
   { version: 18, name: 'attachment-capture', sql: ATTACHMENT_CAPTURE }

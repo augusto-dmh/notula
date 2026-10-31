@@ -127,18 +127,27 @@ function isReservedEdit(mod: boolean, shift: boolean, alt: boolean, key: string)
 
 // ---------- hook chords ----------
 
-const CHORD_ORDER = ['Ctrl', 'Win', 'Cmd', 'Option', 'Alt', 'Shift']
+const CHORD_ORDER = ['Ctrl', 'RightCtrl', 'Win', 'RightWin', 'Cmd', 'Option', 'Alt', 'RightAlt', 'Shift', 'RightShift']
 
-/** One key of a hook chord, by physical key (sides merged), or null when it can't be used. */
+/**
+ * One key of a hook chord, by physical key (`KeyboardEvent.code`), as Notula's key name, or null
+ * when it can't be used. The right-side modifiers and the numpad digits stay their own keys
+ * on Windows; the macOS helper doesn't tell them apart yet.
+ */
 export function chordKeyOf(e: KeyboardEvent): string | null {
   const c = e.code
-  if (c === 'ControlLeft' || c === 'ControlRight') return 'Ctrl'
-  if (c === 'AltLeft' || c === 'AltRight') return isMac ? 'Option' : 'Alt'
-  if (c === 'ShiftLeft' || c === 'ShiftRight') return 'Shift'
-  if (c === 'MetaLeft' || c === 'MetaRight' || c === 'OSLeft' || c === 'OSRight') return isMac ? 'Cmd' : 'Win'
+  if (c === 'ControlLeft') return 'Ctrl'
+  if (c === 'ControlRight') return isMac ? 'Ctrl' : 'RightCtrl'
+  if (c === 'AltLeft') return isMac ? 'Option' : 'Alt'
+  if (c === 'AltRight') return isMac ? 'Option' : 'RightAlt'
+  if (c === 'ShiftLeft') return 'Shift'
+  if (c === 'ShiftRight') return isMac ? 'Shift' : 'RightShift'
+  if (c === 'MetaLeft' || c === 'OSLeft') return isMac ? 'Cmd' : 'Win'
+  if (c === 'MetaRight' || c === 'OSRight') return isMac ? 'Cmd' : 'RightWin'
   if (c === 'Space') return 'Space'
   if (/^Key[A-Z]$/.test(c)) return c.slice(3)
   if (/^Digit[0-9]$/.test(c)) return c.slice(5)
+  if (/^Numpad[0-9]$/.test(c) && !isMac) return `Num${c.slice(6)}`
   if (/^F([1-9]|1[0-9]|2[0-4])$/.test(c)) return c
   return null
 }
@@ -147,6 +156,37 @@ export function chordKeyOf(e: KeyboardEvent): string | null {
 export function chordText(keys: readonly string[]): string {
   const mods = CHORD_ORDER.filter((m) => keys.includes(m))
   return [...mods, ...keys.filter((k) => !CHORD_ORDER.includes(k))].join('+')
+}
+
+const CHORD_CHIPS: Record<string, { mac: Chip; win: Chip }> = {
+  ctrl: { mac: { text: '⌃', name: 'Control' }, win: { text: 'Ctrl', name: 'Control' } },
+  control: { mac: { text: '⌃', name: 'Control' }, win: { text: 'Ctrl', name: 'Control' } },
+  rightctrl: { mac: { text: 'Right ⌃', name: 'Right Control' }, win: { text: 'Right Ctrl', name: 'Right Control' } },
+  alt: { mac: { text: '⌥', name: 'Option' }, win: { text: 'Alt', name: 'Alt' } },
+  option: { mac: { text: '⌥', name: 'Option' }, win: { text: 'Alt', name: 'Alt' } },
+  rightalt: { mac: { text: 'Right ⌥', name: 'Right Option' }, win: { text: 'Right Alt', name: 'Right Alt' } },
+  shift: { mac: { text: '⇧', name: 'Shift' }, win: { text: 'Shift', name: 'Shift' } },
+  rightshift: { mac: { text: 'Right ⇧', name: 'Right Shift' }, win: { text: 'Right Shift', name: 'Right Shift' } },
+  win: { mac: { text: 'Win', name: 'Windows' }, win: { text: 'Win', name: 'Windows' } },
+  rightwin: { mac: { text: 'Right Win', name: 'Right Windows' }, win: { text: 'Right Win', name: 'Right Windows' } },
+  cmd: { mac: { text: '⌘', name: 'Command' }, win: { text: 'Cmd', name: 'Command' } },
+  space: { mac: { text: 'Space', name: 'Space' }, win: { text: 'Space', name: 'Space' } }
+}
+
+/** A hook chord ("Ctrl+RightAlt+Num1") as chips for this platform. */
+export function chordChips(keys: string): Chip[] {
+  return keys
+    .split('+')
+    .map((raw) => raw.trim())
+    .filter(Boolean)
+    .map((raw) => {
+      const t = raw.toLowerCase()
+      const named = CHORD_CHIPS[t] ?? CHORD_CHIPS[t.replace(/^(ctrl|alt|shift|win)_r$/, 'right$1')]
+      if (named) return isMac ? named.mac : named.win
+      if (/^num[0-9]$/.test(t)) return { text: `Num ${t.slice(3)}`, name: `Numpad ${t.slice(3)}` }
+      const text = raw.length === 1 ? raw.toUpperCase() : raw
+      return { text, name: text }
+    })
 }
 
 /** Reads one keydown in the settings window. */

@@ -98,23 +98,6 @@
   gap: 10px;
 }
 
-.vt-dict__box {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  min-height: 36px;
-  padding: 5px 8px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
-  background: var(--surface);
-}
-
-.vt-dict__box:focus-within {
-  border-color: var(--accent);
-  box-shadow: var(--focus-ring);
-}
-
 .vt-chip {
   display: inline-flex;
   align-items: center;
@@ -142,27 +125,133 @@
   color: var(--fg);
 }
 
-.vt-dict__input {
+/* Languages: chips, then the "Add a language" menu. */
+.vt-langs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.vt-langs__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.vt-langs__auto {
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+}
+
+/* The dictionary page. */
+.vt-dictpage {
+  padding: 12px 14px;
+}
+
+.vt-dictpage__field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.vt-dictpage__input {
   flex: 1;
-  min-width: 160px;
-  height: 24px;
-  border: 0;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
   outline: none;
-  background: none;
+  background: var(--surface);
   color: var(--fg);
   font: var(--text-sm) var(--font-sans);
 }
 
-.vt-dict__add {
-  align-self: flex-start;
-  margin-top: 6px;
-  padding: 4px 8px;
+.vt-dictpage__input:focus {
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.vt-dictpage__count,
+.vt-dictpage__hint {
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+}
+
+.vt-dictpage__hint,
+.vt-dictpage__error {
+  margin: 8px 0 0;
+}
+
+.vt-terms {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.vt-term {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  border-top: 1px solid var(--border);
+}
+
+.vt-term__star {
+  width: 24px;
+  height: 24px;
+  padding: 0;
   border: 0;
   border-radius: var(--radius-sm);
-  background: var(--surface-2);
-  color: var(--fg-2);
-  font: var(--text-xs) var(--font-sans);
+  background: none;
+  color: var(--fg-3);
+  font-size: 15px;
   cursor: pointer;
+}
+
+.vt-term__star.is-on {
+  color: var(--accent);
+}
+
+.vt-term__text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.vt-term__label {
+  overflow: hidden;
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vt-term__note {
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+}
+
+.vt-term__input {
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  outline: none;
+  background: var(--surface);
+  color: var(--fg);
+  font: var(--text-sm) var(--font-sans);
+}
+
+.vt-term__actions {
+  display: inline-flex;
+  gap: 4px;
+  opacity: 0;
+}
+
+.vt-term:hover .vt-term__actions,
+.vt-term:focus-within .vt-term__actions {
+  opacity: 1;
 }
 
 .vt-style__sample {

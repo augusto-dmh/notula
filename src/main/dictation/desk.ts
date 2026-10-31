@@ -2,6 +2,8 @@
 // Main's side of the notula-desk helper: forks out/main/desk.js while dictation is
 // armed, keeps it warm, and answers `ask(op)` with a timeout. A failed or missing helper
 // degrades each caller (no context, the clipboard instead of a paste); it never throws.
+// Windows adds `dblclick` (the OS double-click interval) and `mute` / `unmute` (system output,
+// for "Mute other audio while dictating").
 // It also hosts the dictation bar's key hook: `startHook` /
 // `sendHook` / `stopHook`, with its events and its exit on `onHook`.
 
@@ -122,7 +124,10 @@ export class Desk {
   }
 
   /** null on any failure or timeout. */
-  async ask(op: 'foreground' | 'context' | 'modifiers' | 'paste' | 'fullscreen', timeoutMs: number): Promise<Reply | null> {
+  async ask(
+    op: 'foreground' | 'context' | 'modifiers' | 'paste' | 'fullscreen' | 'dblclick' | 'mute' | 'unmute',
+    timeoutMs: number
+  ): Promise<Reply | null> {
     if (!(await this.start().catch(() => false)) || !this.proc) return null
     const id = this.nextId++
     const proc = this.proc
@@ -178,6 +183,19 @@ export class Desk {
   async fullscreen(): Promise<{ x: number; y: number } | null> {
     const r = await this.ask('fullscreen', 1_500)
     return r && r['fullscreen'] === true ? { x: Number(r['x']), y: Number(r['y']) } : null
+  }
+
+  /** Mutes system output unless it already is; true only when this call muted it. */
+  async mute(): Promise<boolean> {
+    if (process.platform !== 'win32') return false
+    const r = await this.ask('mute', 1_500)
+    return r?.['changed'] === true
+  }
+
+  async unmute(): Promise<boolean> {
+    if (process.platform !== 'win32') return false
+    const r = await this.ask('unmute', 1_500)
+    return r !== null
   }
 
   async paste(): Promise<boolean> {

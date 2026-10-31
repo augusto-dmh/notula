@@ -7,19 +7,25 @@
 // the editing combinations are ignored), main validates and asks the owner to apply it,
 // and "Reset" stores the default. Main owns registration (`shortcuts:set`).
 //
-// The dictation bar rows: hold and hands-free dictation are chords
-// for the keyboard helper. They record as the largest set of keys held at once (modifier-only
-// is fine), can be turned off, and grey out with "Needs the keyboard helper." while the helper
-// is unavailable (`shortcuts:hook-status`). `StandaloneShortcut` is one row's control for
-// Settings ▸ Voice typing.
+// The dictation bar rows: hold and hands-free dictation are lists (`multiple`) of up to 3 chords
+// for the keyboard helper, shown as chips with Add and remove (`shortcuts:set-list`). A chord
+// records as the largest set of keys held at once (modifier-only is fine), read by physical key
+// so the right-side modifiers and the numpad stay distinct. Pressing it twice quickly on the
+// hands-free row records a double tap. While no hands-free list is set, the entries derived from
+// the hold chords show as defaults; removing every entry brings them back. The rows grey out
+// with "Needs the keyboard helper." while the helper is unavailable (`shortcuts:hook-status`),
+// and show the neutral conflict note while main reports one. The voice typing toggle is the
+// fallback and is listed only while the helper is unavailable (or its conflict note is up).
+// `StandaloneShortcut` is one row's control for Settings ▸ Voice typing.
 
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react'
 import { parseError } from '@shared/errors'
-import type { HookStatus } from '@shared/types/dictation-bar'
-import { isHookShortcut, type CustomisableShortcutId, type ShortcutGroup, type ShortcutRow } from '@shared/types/shortcuts'
+import { DICTATION_LIMITS } from '@shared/types/dictation'
+import type { HookEntry, HookStatus } from '@shared/types/dictation-bar'
+import { isHookShortcut, type CustomisableShortcutId, type HookShortcutId, type ShortcutGroup, type ShortcutRow } from '@shared/types/shortcuts'
 import { navigateToSettings } from '../../app/navigation'
 import { debugLog, isMac } from '../../app/platform'
-import { chipsFor, chordKeyOf, chordText, readKey } from './keys'
+import { chipsFor, chordChips, chordKeyOf, chordText, readKey, type Chip } from './keys'
 import './keyboard-shortcuts.css'
 
 const GROUPS: readonly { id: ShortcutGroup; title: string }[] = [
@@ -32,11 +38,15 @@ const GROUPS: readonly { id: ShortcutGroup; title: string }[] = [
 ]
 
 const RECORD_MS = 10_000
+/** After a chord comes up, a second press this soon makes it a double tap. */
+const DOUBLE_TAP_WINDOW_MS = 450
 
 const CUSTOMISABLE: readonly string[] = ['quickAsk', 'dictation', 'newNote', 'dictationHold', 'dictationHandsFree', 'recordToggle']
 /** Rows whose recording would trigger a live global shortcut or hook chord. */
 const SUSPENDS: readonly string[] = ['dictation', 'dictationHold', 'dictationHandsFree', 'recordToggle']
 const NEEDS_HELPER = 'Needs the keyboard helper.'
+/** The neutral conflict note: it never names or looks for another app. */
+export const CONFLICT_NOTE = 'Another app may also answer this shortcut. If voice typing starts twice or not at all, pick another one.'
 
 function keysFor(row: ShortcutRow): string {
   return isMac ? row.effective.darwin : row.effective.default
@@ -65,8 +75,7 @@ function hookBroken(s: HookStatus | null): boolean {
   return !!s && !s.available && (!!s.reason || !!s.lost)
 }
 
-export function KeyChips({ accelerator }: { accelerator: string }): JSX.Element {
-  const chips = chipsFor(accelerator)
+function Chips({ chips }: { chips: Chip[] }): JSX.Element {
   return (
     <span className="ks-chips" role="img" aria-label={chips.map((c) => c.name).join(' + ')}>
       {chips.map((c, i) => (
@@ -78,12 +87,34 @@ export function KeyChips({ accelerator }: { accelerator: string }): JSX.Element 
   )
 }
 
+export function KeyChips({ accelerator }: { accelerator: string }): JSX.Element {
+  return <Chips chips={chipsFor(accelerator)} />
+}
+
+/** A hook entry: its chord chips, and "twice" for a double tap. */
+export function EntryChips({ entry }: { entry: HookEntry }): JSX.Element {
+  return (
+    <span className="ks-entry__keys">
+      <Chips chips={chordChips(entry.keys)} />
+      {entry.doubleTap ? <span className="ks-entry__twice">twice</span> : null}
+    </span>
+  )
+}
+
+const entryName = (e: HookEntry): string => `${chordChips(e.keys).map((c) => c.name).join(' + ')}${e.doubleTap ? ', twice' : ''}`
+
+/** Records one accelerator (`onSave`) or, for a hook row, one chord entry. */
 function Recorder({
   row,
-  onDone
+  doubleTap,
+  onSave,
+  onCancel
 }: {
   row: ShortcutRow
-  onDone(result: { error: string | null }): void
+  /** A hands-free row: pressing the chord twice quickly records a double tap. */
+  doubleTap: boolean
+  onSave(value: { accelerator: string } | { entry: HookEntry }): void
+  onCancel(error: string | null): void
 }): JSX.Element {
   const [hint, setHint] = useState('Press keys')
   const doneRef = useRef(false)
@@ -93,27 +124,20 @@ function Recorder({
     // The live voice-typing shortcuts would swallow the keys while they are recorded.
     const suspends = SUSPENDS.includes(id)
     if (suspends) window.notula.dictation.suspendShortcut({ suspended: true })
-    const finish = (error: string | null): void => {
+    const finish = (value: { accelerator: string } | { entry: HookEntry } | null, error: string | null = null): void => {
       if (doneRef.current) return
       doneRef.current = true
-      onDone({ error })
+      if (value) onSave(value)
+      else onCancel(error)
     }
-    const timer = setTimeout(() => finish('Shortcut recording timed out'), RECORD_MS)
-    const save = (accelerator: string): void => {
-      clearTimeout(timer)
-      setHint('Saving…')
-      void window.notula.shortcuts
-        .set({ id, accelerator })
-        .then((res) => finish(res.ok ? null : (res.error ?? 'Couldn’t record shortcut. Try again.')))
-        .catch((err: unknown) => {
-          debugLog('shortcuts:set-failed', { code: parseError(err).code })
-          finish('Couldn’t record shortcut. Try again.')
-        })
-    }
+    const timer = setTimeout(() => finish(null, 'Shortcut recording timed out'), RECORD_MS)
 
     // Hook chords: the largest set of keys held at once, taken when every key is up again.
+    // A hands-free row waits briefly for the same chord again (a double tap).
     const held = new Set<string>()
     let peak: string[] = []
+    let first: string | null = null
+    let pending: ReturnType<typeof setTimeout> | null = null
     const onChordKey = (e: KeyboardEvent): void => {
       e.preventDefault()
       e.stopPropagation()
@@ -125,6 +149,10 @@ function Recorder({
         return
       }
       if (e.type === 'keydown') {
+        if (pending) {
+          clearTimeout(pending)
+          pending = null
+        }
         held.add(k)
         if (held.size > peak.length) peak = [...held]
         setHint(chordText(peak))
@@ -138,7 +166,12 @@ function Recorder({
         setHint(isMac ? 'Hold two or more keys, like ⌃ ⌥' : 'Hold two or more keys, like Ctrl + Win')
         return
       }
-      save(chordText(keys))
+      const text = chordText(keys)
+      if (first === text) return finish({ entry: { keys: text, doubleTap: true } })
+      first = text
+      if (!doubleTap) return finish({ entry: { keys: text, doubleTap: false } })
+      setHint(`${text} — press again for a double tap`)
+      pending = setTimeout(() => finish({ entry: { keys: text, doubleTap: false } }), DOUBLE_TAP_WINDOW_MS)
     }
 
     const onKey = (e: KeyboardEvent): void => {
@@ -162,7 +195,7 @@ function Recorder({
           setHint('That key can’t be used. Try another')
           return
         case 'combo':
-          save(r.accelerator)
+          finish({ accelerator: r.accelerator })
       }
     }
 
@@ -172,12 +205,13 @@ function Recorder({
     } else window.addEventListener('keydown', onKey, true)
     return () => {
       clearTimeout(timer)
+      if (pending) clearTimeout(pending)
       window.removeEventListener('keydown', onKey, true)
       window.removeEventListener('keydown', onChordKey, true)
       window.removeEventListener('keyup', onChordKey, true)
       if (suspends) window.notula.dictation.suspendShortcut({ suspended: false })
     }
-  }, [row.id, onDone])
+  }, [row.id, doubleTap, onSave, onCancel])
 
   return (
     <span className="ks-recording" role="status" aria-label={`Recording shortcut for ${row.label}`}>
@@ -194,26 +228,108 @@ interface ControlProps {
   hook: HookStatus | null
 }
 
-/** One row's keys and its Reset / Turn off / Change buttons. */
-function Control({ row, recording, onRecord, onRecorded, hook }: ControlProps): JSX.Element {
-  const keys = keysFor(row)
-  const editable = CUSTOMISABLE.includes(row.id)
-  const isHook = isHookShortcut(row.id)
-  const broken = isHook && row.available && hookBroken(hook)
-  const set = (accelerator: string | null, failure: string): void => {
-    void window.notula.shortcuts
-      .set({ id: row.id as CustomisableShortcutId, accelerator })
-      .then((res) => onRecorded({ error: res.ok ? null : res.error }))
-      .catch(() => onRecorded({ error: failure }))
+/** A `multiple` row: entry chips with remove buttons, Add (up to 3) and Reset. */
+function ListControl({ row, recording, onRecord, onRecorded, hook }: ControlProps): JSX.Element {
+  const id = row.id as HookShortcutId
+  const list = row.entries ?? []
+  const broken = row.available && hookBroken(hook)
+  const save = useCallback(
+    (entries: HookEntry[] | null, failure: string): void => {
+      void window.notula.shortcuts
+        .setList({ id, entries })
+        .then((res) => onRecorded({ error: res.ok ? null : res.error }))
+        .catch((err: unknown) => {
+          debugLog('shortcuts:set-list-failed', { code: parseError(err).code })
+          onRecorded({ error: failure })
+        })
+    },
+    [id, onRecorded]
+  )
+  // The recorder keeps one callback while it is open; the list it appends to is read at save time.
+  const listRef = useRef(list)
+  listRef.current = list
+  const onSave = useCallback(
+    (v: { accelerator: string } | { entry: HookEntry }): void => {
+      if ('entry' in v) save([...listRef.current, v.entry], 'Couldn’t record shortcut. Try again.')
+    },
+    [save]
+  )
+  const onCancel = useCallback((error: string | null) => onRecorded({ error }), [onRecorded])
+  if (!row.available) {
+    return (
+      <div className="settings-row__control ks-control">
+        <button type="button" className="ks-off" onClick={() => navigateToSettings('labs')}>
+          Off — turn on in Labs
+        </button>
+      </div>
+    )
   }
   return (
-    <div className={`settings-row__control ks-control${broken ? ' is-disabled' : ''}`} title={broken ? NEEDS_HELPER : undefined}>
+    <div className={`settings-row__control ks-control ks-list${broken ? ' is-disabled' : ''}`} title={broken ? NEEDS_HELPER : undefined}>
+      {list.length === 0 && !recording ? <span className="ks-none">Off</span> : null}
+      {list.map((e, i) => (
+        <span key={`${e.keys}:${e.doubleTap}`} className={`ks-entry${row.derived ? ' is-default' : ''}`}>
+          <EntryChips entry={e} />
+          <button
+            type="button"
+            className="ks-entry__remove"
+            aria-label={`Remove ${entryName(e)}`}
+            disabled={recording}
+            onClick={() => {
+              const next = list.filter((_, j) => j !== i)
+              // Hands-free with nothing left goes back to the derived entries.
+              save(id === 'dictationHandsFree' && next.length === 0 ? null : next, 'Couldn’t remove the shortcut. Try again.')
+            }}
+          >
+            ×
+          </button>
+        </span>
+      ))}
+      {recording ? <Recorder row={row} doubleTap={id === 'dictationHandsFree' && !isMac} onSave={onSave} onCancel={onCancel} /> : null}
+      <span className="ks-actions">
+        {!row.isDefault && !recording ? (
+          <button type="button" className="n-btn n-btn--sm n-btn--ghost" onClick={() => save(null, 'Couldn’t reset the shortcut. Try again.')}>
+            Reset
+          </button>
+        ) : null}
+        {!recording && list.length < DICTATION_LIMITS.maxShortcutEntries ? (
+          <button type="button" className="n-btn n-btn--sm" aria-label={`Add a shortcut for ${row.label}`} disabled={broken} onClick={onRecord}>
+            Add
+          </button>
+        ) : null}
+      </span>
+    </div>
+  )
+}
+
+/** One row's keys and its Reset / Change buttons. */
+function Control(p: ControlProps): JSX.Element {
+  const { row, recording, onRecord, onRecorded } = p
+  const save = useCallback(
+    (accelerator: string | null, failure: string): void => {
+      void window.notula.shortcuts
+        .set({ id: row.id as CustomisableShortcutId, accelerator })
+        .then((res) => onRecorded({ error: res.ok ? null : (res.error ?? 'Couldn’t record shortcut. Try again.') }))
+        .catch((err: unknown) => {
+          debugLog('shortcuts:set-failed', { code: parseError(err).code })
+          onRecorded({ error: failure })
+        })
+    },
+    [row.id, onRecorded]
+  )
+  const onSave = useCallback((v: { accelerator: string } | { entry: HookEntry }) => save('accelerator' in v ? v.accelerator : v.entry.keys, 'Couldn’t record shortcut. Try again.'), [save])
+  const onCancel = useCallback((error: string | null) => onRecorded({ error }), [onRecorded])
+  if (row.multiple) return <ListControl {...p} />
+  const keys = keysFor(row)
+  const editable = CUSTOMISABLE.includes(row.id)
+  return (
+    <div className="settings-row__control ks-control">
       {!row.available ? (
         <button type="button" className="ks-off" onClick={() => navigateToSettings('labs')}>
           Off — turn on in Labs
         </button>
       ) : recording ? (
-        <Recorder row={row} onDone={onRecorded} />
+        <Recorder row={row} doubleTap={false} onSave={onSave} onCancel={onCancel} />
       ) : keys ? (
         <KeyChips accelerator={keys} />
       ) : (
@@ -222,22 +338,12 @@ function Control({ row, recording, onRecord, onRecorded, hook }: ControlProps): 
       {editable && row.available ? (
         <span className="ks-actions">
           {!row.isDefault && !recording ? (
-            <button type="button" className="n-btn n-btn--sm n-btn--ghost" onClick={() => set(null, 'Couldn’t reset the shortcut. Try again.')}>
+            <button type="button" className="n-btn n-btn--sm n-btn--ghost" onClick={() => save(null, 'Couldn’t reset the shortcut. Try again.')}>
               Reset
             </button>
           ) : null}
-          {isHook && keys && !recording ? (
-            <button
-              type="button"
-              className="n-btn n-btn--sm n-btn--ghost"
-              aria-label={`Turn off ${row.label}`}
-              onClick={() => set('', 'Couldn’t turn the shortcut off. Try again.')}
-            >
-              Turn off
-            </button>
-          ) : null}
           {!recording ? (
-            <button type="button" className="n-btn n-btn--sm" aria-label={`Change ${row.label} shortcut`} disabled={broken} onClick={onRecord}>
+            <button type="button" className="n-btn n-btn--sm" aria-label={`Change ${row.label} shortcut`} onClick={onRecord}>
               Change
             </button>
           ) : null}
@@ -247,17 +353,25 @@ function Control({ row, recording, onRecord, onRecorded, hook }: ControlProps): 
   )
 }
 
+/** The row's note: an error, the helper, the conflict, or the derived defaults. */
+function noteFor(row: ShortcutRow, hook: HookStatus | null, error: string | null): { text: string; error: boolean } | null {
+  if (error) return { text: error, error: true }
+  if (isHookShortcut(row.id) && row.available && hookBroken(hook)) return { text: NEEDS_HELPER, error: false }
+  if (row.conflict && row.available) return { text: CONFLICT_NOTE, error: false }
+  if (row.derived && row.available && (row.entries?.length ?? 0) > 0) return { text: 'Defaults from your hold shortcuts', error: false }
+  return null
+}
+
 function Row({ error, ...p }: ControlProps & { error: string | null }): JSX.Element | null {
-  const isHook = isHookShortcut(p.row.id)
-  if (!keysFor(p.row) && !isHook) return null
-  const broken = isHook && p.row.available && hookBroken(p.hook)
+  if (!keysFor(p.row) && !p.row.multiple) return null
+  const note = noteFor(p.row, p.hook, error)
   return (
     <div className="settings-row ks-row">
       <div className="settings-row__text">
         <div className="settings-row__label">{p.row.label}</div>
-        {error || broken ? (
-          <div className={`settings-row__hint${error ? ' ks-error' : ''}`} role={error ? 'alert' : undefined}>
-            {error ?? NEEDS_HELPER}
+        {note ? (
+          <div className={`settings-row__hint${note.error ? ' ks-error' : ''}`} role={note.error ? 'alert' : undefined}>
+            {note.text}
           </div>
         ) : null}
       </div>
@@ -296,7 +410,7 @@ export function StandaloneShortcut({ id }: { id: CustomisableShortcutId }): JSX.
     [load]
   )
   if (!row) return null
-  const broken = isHookShortcut(id) && row.available && hookBroken(hook)
+  const note = noteFor(row, hook, error)
   return (
     <div className="ks-standalone">
       <Control
@@ -309,9 +423,9 @@ export function StandaloneShortcut({ id }: { id: CustomisableShortcutId }): JSX.
         onRecorded={onRecorded}
         hook={hook}
       />
-      {error || broken ? (
-        <p className={`ks-standalone__note${error ? ' ks-error' : ''}`} role={error ? 'alert' : undefined}>
-          {error ?? NEEDS_HELPER}
+      {note ? (
+        <p className={`ks-standalone__note${note.error ? ' ks-error' : ''}`} role={note.error ? 'alert' : undefined}>
+          {note.text}
         </p>
       ) : null}
     </div>
@@ -372,7 +486,8 @@ export function KeyboardShortcutsSettings(): JSX.Element {
   return (
     <>
       {GROUPS.map((g) => {
-        const list = rows.filter((r) => r.group === g.id && (keysFor(r) !== '' || isHookShortcut(r.id)))
+        // The voice typing toggle is the fallback: listed only while the keyboard helper can't run.
+        const list = rows.filter((r) => r.group === g.id && (keysFor(r) !== '' || r.multiple) && !(r.id === 'dictation' && hook?.available && !r.conflict))
         if (list.length === 0) return null
         return (
           <section key={g.id} className="settings-group">

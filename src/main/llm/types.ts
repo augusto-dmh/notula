@@ -26,6 +26,7 @@ export type LlmPurpose =
   | 'screen-snapshot'
   | 'slack-summary'
   | 'dictation-format'
+  | 'dictation-learn'
   | 'recurring-recap'
   | 'live-context'
   | 'live-context-answer'
@@ -210,6 +211,7 @@ export const MAX_TOKENS: Record<LlmPurpose, number> = {
   'screen-snapshot': 2_000,
   'slack-summary': 2_000,
   'dictation-format': 8_192,
+  'dictation-learn': 2_000,
   'recurring-recap': 2_000,
   'live-context': 2_000,
   'live-context-answer': 2_000,
@@ -239,6 +241,7 @@ export const PURPOSE_EFFORT: Record<LlmPurpose, 'low' | 'medium' | 'high'> = {
   'screen-snapshot': 'low',
   'slack-summary': 'low',
   'dictation-format': 'low',
+  'dictation-learn': 'low',
   'recurring-recap': 'low',
   'live-context': 'low',
   'live-context-answer': 'low',

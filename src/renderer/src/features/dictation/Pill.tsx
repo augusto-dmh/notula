@@ -6,18 +6,33 @@
 //
 // - recording: a live waveform; hands-free adds Cancel and Finish;
 // - processing: animated bars; pasted, copied, empty and the errors: one short line;
-// - saved: the retry card (Retry, Open history, Dismiss), which fits the 320 × 180 window.
+// - saved: the retry card (Retry, Open history, Dismiss), which fits the 320 × 180 window;
+// - cards (`state.card`): the neutral conflict card (Change shortcut, Keep going), learned words
+//   (Undo), check-your-mic while recording is silent, and "the text is in your history";
+// - sounds (`state.sound`, only sent while `dictation.sounds` is on): start, lock, finish, notice.
 // Hovering makes the window clickable (`dictation:pill-action` `hover`); a click finishes a recording,
 // opens the microphone settings on `mic_denied`, or starts a hands-free dictation.
 // With the dictation bar on (`dictation-bar:state`), the same content is the bar's wide
 // layout and ./DictationBar.tsx draws the rest.
 
 import { useEffect, useRef, useState, type JSX } from 'react'
-import type { DictationCaptureCommand, DictationState } from '@shared/types/dictation'
+import type { DictationCaptureCommand, DictationCard, DictationSound, DictationState } from '@shared/types/dictation'
 import type { DictationBarState } from '@shared/types/dictation-bar'
 import { DictationBarView } from './DictationBar'
 import { MicCapture, micErrorOf } from './mic'
+import finishSound from './sounds/finish.wav'
+import lockSound from './sounds/lock.wav'
+import noticeSound from './sounds/notice.wav'
+import startSound from './sounds/start.wav'
 import './pill.css'
+
+const SOUNDS: Record<DictationSound, string> = { start: startSound, lock: lockSound, finish: finishSound, notice: noticeSound }
+
+function play(sound: DictationSound): void {
+  const a = new Audio(SOUNDS[sound])
+  a.volume = 0.5
+  void a.play().catch(() => undefined)
+}
 
 const BARS = 18
 
@@ -36,11 +51,72 @@ const ERRORS: Record<string, string> = {
 
 /** A card button: the action goes to main, never to the pill's own click. */
 const pillAction =
-  (action: 'retry' | 'open-history' | 'dismiss') =>
+  (action: 'retry' | 'open-history' | 'dismiss' | 'undo-learned' | 'change-shortcut' | 'keep-going') =>
   (e: { stopPropagation(): void }): void => {
     e.stopPropagation()
     window.notula.dictation.pillAction({ action })
   }
+
+const learnedLine = (words: string[]): string =>
+  words.length === 1 ? `Notula will spell “${words[0]}” your way.` : `Notula will spell ${words.map((w) => `“${w}”`).join(', ')} your way.`
+
+/** A card over the pill's line. Buttons send their action to main, never the pill's own click. */
+function Card({ card }: { card: DictationCard }): JSX.Element {
+  switch (card.kind) {
+    case 'conflict':
+      return (
+        <div className="dict-card" role="status">
+          <div className="dict-card__head">
+            <strong className="dict-card__title">Another app may use this shortcut</strong>
+          </div>
+          <span className="dict-card__line">If voice typing starts twice or not at all, pick a different shortcut.</span>
+          <div className="dict-card__actions">
+            <button type="button" className="dict-card__btn" onClick={pillAction('keep-going')}>
+              Keep going
+            </button>
+            <button type="button" className="dict-card__btn dict-card__btn--primary" onClick={pillAction('change-shortcut')}>
+              Change shortcut
+            </button>
+          </div>
+        </div>
+      )
+    case 'learned':
+      return (
+        <div className="dict-card" role="status">
+          <div className="dict-card__head">
+            <strong className="dict-card__title">Added to your dictionary</strong>
+            <button type="button" className="dict-card__close" aria-label="Dismiss" onClick={pillAction('dismiss')}>
+              ✕
+            </button>
+          </div>
+          <span className="dict-card__line">{learnedLine(card.words)}</span>
+          <div className="dict-card__actions">
+            <button type="button" className="dict-card__btn" onClick={pillAction('undo-learned')}>
+              Undo
+            </button>
+          </div>
+        </div>
+      )
+    case 'in-history':
+      return (
+        <div className="dict-card" role="alert">
+          <div className="dict-card__head">
+            <strong className="dict-card__title">Couldn’t paste or copy the text</strong>
+          </div>
+          <span className="dict-card__line">Your text is saved in your voice typing history.</span>
+          <div className="dict-card__actions">
+            <button type="button" className="dict-card__btn dict-card__btn--primary" onClick={pillAction('open-history')}>
+              Open history
+            </button>
+          </div>
+        </div>
+      )
+    case 'mic-lid':
+      return <span className="dict-pill__hint">Your laptop lid may be closed. Open it or pick another microphone.</span>
+    case 'mic-silent':
+      return <span className="dict-pill__hint">Notula can’t hear you. Check your microphone.</span>
+  }
+}
 
 function Waveform({ levels }: { levels: number[] }): JSX.Element {
   return (
@@ -61,7 +137,10 @@ export function DictationPill(): JSX.Element {
 
   useEffect(() => {
     document.documentElement.classList.add('dict-pill-doc')
-    const offState = window.notula.dictation.onState((s) => setState(s))
+    const offState = window.notula.dictation.onState((s) => {
+      if (s.sound) play(s.sound)
+      setState(s)
+    })
     const offBar = window.notula.dictationBar.onState((b) => setBar(b))
     // Mounted: the first rect report tells main to send the bar state.
     window.notula.dictationBar.reportHitRects({ rects: [] })
@@ -77,11 +156,12 @@ export function DictationPill(): JSX.Element {
               sessionId: cmd.sessionId,
               type: 'error',
               ...(error === 'transcription_start' ? {} : { error })
-            })
+            }),
+          (health) => window.notula.dictation.captureEvent({ sessionId: cmd.sessionId, type: 'health', health })
         )
         mic.current = { id: cmd.sessionId, capture }
         capture.start(cmd.microphone).then(
-          () => window.notula.dictation.captureEvent({ sessionId: cmd.sessionId, type: 'ready' }),
+          (device) => window.notula.dictation.captureEvent({ sessionId: cmd.sessionId, type: 'ready', ...(device ? { device } : {}) }),
           (err: unknown) => {
             const e = micErrorOf(err)
             const error = e === 'transcription_start' ? 'mic_missing' : e
@@ -139,7 +219,7 @@ export function DictationPill(): JSX.Element {
             </button>
           ) : null}
           <span className={`dict-pill__dot${state.ready ? ' is-ready' : ''}`} aria-hidden="true" />
-          <Waveform levels={levels} />
+          {state.card ? <Card card={state.card} /> : <Waveform levels={levels} />}
           {state.handsFree ? (
             <button
               type="button"
@@ -209,8 +289,13 @@ export function DictationPill(): JSX.Element {
         </div>
       )
       break
+    case 'notice':
+      body = state.card ? <Card card={state.card} /> : null
+      break
     case 'error':
-      body = (
+      body = state.card ? (
+        <Card card={state.card} />
+      ) : (
         <span className="dict-pill__text dict-pill__text--error" role="alert">
           {ERRORS[state.reason ?? ''] ?? 'Something went wrong'}
         </span>
@@ -220,13 +305,15 @@ export function DictationPill(): JSX.Element {
       body = null
   }
 
+  const cardShown = !!state.card && state.kind !== 'recording'
+
   if (bar?.enabled) {
     return (
       <DictationBarView
         bar={bar}
         dictation={
           body ? (
-            <div className={`dict-pill dict-pill--${state.kind}`} data-hit="" onClick={click}>
+            <div className={`dict-pill dict-pill--${state.kind}${cardShown ? ' dict-pill--card' : ''}`} data-hit="" onClick={click}>
               {body}
             </div>
           ) : null
@@ -239,7 +326,7 @@ export function DictationPill(): JSX.Element {
     <div className="dict-pill-root">
       {body ? (
         <div
-          className={`dict-pill dict-pill--${state.kind}`}
+          className={`dict-pill dict-pill--${state.kind}${cardShown ? ' dict-pill--card' : ''}`}
           onMouseEnter={() => hover(true)}
           onMouseLeave={() => hover(false)}
           onClick={click}

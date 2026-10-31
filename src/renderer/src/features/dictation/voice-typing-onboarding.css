@@ -262,3 +262,42 @@
     animation: none;
   }
 }
+
+/* The setup step's live level. */
+.vto-meter {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--surface-2);
+}
+
+.vto-meter__bar {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 60ms linear;
+}
+
+.vto-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+}
+
+.vto-note {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+}
+
+.vto-keys--list {
+  flex-wrap: wrap;
+  gap: 8px;
+}

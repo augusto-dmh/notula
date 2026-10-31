@@ -11,9 +11,11 @@ import { setPrefs, usePrefs } from '../settings/prefs-store'
 import { ChatVoiceButton } from './ChatVoice'
 import { DictationBarMenuView } from './DictationBarMenu'
 import { DictationPill } from './Pill'
+import { VoiceTypingDictionaryView } from './VoiceTypingDictionary'
 import { VoiceTypingHistoryView } from './VoiceTypingHistory'
 import { VoiceTypingOnboardingHost as OnboardingHost, tryVoiceTypingFromLink } from './VoiceTypingOnboarding'
 import { VoiceTypingSettingsView } from './VoiceTypingSettings'
+import { VoiceTypingStylesView } from './VoiceTypingStyles'
 
 /** `#/dictation-pill`. */
 export function DictationPillRoot(): JSX.Element {
@@ -33,6 +35,16 @@ export function VoiceTypingSettings(): JSX.Element {
 /** Settings ▸ Voice typing ▸ History (`voice-typing-history`). */
 export function VoiceTypingHistory(): JSX.Element {
   return createElement(VoiceTypingHistoryView)
+}
+
+/** Settings ▸ Voice typing ▸ Styles (`voice-typing-styles`). */
+export function VoiceTypingStyles(): JSX.Element {
+  return createElement(VoiceTypingStylesView)
+}
+
+/** Settings ▸ Voice typing ▸ Dictionary (`voice-typing-dictionary`). */
+export function VoiceTypingDictionary(): JSX.Element {
+  return createElement(VoiceTypingDictionaryView)
 }
 
 /** Mounted once in App; hosts the voice typing overlay. */

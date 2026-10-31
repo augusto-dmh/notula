@@ -24,7 +24,7 @@ import type { CalendarGrant, CalendarInfo, CalendarSource, Participant, Upcoming
 import type { ChatMessage, ChatThread, ChatThreadQuery } from '@shared/types/chat'
 import type { AudioSource, IsoTime } from '@shared/types/common'
 import type { DataExportFormat } from '@shared/types/data-export'
-import type { DictationAttempt } from '@shared/types/dictation'
+import type { DictationAttempt, DictationTerm, DictationTermResult } from '@shared/types/dictation'
 import type {
   Folder,
   FolderCreate,
@@ -1352,6 +1352,13 @@ export interface StorageApi {
    */
   deleteDictationAttempts(q: { ids?: string[]; all?: true; expiredBefore?: IsoTime; forget?: true }): Promise<{ deleted: string[] }>
   markInterruptedDictations(): Promise<number>
+  /** The dictionary, live and removed terms with their local usage. */
+  listDictationTerms(): Promise<DictationTerm[]>
+  addDictationTerm(p: { term: string; source: 'manual' | 'learned' }): Promise<DictationTermResult>
+  updateDictationTerm(p: { id: string; term?: string; starred?: boolean }): Promise<DictationTermResult>
+  removeDictationTerm(id: string): Promise<DictationTermResult>
+  restoreDictationTerm(id: string): Promise<DictationTermResult>
+  recordDictationTermUse(ids: string[]): Promise<void>
 
   // scratchpad
   listScratchpadDays(today: string): Promise<ScratchpadDaySummary[]>

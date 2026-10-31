@@ -10,9 +10,11 @@ import type { IsoTime } from './common'
 import type { InputPreference } from './capture'
 import type {
   DictationAsrChoice,
-  DictationCategory,
+  DictationConflictNote,
+  DictationHandsFreeEntry,
+  DictationLocalRetention,
   DictationMicrophone,
-  DictationRetention,
+  DictationStyleKey,
   DictationTone
 } from './dictation'
 import type { LlmProviderId } from './enhance'
@@ -229,24 +231,34 @@ export interface Settings {
   'dictation.enabled': boolean
   /** null = DICTATION_DEFAULT_SHORTCUT. */
   'dictation.shortcut': string | null
-  'dictation.language': string | null
+  /** Up to 5 language codes; [] = automatic. */
+  'dictation.languages': string[]
   'dictation.microphone': DictationMicrophone | null
   'dictation.asr': DictationAsrChoice
   'dictation.screenContext': boolean
-  'dictation.styles': Record<DictationCategory, DictationTone | null>
-  'dictation.dictionary': string[]
-  'dictation.dictionaryRemoved': string[]
-  /** null = `24h`. */
-  'dictation.failedAudioRetention': DictationRetention | null
+  /** A tone per styles key; null = automatic. */
+  'dictation.styles': Record<DictationStyleKey, DictationTone | null>
+  /** Learn spellings from the user's corrections after a paste (the dictionary lives in `dictation_terms`). */
+  'dictation.learnWords': boolean
+  'dictation.localRetention': DictationLocalRetention
+  'dictation.sounds': boolean
+  'dictation.muteOtherAudio': boolean
+  /** Main-only: when the neutral conflict card was shown. */
+  'dictation.conflictWarningShownAt': IsoTime[]
+  /** Main-only: the shortcut row that shows the conflict note until its value changes. */
+  'dictation.conflictShortcut': DictationConflictNote | null
+  /** Main-only: the microphone the last dictation used. */
+  'dictation.lastMicrophone': { deviceId: string; label: string } | null
   /** Set by the voice typing overlay's Done; until then the page offers "Try voice typing". */
   'dictation.onboardingCompleted': boolean
   /** The dictation bar; effective only inside the Voice typing gate. */
   'dictationBar.enabled': boolean
   /** Epoch ms the bar stays hidden until (Hide for 1 hour), or null. Main-only. */
   'dictationBar.snoozeUntil': number | null
-  /** Hook chords ("Ctrl+Win"). null = the platform default, '' = off. */
-  'shortcuts.dictationHold': string | null
-  'shortcuts.dictationHandsFree': string | null
+  /** Up to 3 hook chords ("Ctrl+Win"). null = the platform default, [] = off. */
+  'shortcuts.dictationHold': string[] | null
+  /** Up to 3 entries. null or [] = derived from the hold chords (their double tap, and chord+Space). */
+  'shortcuts.dictationHandsFree': DictationHandsFreeEntry[] | null
   /** An accelerator. null = `Control+Alt+M` (Windows) / `Command+Alt+M` (macOS). */
   'shortcuts.recordToggle': string | null
   /**
@@ -519,14 +531,18 @@ export const DEFAULT_SETTINGS: Settings = {
   'voiceTyping.screenContext': false,
   'dictation.enabled': true,
   'dictation.shortcut': null,
-  'dictation.language': null,
+  'dictation.languages': [],
   'dictation.microphone': null,
   'dictation.asr': 'auto',
   'dictation.screenContext': true,
-  'dictation.styles': { email: null, work: null, casual: null, other: null },
-  'dictation.dictionary': [],
-  'dictation.dictionaryRemoved': [],
-  'dictation.failedAudioRetention': null,
+  'dictation.styles': { email: null, 'work-chat': null, 'personal-chat': null, other: null },
+  'dictation.learnWords': true,
+  'dictation.localRetention': 'keep',
+  'dictation.sounds': false,
+  'dictation.muteOtherAudio': true,
+  'dictation.conflictWarningShownAt': [],
+  'dictation.conflictShortcut': null,
+  'dictation.lastMicrophone': null,
   'dictation.onboardingCompleted': false,
   'dictationBar.enabled': true,
   'dictationBar.snoozeUntil': null,
@@ -679,6 +695,10 @@ export const MAIN_ONLY_SETTING_KEYS = [
   'customerCalls.excludedDomains',
   // Written through `dictation-bar:action`
   'dictationBar.snoozeUntil',
+  // Voice typing: written by main
+  'dictation.conflictWarningShownAt',
+  'dictation.conflictShortcut',
+  'dictation.lastMicrophone',
   // Content sources: the grant, the Videos folder, hints and the extension's host files
   'sources.readHistory',
   'sources.onlineLookups',
@@ -724,6 +744,8 @@ export type SettingsSection =
   | 'meeting-notice'
   | 'transcription-rules'
   | 'voice-typing-history'
+  | 'voice-typing-styles'
+  | 'voice-typing-dictionary'
   // Content sources: listed while `sources.enabled` is on (Windows only).
   | 'sources'
 

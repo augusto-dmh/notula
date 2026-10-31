@@ -4,9 +4,10 @@
 // shortcuts, so they cannot drift. Keys are Electron accelerators; an empty key means
 // the row does not exist on that platform. Only shortcuts Notula ships are listed.
 // The dictation bar adds two hook-mechanism rows, whose keys
-// are chords ("Ctrl+Win") matched by the keyboard helper, not accelerators.
+// are chords ("Ctrl+Win") matched by the keyboard helper, not accelerators. Both are lists
+// (`multiple`) of up to 3 entries, set through `shortcuts:set-list`.
 
-import { HOOK_SHORTCUT_DEFAULTS } from './dictation-bar'
+import { HOOK_SHORTCUT_DEFAULTS, type HookEntry } from './dictation-bar'
 import type { LabsSettingKey } from './labs'
 import type { SettingKey } from './settings'
 
@@ -39,6 +40,8 @@ export interface ShortcutDef {
   settingKey: SettingKey | null
   /** The Labs switch the row's feature sits behind ("Off — turn on in Labs"). */
   featureKey: LabsSettingKey | null
+  /** A list of up to 3 entries, shown as chips with Add and remove. */
+  multiple?: boolean
 }
 
 /** `shortcuts:list`: a row with what applies now. */
@@ -46,6 +49,12 @@ export type ShortcutRow = ShortcutDef & {
   effective: { darwin: string; default: string }
   isDefault: boolean
   available: boolean
+  /** `multiple` rows: the entries that apply now (hold chords, or hands-free entries). */
+  entries?: HookEntry[]
+  /** The entries are the defaults (the hands-free list derived from the hold chords). */
+  derived?: boolean
+  /** Another app may also answer this row's shortcut (the neutral conflict note). */
+  conflict?: boolean
 }
 
 const MOD = 'CommandOrControl'
@@ -60,7 +69,7 @@ function row(
   group: ShortcutGroup,
   scope: ShortcutScope,
   keys: { darwin: string; default: string },
-  extra: Partial<Pick<ShortcutDef, 'customisable' | 'settingKey' | 'featureKey'>> = {}
+  extra: Partial<Pick<ShortcutDef, 'customisable' | 'settingKey' | 'featureKey' | 'multiple'>> = {}
 ): ShortcutDef {
   return { id, label, group, scope, keys, customisable: false, settingKey: null, featureKey: null, ...extra }
 }
@@ -81,12 +90,14 @@ export const SHORTCUTS: readonly ShortcutDef[] = [
   row('dictationHold', 'Dictate (hold to talk)', 'global', 'global', { ...HOOK_SHORTCUT_DEFAULTS.dictationHold }, {
     customisable: true,
     settingKey: 'shortcuts.dictationHold',
-    featureKey: 'voiceTyping.enabled'
+    featureKey: 'voiceTyping.enabled',
+    multiple: true
   }),
   row('dictationHandsFree', 'Dictate hands-free', 'global', 'global', { ...HOOK_SHORTCUT_DEFAULTS.dictationHandsFree }, {
     customisable: true,
     settingKey: 'shortcuts.dictationHandsFree',
-    featureKey: 'voiceTyping.enabled'
+    featureKey: 'voiceTyping.enabled',
+    multiple: true
   }),
   row('recordToggle', 'Start or stop recording', 'global', 'global', { darwin: 'Command+Alt+M', default: 'Control+Alt+M' }, {
     customisable: true,

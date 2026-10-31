@@ -4,6 +4,8 @@
 // and Dictation; a row menu with Copy and Delete; Retry on a failed row that kept its audio;
 // Clear all behind a confirmation. It reads `dictation:history-list` and refreshes on
 // `dictation:history-changed`. Clear all and Delete remove a dictation's text and audio.
+// A row without text is labelled, in this order: retry failed (or failed offline), canceled,
+// interrupted, recorded offline, failed.
 
 import { useEffect, useMemo, useRef, useState, type JSX } from 'react'
 import type { DictationAttempt } from '@shared/types/dictation'
@@ -98,12 +100,23 @@ function RowMenu({ a }: { a: DictationAttempt }): JSX.Element {
   )
 }
 
+type RetryState = 'idle' | 'busy' | 'failed' | 'offline'
+
+function failedLabel(a: DictationAttempt, interrupted: boolean, retry: RetryState): string {
+  if (retry === 'offline') return 'Retry failed. You’re offline'
+  if (retry === 'failed') return 'Retry failed'
+  if (a.status === 'cancelled') return 'Dictation canceled'
+  if (interrupted) return 'Dictation interrupted'
+  if (a.failure_reason === 'offline') return 'Recorded offline'
+  return 'Dictation failed'
+}
+
 function HistoryRow({ a, interrupted }: { a: DictationAttempt; interrupted: boolean }): JSX.Element {
   const [expanded, setExpanded] = useState(false)
-  const [retry, setRetry] = useState<'idle' | 'busy' | 'failed'>('idle')
+  const [retry, setRetry] = useState<RetryState>('idle')
   const time = new Date(a.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
   if (!a.text) {
-    const label = retry === 'failed' ? 'Retry failed' : interrupted ? 'Dictation interrupted' : 'Dictation failed'
+    const label = failedLabel(a, interrupted, retry)
     return (
       <li className="vt-hist__row">
         <span className="vt-hist__time">{time}</span>
@@ -118,7 +131,7 @@ function HistoryRow({ a, interrupted }: { a: DictationAttempt; interrupted: bool
                 setRetry('busy')
                 void window.notula.dictation.history.retry({ id: a.id }).then(
                   () => setRetry('idle'),
-                  () => setRetry('failed')
+                  () => setRetry(navigator.onLine ? 'failed' : 'offline')
                 )
               }}
             >

@@ -82,15 +82,24 @@ export const DICTATION_BAR_LIMITS = {
   fullscreenPollMs: 2_000
 } as const
 
-/** Hook-mechanism shortcut defaults. Stored null = this default; '' = off. */
+/**
+ * Hook-mechanism shortcut defaults: the hold chord, and the hands-free chord its derived list
+ * shows first. Stored null = these defaults; a stored [] hold list = off.
+ */
 export const HOOK_SHORTCUT_DEFAULTS = {
   dictationHold: { darwin: 'Ctrl+Option', default: 'Ctrl+Win' },
   dictationHandsFree: { darwin: 'Ctrl+Option+Space', default: 'Ctrl+Win+Space' }
 } as const
 
-/** Normalised key names (left/right merged): modifiers, then the named keys. */
+/** Normalised key names: modifiers (either side), then the named keys. */
 export const CHORD_MODIFIERS = ['ctrl', 'alt', 'shift', 'win', 'cmd'] as const
 export type ChordModifier = (typeof CHORD_MODIFIERS)[number]
+/** Right-side modifiers, kept apart so a chord can ask for that side only (`ctrl_r`). */
+export const CHORD_RIGHT_MODIFIERS = ['ctrl_r', 'alt_r', 'shift_r', 'win_r'] as const
+const ALL_MODIFIERS: readonly string[] = [...CHORD_MODIFIERS, ...CHORD_RIGHT_MODIFIERS]
+
+/** A key name with its side merged (`ctrl_r` → `ctrl`). */
+export const chordBase = (k: string): string => k.replace(/_r$/, '')
 
 const TOKENS: Record<string, string> = {
   ctrl: 'ctrl',
@@ -104,7 +113,16 @@ const TOKENS: Record<string, string> = {
   windows: 'win',
   cmd: 'cmd',
   command: 'cmd',
-  space: 'space'
+  space: 'space',
+  rightctrl: 'ctrl_r',
+  ctrl_r: 'ctrl_r',
+  rightalt: 'alt_r',
+  rightoption: 'alt_r',
+  alt_r: 'alt_r',
+  rightshift: 'shift_r',
+  shift_r: 'shift_r',
+  rightwin: 'win_r',
+  win_r: 'win_r'
 }
 
 /**
@@ -121,10 +139,13 @@ export function parseChord(text: string, platform: string): string[] | null {
     let k = TOKENS[t]
     if (!k && /^[a-z0-9]$/.test(t)) k = t
     if (!k && /^f([1-9]|1[0-9]|2[0-4])$/.test(t)) k = t
+    if (!k && /^num[0-9]$/.test(t)) k = t
     if (!k) return null
-    if (k === 'win' && platform === 'darwin') return null
+    if (chordBase(k) === 'win' && platform === 'darwin') return null
     if (k === 'cmd' && platform !== 'darwin') return null
-    if (!(CHORD_MODIFIERS as readonly string[]).includes(k)) others++
+    // The macOS helper doesn't tell sides apart.
+    if (k.endsWith('_r') && platform === 'darwin') return null
+    if (!ALL_MODIFIERS.includes(k)) others++
     keys.add(k)
   }
   if (keys.size < 2 || keys.size > 4 || others > 1 || others === keys.size) return null
@@ -137,9 +158,13 @@ const DISPLAY: Record<string, { win: string; mac: string }> = {
   shift: { win: 'Shift', mac: 'Shift' },
   win: { win: 'Win', mac: 'Win' },
   cmd: { win: 'Cmd', mac: '⌘' },
-  space: { win: 'Space', mac: 'Space' }
+  space: { win: 'Space', mac: 'Space' },
+  ctrl_r: { win: 'Right Ctrl', mac: 'Right Ctrl' },
+  alt_r: { win: 'Right Alt', mac: 'Right Option' },
+  shift_r: { win: 'Right Shift', mac: 'Right Shift' },
+  win_r: { win: 'Right Win', mac: 'Right Win' }
 }
-const DISPLAY_ORDER = ['ctrl', 'win', 'cmd', 'alt', 'shift']
+const DISPLAY_ORDER = ['ctrl', 'ctrl_r', 'win', 'win_r', 'cmd', 'alt', 'alt_r', 'shift', 'shift_r']
 
 /** "Ctrl + Win + Space" / "Win + Alt + M": a chord or an Electron accelerator, for keytips. */
 export function shortcutLabel(text: string, platform: string): string {
@@ -156,6 +181,49 @@ export function shortcutLabel(text: string, platform: string): string {
     else key = raw.trim().length === 1 ? raw.trim().toUpperCase() : raw.trim()
   }
   const parts = DISPLAY_ORDER.filter((m) => mods.has(m)).map((m) => DISPLAY[m]![mac ? 'mac' : 'win'])
-  if (key) parts.push(key.toLowerCase() === 'space' ? 'Space' : key)
+  if (key) parts.push(key.toLowerCase() === 'space' ? 'Space' : /^num[0-9]$/i.test(key) ? `Num ${key.slice(3)}` : key)
   return parts.join(' + ')
+}
+
+// ---------- shortcut lists ----------
+
+/** A hands-free entry as the lists show it. */
+export interface HookEntry {
+  keys: string
+  doubleTap: boolean
+}
+
+export const toHookEntry = (e: string | { keys: string; doubleTap: true }): HookEntry =>
+  typeof e === 'string' ? { keys: e, doubleTap: false } : { keys: e.keys, doubleTap: true }
+
+/** Every key of the chord is a modifier ("Ctrl+Win"). */
+export function allModifiers(chord: readonly string[]): boolean {
+  return chord.length > 0 && chord.every((k) => ALL_MODIFIERS.includes(k))
+}
+
+/**
+ * The hands-free entries a hold list implies: each chord's double tap, plus chord+Space when it
+ * is all modifiers. A list holds at most 3 entries, so the first 3 apply.
+ */
+export function derivedHandsFree(hold: readonly string[], platform: string): HookEntry[] {
+  const out: HookEntry[] = []
+  for (const text of hold) {
+    const chord = parseChord(text, platform)
+    if (!chord) continue
+    // Double tap waits for the macOS helper.
+    if (platform !== 'darwin') out.push({ keys: text, doubleTap: true })
+    if (allModifiers(chord) && chord.length < 4) out.push({ keys: `${text}+Space`, doubleTap: false })
+  }
+  return out.slice(0, 3)
+}
+
+/** "Ctrl + Win, twice" for a double tap. */
+export function hookEntryLabel(e: HookEntry, platform: string): string {
+  const keys = shortcutLabel(e.keys, platform)
+  return e.doubleTap ? `${keys}, twice` : keys
+}
+
+/** Same entry: the same keys (sides kept) and the same press. */
+export function sameHookEntry(a: HookEntry, b: HookEntry, platform: string): boolean {
+  return a.doubleTap === b.doubleTap && (parseChord(a.keys, platform)?.join('+') ?? a.keys) === (parseChord(b.keys, platform)?.join('+') ?? b.keys)
 }

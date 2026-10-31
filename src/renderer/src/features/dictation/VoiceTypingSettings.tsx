@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 // Settings ▸ Voice typing (shown while Labs
-// `voiceTyping.enabled` is on): the enable row, General (shortcut, language, microphone,
-// transcription), Dictation bar (the bar switch and its three shortcuts),
-// Personalization (dictionary, screen context), Data & Privacy (failed-audio retention), Styles
-// and the History row, which opens the `voice-typing-history` sub-page.
+// `voiceTyping.enabled` is on): the enable row, General (languages, microphone, transcription,
+// and the toggle shortcut only while the keyboard helper is unavailable), Shortcuts (the bar
+// switch, the hold and hands-free lists, Start or stop recording), Personalization (rows to the
+// `voice-typing-styles` and `voice-typing-dictionary` sub-pages, screen context), Sound
+// (sounds, muting other audio), Data and privacy (local retention), and the History and
+// Feedback rows.
 //
 // Until the onboarding is done, and while no dictation has text or a word count, a "Try
 // voice typing" card takes the enable row's place; its Try now opens the overlay at Set up.
-// Turning voice typing on here before the onboarding is done opens it too.
+// Turning voice typing on here before the onboarding is done opens it too. While main reports
+// the neutral conflict note, the page opens scrolled to the shortcut rows.
 
 import { useCallback, useEffect, useRef, useState, type JSX, type KeyboardEvent } from 'react'
 import {
@@ -15,15 +18,13 @@ import {
   DICTATION_LANGUAGE_LISTS,
   DICTATION_LIMITS,
   type DictationAsrChoice,
-  type DictationCategory,
+  type DictationLocalRetention,
   type DictationMicrophone,
-  type DictationRetention,
-  type DictationStatus,
-  type DictationTone
+  type DictationStatus
 } from '@shared/types/dictation'
 import { navigateToSettings } from '../../app/navigation'
 import { isMac } from '../../app/platform'
-import { KeyChips, StandaloneShortcut } from '../keyboard-shortcuts/KeyboardShortcutsSettings'
+import { KeyChips, StandaloneShortcut, useHookStatus } from '../keyboard-shortcuts/KeyboardShortcutsSettings'
 import { readKey } from '../keyboard-shortcuts/keys'
 import { Select, Switch, type SelectOption } from '../settings/controls'
 import { SettingsCard, SettingsRow } from '../settings/primitives'
@@ -32,57 +33,17 @@ import { useDictationHistory } from './VoiceTypingHistory'
 import { openVoiceTypingOnboarding } from './VoiceTypingOnboarding'
 import './voice-typing.css'
 
-// ---------- styles ----------
-
-const CATEGORIES: { key: DictationCategory; label: string; apps: string }[] = [
-  { key: 'email', label: 'Email', apps: 'Outlook, Mail, Thunderbird and other email apps' },
-  { key: 'work', label: 'Work apps', apps: 'Slack, Microsoft Teams and other workplace chat' },
-  { key: 'casual', label: 'Messaging', apps: 'WhatsApp, Messages, Signal, Telegram and Discord' },
-  { key: 'other', label: 'Other apps', apps: 'Terminals, editors and every other app' }
-]
-
-const TONES: SelectOption<'auto' | DictationTone>[] = [
-  { value: 'auto', label: 'Automatic' },
-  { value: 'formal', label: 'Formal' },
-  { value: 'casual', label: 'Casual' },
-  { value: 'relaxed', label: 'Very casual' },
-  { value: 'excited', label: 'Excited' }
-]
-
-/** One sentence per category, differing per tone only in casing and final punctuation. */
-const SAMPLES: Record<DictationCategory, Record<DictationTone, string>> = {
-  email: {
-    formal: 'Hi Sam, the budget review is done. I’ll send the numbers by Friday.',
-    casual: 'Hi Sam, the budget review is done. I’ll send the numbers by Friday',
-    'relaxed': 'hi sam, the budget review is done, i’ll send the numbers by friday',
-    excited: 'Hi Sam, the budget review is done! I’ll send the numbers by Friday!'
-  },
-  work: {
-    formal: 'Quick check-in: are we still on for the design sync at three?',
-    casual: 'Quick check-in, are we still on for the design sync at three?',
-    'relaxed': 'quick check in, are we still on for the design sync at three',
-    excited: 'Quick check-in: are we still on for the design sync at three?!'
-  },
-  casual: {
-    formal: 'Dinner at eight sounds good. Should I book a table?',
-    casual: 'Dinner at eight sounds good, should I book a table?',
-    'relaxed': 'dinner at eight sounds good should i book a table',
-    excited: 'Dinner at eight sounds good! Should I book a table?!'
-  },
-  other: {
-    formal: 'Looking forward to seeing everyone next week.',
-    casual: 'Looking forward to seeing everyone next week',
-    'relaxed': 'looking forward to seeing everyone next week',
-    excited: 'Looking forward to seeing everyone next week!'
-  }
-}
-
-const RETENTION: SelectOption<DictationRetention>[] = [
-  { value: 'off', label: 'Never' },
+const RETENTION: SelectOption<DictationLocalRetention>[] = [
+  { value: 'keep', label: 'Keep text' },
   { value: '24h', label: '24 hours' },
-  { value: '7d', label: '7 days' },
-  { value: '14d', label: '14 days' }
+  { value: 'never', label: 'Don’t keep' }
 ]
+
+const RETENTION_NOTE: Record<DictationLocalRetention, string> = {
+  keep: 'Your dictations stay in your history. Audio for retrying a failed one is kept for 24 hours.',
+  '24h': 'Text and audio are removed 24 hours after each dictation.',
+  never: 'Notula keeps no text or audio, only word counts and durations for your usage.'
+}
 
 const ASR: SelectOption<DictationAsrChoice>[] = [
   { value: 'auto', label: 'Automatic' },
@@ -91,7 +52,7 @@ const ASR: SelectOption<DictationAsrChoice>[] = [
   { value: 'assemblyai', label: 'AssemblyAI' }
 ]
 
-// ---------- language ----------
+// ---------- languages ----------
 
 const displayNames = (() => {
   try {
@@ -101,7 +62,7 @@ const displayNames = (() => {
   }
 })()
 
-function languageName(code: string): string {
+export function languageName(code: string): string {
   try {
     return displayNames?.of(code) ?? code
   } catch {
@@ -109,91 +70,60 @@ function languageName(code: string): string {
   }
 }
 
-/** Until each provider's list is pinned: AssemblyAI list A, Deepgram list B, local English. */
+/** Until each provider's list is pinned: AssemblyAI list A, Deepgram list B. */
 function languageCodes(provider: DictationStatus['asr']): readonly string[] {
-  if (provider === 'local') return ['en']
   if (provider === 'assemblyai') return DICTATION_LANGUAGE_LISTS.a
   return DICTATION_LANGUAGE_LISTS.b
 }
 
-// ---------- dictionary ----------
-
-function termProblem(term: string, list: readonly string[]): string | null {
-  if (list.length >= DICTATION_LIMITS.dictionaryMax) return 'Up to 30 terms'
-  if (term.length > 50) return 'Keep terms to 50 characters or fewer'
-  if (term.split(/\s+/).length > 6) return 'Keep terms to 6 words or fewer'
-  if (term.length < 2) return 'Terms need at least 2 characters'
-  if (list.some((t) => t.toLowerCase() === term.toLowerCase())) return 'That term is already added'
-  return null
-}
-
-function Dictionary({ terms, removed }: { terms: string[]; removed: string[] }): JSX.Element {
-  const [draft, setDraft] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const save = (next: string[]): void => {
-    const dropped = terms.filter((t) => !next.includes(t))
-    const readded = next.filter((t) => removed.includes(t))
-    setPrefs({
-      'dictation.dictionary': next,
-      'dictation.dictionaryRemoved': [...removed.filter((t) => !readded.includes(t)), ...dropped.filter((t) => !removed.includes(t))]
-    })
-  }
-  const add = (): void => {
-    const term = draft.trim().replace(/\s+/g, ' ')
-    if (!term) return
-    const problem = termProblem(term, terms)
-    if (problem) return setError(problem)
-    save([...terms, term])
-    setDraft('')
-    setError(null)
-  }
-  const onKey = (e: KeyboardEvent<HTMLInputElement>): void => {
-    if (e.key === 'Enter') {
-      e.preventDefault()
-      add()
-    } else if (e.key === 'Backspace' && !draft && terms.length) {
-      save(terms.slice(0, -1))
-    }
-  }
-  const suggestion = draft.trim()
+/** Up to 5 language chips; none = automatic. The system languages are suggested first. */
+function Languages({ value, status, disabled }: { value: string[]; status: DictationStatus | null; disabled: boolean }): JSX.Element {
+  const codes = languageCodes(status?.asr ?? null)
+  const system = (status?.systemLanguages ?? []).filter((c) => codes.includes(c) && !value.includes(c))
+  const rest = codes
+    .filter((c) => !value.includes(c) && !system.includes(c))
+    .map((c) => ({ value: c, label: languageName(c) }))
+    .sort((a, b) => a.label.localeCompare(b.label))
+  const options: SelectOption<string>[] = [
+    { value: '', label: 'Add a language' },
+    ...system.map((c) => ({ value: c, label: `${languageName(c)} (on this computer)` })),
+    ...rest
+  ]
+  const full = value.length >= DICTATION_LIMITS.maxLanguages
   return (
-    <div className="vt-dict">
-      <div className="vt-dict__box">
-        {terms.map((t) => (
-          <span key={t} className="vt-chip">
-            {t}
-            <button type="button" aria-label={`Remove ${t}`} onClick={() => save(terms.filter((x) => x !== t))}>
+    <div className="vt-langs">
+      <div className="vt-langs__chips">
+        {value.length === 0 ? <span className="vt-langs__auto">Automatic</span> : null}
+        {value.map((c) => (
+          <span key={c} className="vt-chip">
+            {languageName(c)}
+            <button
+              type="button"
+              aria-label={`Remove ${languageName(c)}`}
+              disabled={disabled}
+              onClick={() => setPrefs({ 'dictation.languages': value.filter((x) => x !== c) })}
+            >
               ×
             </button>
           </span>
         ))}
-        <input
-          className="vt-dict__input"
-          value={draft}
-          placeholder={terms.length ? '' : 'Add names, jargon or acronyms'}
-          aria-label="Add a dictionary term"
-          onChange={(e) => {
-            setDraft(e.target.value)
-            setError(null)
-          }}
-          onKeyDown={onKey}
-        />
       </div>
-      {suggestion && !error ? (
-        <button type="button" className="vt-dict__add" onClick={add}>
-          Add “{suggestion}”
-        </button>
-      ) : null}
-      {error ? (
-        <p className="vt-error" role="alert">
-          {error}
-        </p>
+      {!full ? (
+        <Select
+          label="Add a language"
+          value=""
+          options={options}
+          disabled={disabled}
+          onChange={(v) => {
+            if (v) setPrefs({ 'dictation.languages': [...value, v] })
+          }}
+        />
       ) : null}
     </div>
   )
 }
 
-// ---------- shortcut ----------
+// ---------- the toggle shortcut (the fallback) ----------
 
 function ShortcutButton({ status, disabled }: { status: DictationStatus | null; disabled: boolean }): JSX.Element {
   const prefs = usePrefs()
@@ -290,6 +220,10 @@ function ShortcutButton({ status, disabled }: { status: DictationStatus | null; 
 
 // ---------- microphone ----------
 
+const BUILT_IN = /built-?in|internal|integrated|array/i
+/** Bluetooth and hands-free devices, known by label: lower quality while the mic is open. */
+const WIRELESS = /bluetooth|hands-?free|headset|airpods|buds|\bbt\b|wireless/i
+
 function useInputs(): MediaDeviceInfo[] {
   const [inputs, setInputs] = useState<MediaDeviceInfo[]>([])
   useEffect(() => {
@@ -310,14 +244,16 @@ function useInputs(): MediaDeviceInfo[] {
   return inputs
 }
 
+/** The picker: the built-in microphone first and recommended, then wired devices, Bluetooth and hands-free devices last. */
 export function MicrophoneSelect({ value, disabled }: { value: DictationMicrophone | null; disabled: boolean }): JSX.Element {
   const inputs = useInputs()
-  const builtIn = inputs.find((d) => /built-?in|internal|integrated|array/i.test(d.label))
+  const builtIn = inputs.find((d) => BUILT_IN.test(d.label))
+  const rank = (d: MediaDeviceInfo): number => (d === builtIn ? 0 : WIRELESS.test(d.label) ? 2 : 1)
+  const sorted = [...inputs].sort((a, b) => rank(a) - rank(b))
   const options: SelectOption<string>[] = [{ value: 'system-default', label: 'System default' }]
-  if (builtIn) options.push({ value: `id:${builtIn.deviceId}`, label: 'Built-in microphone (Recommended)' })
-  for (const d of inputs) {
-    if (d === builtIn) continue
-    options.push({ value: `id:${d.deviceId}`, label: d.label || `Microphone (${d.deviceId.slice(0, 8)})` })
+  for (const d of sorted) {
+    const name = d === builtIn ? 'Built-in microphone' : d.label || `Microphone (${d.deviceId.slice(0, 8)})`
+    options.push({ value: `id:${d.deviceId}`, label: d === builtIn ? `${name} (Recommended)` : name })
   }
   let current = value === null ? (builtIn ? `id:${builtIn.deviceId}` : 'system-default') : value === 'system-default' ? 'system-default' : `id:${value.deviceId}`
   if (value && typeof value === 'object' && !inputs.some((d) => d.deviceId === value.deviceId)) {
@@ -342,11 +278,8 @@ export function MicrophoneSelect({ value, disabled }: { value: DictationMicropho
 
 // ---------- the page ----------
 
-export function VoiceTypingSettingsView(): JSX.Element | null {
-  const prefs = usePrefs()
+export function useDictationStatus(deps: readonly unknown[] = []): DictationStatus | null {
   const [status, setStatus] = useState<DictationStatus | null>(null)
-  const history = useDictationHistory()
-
   useEffect(() => {
     let live = true
     const read = (): void => {
@@ -358,12 +291,32 @@ export function VoiceTypingSettingsView(): JSX.Element | null {
     read()
     const t = setTimeout(read, 300)
     window.addEventListener('focus', read)
+    const off = window.notula.shortcuts.onChanged(read)
     return () => {
       live = false
       clearTimeout(t)
       window.removeEventListener('focus', read)
+      off()
     }
-  }, [prefs?.['dictation.enabled'], prefs?.['dictation.shortcut'], prefs?.['dictation.asr'], prefs?.['voiceTyping.enabled']])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps)
+  return status
+}
+
+export function VoiceTypingSettingsView(): JSX.Element | null {
+  const prefs = usePrefs()
+  const status = useDictationStatus([prefs?.['dictation.enabled'], prefs?.['dictation.shortcut'], prefs?.['dictation.asr'], prefs?.['voiceTyping.enabled']])
+  const hook = useHookStatus()
+  const history = useDictationHistory()
+  const shortcuts = useRef<HTMLDivElement>(null)
+  const scrolled = useRef(false)
+
+  // Opened from the conflict card: start at the shortcut rows.
+  useEffect(() => {
+    if (!status?.conflict || scrolled.current || !shortcuts.current) return
+    scrolled.current = true
+    shortcuts.current.scrollIntoView({ block: 'start' })
+  }, [status?.conflict])
 
   if (!prefs) return null
   if (status && !status.platformSupported) {
@@ -371,24 +324,13 @@ export function VoiceTypingSettingsView(): JSX.Element | null {
   }
   const enabled = prefs['dictation.enabled']
   const off = !enabled
-  const storedLang = prefs['dictation.language']
-  const asrLang = prefs['asr.language']
-  const shownLang = storedLang ?? (asrLang === 'multi' ? 'auto' : asrLang === 'pt-BR' ? 'pt' : 'en')
-  const codes = languageCodes(status?.asr ?? null)
-  const langOptions: SelectOption<string>[] = [
-    { value: 'auto', label: 'Auto-detect' },
-    { value: 'en', label: 'English' },
-    ...codes
-      .filter((c) => c !== 'en')
-      .map((c) => ({ value: c, label: languageName(c) }))
-      .sort((a, b) => a.label.localeCompare(b.label))
-  ]
-  if (!langOptions.some((o) => o.value === shownLang)) langOptions.push({ value: shownLang, label: languageName(shownLang) })
   const cloudLlm = prefs['llm.provider'] !== 'local'
-  const styles = prefs['dictation.styles']
   const onboarded = prefs['dictation.onboardingCompleted']
   const used = history?.some((a) => !!a.text || a.word_count !== null) ?? true
   const offerTry = !onboarded && !used && status?.platformSupported === true
+  // The toggle is the fallback: it shows only while the keyboard helper can't run.
+  const helperDown = !!hook && !hook.available && (!!hook.reason || !!hook.lost)
+  const retention = prefs['dictation.localRetention']
 
   return (
     <div className="vt-page">
@@ -431,17 +373,18 @@ export function VoiceTypingSettingsView(): JSX.Element | null {
       ) : null}
 
       <SettingsCard title="General">
-        <SettingsRow
-          title="Shortcut"
-          description={status?.holdMode === false ? 'Press it once to start voice typing and again to stop.' : 'Hold it while you speak. Press it twice quickly to keep listening hands-free.'}
-          control={<ShortcutButton status={status} disabled={off} />}
-        />
-        <SettingsRow
-          title="Language"
-          description="Which language voice typing listens for"
-          control={<Select label="Language" value={shownLang} options={langOptions} disabled={off} onChange={(v) => setPrefs({ 'dictation.language': v })} />}
-        />
-        <SettingsRow title="Microphone" description="The microphone to use for voice typing" control={<MicrophoneSelect value={prefs['dictation.microphone']} disabled={off} />} />
+        <div className="settings-row vt-row--stack">
+          <div className="settings-row__text">
+            <div className="settings-row__label">Languages</div>
+            <div className="settings-row__hint">
+              {status?.englishOnly
+                ? 'The on-device model listens for English only.'
+                : 'Add the languages you speak, up to 5. With none or several, Notula detects the language.'}
+            </div>
+          </div>
+          <Languages value={prefs['dictation.languages']} status={status} disabled={off || !!status?.englishOnly} />
+        </div>
+        <SettingsRow title="Microphone" description="Built-in and wired microphones work best. Bluetooth headsets sound worse while their microphone is on." control={<MicrophoneSelect value={prefs['dictation.microphone']} disabled={off} />} />
         <SettingsRow
           title="Transcription"
           description="Automatic uses on-device transcription when it’s installed."
@@ -455,31 +398,45 @@ export function VoiceTypingSettingsView(): JSX.Element | null {
             </button>
           </p>
         ) : null}
+        {helperDown || status?.conflict === 'dictation' ? (
+          <SettingsRow
+            title="Shortcut"
+            description={helperDown ? 'The keyboard helper isn’t running, so this shortcut starts and stops voice typing. Press it once to start and again to stop.' : 'Press it once to start voice typing and again to stop.'}
+            control={<ShortcutButton status={status} disabled={off} />}
+          />
+        ) : null}
       </SettingsCard>
 
-      <SettingsCard title="Dictation bar">
-        <SettingsRow
-          title="Show the dictation bar"
-          description="Keeps a small bar on screen so you can start voice typing with one click."
-          control={<Switch checked={prefs['dictationBar.enabled']} label="Show the dictation bar" disabled={off} onChange={(on) => setPrefs({ 'dictationBar.enabled': on })} />}
-        />
-        <SettingsRow title="Hold to talk" description="Hold to dictate, release to paste. Add Space to keep going hands-free." control={<StandaloneShortcut id="dictationHold" />} />
-        <SettingsRow title="Hands-free" description="Press to start, press again to finish. Esc cancels." control={<StandaloneShortcut id="dictationHandsFree" />} />
-        <SettingsRow title="Start or stop recording" description="Records a meeting into a new note" control={<StandaloneShortcut id="recordToggle" />} />
-      </SettingsCard>
+      <div ref={shortcuts}>
+        <SettingsCard title="Shortcuts">
+          <SettingsRow title="Hold to talk" description="Hold to dictate, release to paste. Add Space to keep going hands-free." control={<StandaloneShortcut id="dictationHold" />} />
+          <SettingsRow title="Hands-free" description="Press to start, press again to finish. Esc cancels." control={<StandaloneShortcut id="dictationHandsFree" />} />
+          <SettingsRow
+            title="Show the dictation bar"
+            description="Keeps a small bar on screen so you can start voice typing with one click."
+            control={<Switch checked={prefs['dictationBar.enabled']} label="Show the dictation bar" disabled={off} onChange={(on) => setPrefs({ 'dictationBar.enabled': on })} />}
+          />
+          <SettingsRow title="Start or stop recording" description="Records a meeting into a new note" control={<StandaloneShortcut id="recordToggle" />} />
+        </SettingsCard>
+      </div>
 
       <SettingsCard title="Personalization">
-        <div className="settings-row vt-row--stack">
-          <div className="settings-row__text">
-            <div className="settings-row__label">Dictionary</div>
-            <div className="settings-row__hint">Words Notula should always spell your way</div>
-          </div>
-          <Dictionary terms={prefs['dictation.dictionary']} removed={prefs['dictation.dictionaryRemoved']} />
-        </div>
+        <SettingsRow
+          title="Styles"
+          description="How formal your text is in email, chat and other apps"
+          control={<span className="vt-chevron" aria-hidden="true">›</span>}
+          onClick={() => navigateToSettings('voice-typing-styles')}
+        />
+        <SettingsRow
+          title="Dictionary"
+          description="Names and terms Notula should spell your way"
+          control={<span className="vt-chevron" aria-hidden="true">›</span>}
+          onClick={() => navigateToSettings('voice-typing-dictionary')}
+        />
         {prefs['voiceTyping.screenContext'] ? (
           <SettingsRow
             title="Screen context"
-            description={`Reads text near your cursor to spell names correctly.${cloudLlm ? ' That text is sent to your AI provider.' : ''}`}
+            description={`Reads text near your cursor to spell names correctly and to learn your corrections.${cloudLlm ? ' That text is sent to your AI provider.' : ''}`}
             control={
               <Switch checked={prefs['dictation.screenContext']} label="Screen context" disabled={off} onChange={(on) => setPrefs({ 'dictation.screenContext': on })} />
             }
@@ -487,43 +444,34 @@ export function VoiceTypingSettingsView(): JSX.Element | null {
         ) : null}
       </SettingsCard>
 
-      <SettingsCard title="Data and privacy">
+      <SettingsCard title="Sound">
         <SettingsRow
-          title="Store audio from failed dictations"
-          description="Keeps the audio when voice typing fails, so you can retry it later."
-          control={
-            <Select
-              label="Store audio from failed dictations"
-              value={prefs['dictation.failedAudioRetention'] ?? '24h'}
-              options={RETENTION}
-              onChange={(v) => setPrefs({ 'dictation.failedAudioRetention': v })}
-            />
-          }
+          title="Play sounds"
+          description="Short sounds when voice typing starts, goes hands-free, finishes or needs your attention."
+          control={<Switch checked={prefs['dictation.sounds']} label="Play sounds" disabled={off} onChange={(on) => setPrefs({ 'dictation.sounds': on })} />}
         />
+        {!isMac ? (
+          <SettingsRow
+            title="Mute other audio while dictating"
+            description="Mutes your speakers while you speak and turns them back on when Notula starts typing. A meeting Notula is recording is never muted."
+            control={
+              <Switch
+                checked={prefs['dictation.muteOtherAudio']}
+                label="Mute other audio while dictating"
+                disabled={off}
+                onChange={(on) => setPrefs({ 'dictation.muteOtherAudio': on })}
+              />
+            }
+          />
+        ) : null}
       </SettingsCard>
 
-      <SettingsCard title="Styles">
-        {CATEGORIES.map((c) => {
-          const tone = styles[c.key]
-          const shown = tone ?? (c.key === 'email' ? styles.work : null)
-          return (
-            <div key={c.key} className="settings-row vt-style">
-              <div className="settings-row__text">
-                <div className="settings-row__label">{c.label}</div>
-                <div className="settings-row__hint">{c.apps}</div>
-                {shown ? <div className="vt-style__sample">“{SAMPLES[c.key][shown]}”</div> : null}
-              </div>
-              <div className="settings-row__control">
-                <Select
-                  label={`${c.label} style`}
-                  value={tone ?? 'auto'}
-                  options={TONES}
-                  onChange={(v) => setPrefs({ 'dictation.styles': { ...styles, [c.key]: v === 'auto' ? null : v } })}
-                />
-              </div>
-            </div>
-          )
-        })}
+      <SettingsCard title="Data and privacy">
+        <SettingsRow
+          title="Keep dictations on this computer"
+          description={RETENTION_NOTE[retention]}
+          control={<Select label="Keep dictations on this computer" value={retention} options={RETENTION} onChange={(v) => setPrefs({ 'dictation.localRetention': v })} />}
+        />
       </SettingsCard>
 
       <SettingsCard>
@@ -532,6 +480,12 @@ export function VoiceTypingSettingsView(): JSX.Element | null {
           description="Your recent dictations, to copy, delete or retry"
           control={<span className="vt-chevron" aria-hidden="true">›</span>}
           onClick={() => navigateToSettings('voice-typing-history')}
+        />
+        <SettingsRow
+          title="Send feedback"
+          description="Tell the Notula team what works and what doesn’t in voice typing"
+          control={<span className="vt-chevron" aria-hidden="true">›</span>}
+          onClick={() => navigateToSettings('feedback?topic=voice-typing')}
         />
       </SettingsCard>
     </div>

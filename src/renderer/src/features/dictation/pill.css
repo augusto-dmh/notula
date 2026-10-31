@@ -56,8 +56,9 @@ html.dict-pill-doc body {
   min-width: 0;
 }
 
-/* The retry card: the same dark surface, taller, inside the window's 180 px. */
-.dict-pill--saved {
+/* The retry card and the other cards: the same dark surface, taller, inside the window's 180 px. */
+.dict-pill--saved,
+.dict-pill--card {
   width: 280px;
   max-width: 280px;
   height: auto;
@@ -292,4 +293,13 @@ html.dict-pill-doc body {
   .dict-proc span {
     animation: none;
   }
+}
+
+/* Check-your-mic while recording: one line in place of the waveform. */
+.dict-pill__hint {
+  overflow: hidden;
+  color: #ffd9a8;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

@@ -7,12 +7,13 @@
 //   while "Nothing leaves this machine" is on. Copy and Save report always work.
 // - Attachments only go into a saved report: a mail link can't carry files.
 // The form text lives only in this page's memory.
+// `?topic=voice-typing` (the Voice typing page's feedback row) starts on that category.
 
 import { useEffect, useId, useRef, useState, type ClipboardEvent, type JSX } from 'react'
 import { parseError } from '@shared/errors'
 import { FEEDBACK_CATEGORIES, FEEDBACK_LIMITS, type FeedbackMode, type FeedbackSystemInfo } from '@shared/types/feedback'
 import { LOCAL_ONLY_COPY } from '@shared/types/local-only'
-import { navigateToSettings } from '../../app/navigation'
+import { currentRoute, navigateToSettings } from '../../app/navigation'
 import { showToast } from '../../app/toast'
 import { Group, Row, Segmented, Select } from '../settings/controls'
 import { IconX } from '../settings/icons'
@@ -41,6 +42,9 @@ interface Attachment {
   bytes: number
 }
 
+/** Topics another page can open the form on, as their category. */
+const TOPICS: Record<string, string> = { 'voice-typing': 'Voice typing' }
+
 const sizeLabel = (n: number): string => (n < MB ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / MB).toFixed(1)} MB`)
 
 export function FeedbackPage(): JSX.Element {
@@ -50,7 +54,8 @@ export function FeedbackPage(): JSX.Element {
   const fileInput = useRef<HTMLInputElement>(null)
   const [info, setInfo] = useState<FeedbackSystemInfo | null>(null)
   const [mode, setMode] = useState<FeedbackMode>('bug')
-  const [category, setCategory] = useState<string>('')
+  const [topic] = useState(() => TOPICS[currentRoute().query.get('topic') ?? ''] ?? null)
+  const [category, setCategory] = useState<string>(topic ?? '')
   const [message, setMessage] = useState('')
   const [includeSystemInfo, setIncludeSystemInfo] = useState(true)
   const [includeLogs, setIncludeLogs] = useState(false)
@@ -187,6 +192,7 @@ export function FeedbackPage(): JSX.Element {
                 label={mode === 'feature' ? 'Select feature category' : 'Category'}
                 options={[
                   { value: '', label: mode === 'feature' ? 'Select feature category' : 'Select a category (optional)' },
+                  ...(topic ? [{ value: topic, label: topic }] : []),
                   ...FEEDBACK_CATEGORIES.map((c) => ({ value: c, label: c }))
                 ]}
                 onChange={(c) => {

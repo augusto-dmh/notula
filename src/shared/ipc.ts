@@ -103,10 +103,13 @@ import type {
   DictationAttempt,
   DictationCaptureCommand,
   DictationMicError,
+  DictationMicHealth,
   DictationState,
-  DictationStatus
+  DictationStatus,
+  DictationTerm,
+  DictationTermResult
 } from './types/dictation'
-import type { DictationBarAction, DictationBarMenu, DictationBarRect, DictationBarState, HookStatus } from './types/dictation-bar'
+import type { DictationBarAction, DictationBarMenu, DictationBarRect, DictationBarState, HookEntry, HookStatus } from './types/dictation-bar'
 import type { DispatchList, DispatchStatus, DispatchTodoStatus } from './types/dispatch'
 import type {
   ActiveGeneration,
@@ -687,6 +690,13 @@ export interface InvokeChannels {
   'dictation:history-retry': [{ id: string }, DictationAttempt]
   'dictation:chat-start': [{ deviceId?: string }, { sessionId: string }]
   'dictation:chat-stop': [{ sessionId: string }, { text: string }]
+  /** The dictionary, live and removed terms, with their local usage. */
+  'dictation:terms-list': [void, DictationTerm[]]
+  'dictation:terms-add': [{ term: string }, DictationTermResult]
+  'dictation:terms-update': [{ id: string; term?: string; starred?: boolean }, DictationTermResult]
+  /** Soft-deletes; `-restore` undoes it. */
+  'dictation:terms-remove': [{ id: string }, DictationTermResult]
+  'dictation:terms-restore': [{ id: string }, DictationTermResult]
   // Network Doctor, scratchpad, window modes, diagnostics, shortcuts, data export
   /** Rejects `busy` while a run is in flight. */
   'netdoctor:run': [void, NetDoctorReport]
@@ -704,6 +714,8 @@ export interface InvokeChannels {
   'diag:unified-log-status': [void, UnifiedLogStatus]
   'shortcuts:list': [void, ShortcutRow[]]
   'shortcuts:set': [{ id: CustomisableShortcutId; accelerator: string | null }, { ok: boolean; error: string | null }]
+  /** The `multiple` rows; null = the defaults (hold) or the derived list (hands-free). */
+  'shortcuts:set-list': [{ id: 'dictationHold' | 'dictationHandsFree'; entries: HookEntry[] | null }, { ok: boolean; error: string | null }]
   'export:choose-folder': [void, { path: string } | { cancelled: true }]
   /**
    * Rejects `invalid-input` without `confirmedPlaintext` (when any plaintext choice is on),
@@ -1050,9 +1062,27 @@ export interface SendChannels {
   'dictation:suspend-shortcut': { suspended: boolean }
   /** 16 kHz s16le mono. */
   'dictation:audio': { sessionId: string; pcm: Uint8Array }
-  'dictation:capture-event': { sessionId: string; type: 'ready' | 'error'; error?: DictationMicError }
+  /** `ready` carries the device in use; `health` the silence and stall marks. */
+  'dictation:capture-event': {
+    sessionId: string
+    type: 'ready' | 'error' | 'health'
+    error?: DictationMicError
+    health?: DictationMicHealth
+    device?: { deviceId: string; label: string }
+  }
   'dictation:pill-action': {
-    action: 'finish' | 'cancel' | 'click' | 'show-settings' | 'hover' | 'retry' | 'open-history' | 'dismiss'
+    action:
+      | 'finish'
+      | 'cancel'
+      | 'click'
+      | 'show-settings'
+      | 'hover'
+      | 'retry'
+      | 'open-history'
+      | 'dismiss'
+      | 'undo-learned'
+      | 'change-shortcut'
+      | 'keep-going'
     hovered?: boolean
   }
   'dictation:chat-cancel': { sessionId: string }
@@ -1201,6 +1231,7 @@ export interface PushChannels {
   /** The pill window. */
   'dictation:capture': DictationCaptureCommand
   'dictation:history-changed': void
+  'dictation:terms-changed': void
   'netdoctor:progress': { completed: number; total: number }
   'scratchpad:changed': { date: string; sourceWebContentsId: number }
   'window:mode-changed': { mode: WindowMode }
@@ -1780,6 +1811,14 @@ export interface NotulaApi {
       retry: InvokeMember<'dictation:history-retry'>
       onChanged: PushMember<'dictation:history-changed'>
     }
+    terms: {
+      list: InvokeMember<'dictation:terms-list'>
+      add: InvokeMember<'dictation:terms-add'>
+      update: InvokeMember<'dictation:terms-update'>
+      remove: InvokeMember<'dictation:terms-remove'>
+      restore: InvokeMember<'dictation:terms-restore'>
+      onChanged: PushMember<'dictation:terms-changed'>
+    }
     chatStart: InvokeMember<'dictation:chat-start'>
     chatStop: InvokeMember<'dictation:chat-stop'>
     chatCancel: SendMember<'dictation:chat-cancel'>
@@ -1831,6 +1870,7 @@ export interface NotulaApi {
   shortcuts: {
     list: InvokeMember<'shortcuts:list'>
     set: InvokeMember<'shortcuts:set'>
+    setList: InvokeMember<'shortcuts:set-list'>
     /** Row 490. */
     onHookStatus: PushMember<'shortcuts:hook-status'>
     onChanged: PushMember<'shortcuts:changed'>

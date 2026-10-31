@@ -932,6 +932,20 @@ const api: NotulaApi = {
         }
       }
     },
+    terms: {
+      list: () => ipcRenderer.invoke('dictation:terms-list' satisfies InvokeChannel),
+      add: (req) => ipcRenderer.invoke('dictation:terms-add' satisfies InvokeChannel, req),
+      update: (req) => ipcRenderer.invoke('dictation:terms-update' satisfies InvokeChannel, req),
+      remove: (req) => ipcRenderer.invoke('dictation:terms-remove' satisfies InvokeChannel, req),
+      restore: (req) => ipcRenderer.invoke('dictation:terms-restore' satisfies InvokeChannel, req),
+      onChanged: (cb) => {
+        const listener = (): void => cb()
+        ipcRenderer.on('dictation:terms-changed' satisfies PushChannel, listener)
+        return () => {
+          ipcRenderer.removeListener('dictation:terms-changed' satisfies PushChannel, listener)
+        }
+      }
+    },
     chatStart: (req) => ipcRenderer.invoke('dictation:chat-start' satisfies InvokeChannel, req),
     chatStop: (req) => ipcRenderer.invoke('dictation:chat-stop' satisfies InvokeChannel, req),
     chatCancel: (p) => ipcRenderer.send('dictation:chat-cancel' satisfies SendChannel, p)
@@ -1029,6 +1043,7 @@ const api: NotulaApi = {
   shortcuts: {
     list: () => ipcRenderer.invoke('shortcuts:list' satisfies InvokeChannel),
     set: (req) => ipcRenderer.invoke('shortcuts:set' satisfies InvokeChannel, req),
+    setList: (req) => ipcRenderer.invoke('shortcuts:set-list' satisfies InvokeChannel, req),
     onHookStatus: (cb) => {
       const listener = (_e: IpcRendererEvent, p: PushPayload<'shortcuts:hook-status'>): void => cb(p)
       ipcRenderer.on('shortcuts:hook-status' satisfies PushChannel, listener)

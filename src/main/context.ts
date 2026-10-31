@@ -27,7 +27,8 @@ import type {
   NotificationVariant
 } from '@shared/types/notify'
 import type { SecretId, SettingKey, Settings } from '@shared/types/settings'
-import type { CustomisableShortcutId } from '@shared/types/shortcuts'
+import type { CustomisableShortcutId, HookShortcutId } from '@shared/types/shortcuts'
+import type { HookEntry } from '@shared/types/dictation-bar'
 import type { SourceCardPayload } from '@shared/types/sources'
 import type { TranscriptChunk } from '@shared/types/transcript'
 import type { WindowMode, WindowModeReason } from '@shared/types/window-modes'
@@ -361,6 +362,8 @@ export interface WindowModesApi {
 export interface ShortcutsApi {
   /** The stored accelerator, or the platform default. */
   effective(id: CustomisableShortcutId): string
+  /** A hook list row's entries that apply now (the hands-free list derived while unset). */
+  entries(id: HookShortcutId): HookEntry[]
   /** The error copy (reserved, modifier-only, or "Already used by <action>."), or null when valid. */
   validate(id: CustomisableShortcutId, accelerator: string): string | null
   /** Quick ask and dictation hand over the code that re-registers their global shortcut. Returns the unregister function. */

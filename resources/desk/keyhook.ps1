@@ -10,10 +10,12 @@
 # Protocol: JSON lines on stdin
 #   {"op":"config","keys":["space"],"chords":[["ctrl","win"],["ctrl","space","win"]]}
 #   {"op":"active","on":true}          Esc is reported only while a dictation is active
+#   {"op":"watch","on":true}           Return and Tab are reported as commits while a paste is watched
 # JSON lines on stdout
 #   {"event":"ready"}                  the hook is installed
 #   {"event":"key","k":"ctrl_r","d":1} a transition (d = 1 down, 0 up), never a repeat
 #   {"event":"lost"}                   re-installing the hook failed
+#   {"event":"commit","k":"enter"}     Return or Tab ("tab") went down while watching
 #   {"event":"error","message":"..."}
 # What it reports: every modifier (ctrl, alt, shift, win, with _r for the right side); the
 # chords' other keys (space, a letter …) only while a modifier is down; esc only while active;
@@ -74,6 +76,7 @@ public static class NotulaKeyHook {
   static volatile HashSet<string> chordKeys = new HashSet<string>();
   static volatile List<string[]> winChords = new List<string[]>();
   static volatile bool active;
+  static volatile bool watching;
   static bool maskArmed;
 
   /** The writer thread: stdout lines in order, flushed one by one. */
@@ -117,6 +120,7 @@ public static class NotulaKeyHook {
       case 0x20: return "space";
       case 0x1B: return "esc";
     }
+    if (vk >= 0x60 && vk <= 0x69) return "num" + (vk - 0x60);
     if (vk >= 0x41 && vk <= 0x5A) return ((char)('a' + (vk - 0x41))).ToString();
     if (vk >= 0x30 && vk <= 0x39) return ((char)('0' + (vk - 0x30))).ToString();
     if (vk >= 0x70 && vk <= 0x87) return "f" + (vk - 0x6F);
@@ -153,6 +157,9 @@ public static class NotulaKeyHook {
         bool isDown = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
         bool isUp = msg == WM_KEYUP || msg == WM_SYSKEYUP;
         uint vk = info.vkCode & 0xFF;
+        if (watching && isDown && (info.flags & LLKHF_INJECTED) == 0 && (vk == 0x0D || vk == 0x09)) {
+          outbox.TryAdd(vk == 0x0D ? "{\"event\":\"commit\",\"k\":\"enter\"}" : "{\"event\":\"commit\",\"k\":\"tab\"}");
+        }
         if ((info.flags & LLKHF_INJECTED) == 0 && (isDown || isUp) && down[vk] != isDown) {
           string name = Name(vk);
           bool modBefore = ModifierDown();
@@ -237,6 +244,8 @@ public static class NotulaKeyHook {
   }
 
   public static void SetActive(bool on) { active = on; }
+
+  public static void SetWatching(bool on) { watching = on; }
 }
 '@
 
@@ -263,6 +272,7 @@ while ($running) {
         [NotulaKeyHook]::Configure([string[]]@($req.keys), [string[][]]$chords)
       }
       'active' { [NotulaKeyHook]::SetActive([bool]$req.on) }
+      'watch' { [NotulaKeyHook]::SetWatching([bool]$req.on) }
       'stop' { $running = $false }
     }
   } catch {
