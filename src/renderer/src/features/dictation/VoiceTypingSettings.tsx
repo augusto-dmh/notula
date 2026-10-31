@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Settings ▸ Voice typing (shown while Labs
-// `voiceTyping.enabled` is on): the enable row, General (languages, microphone, transcription,
-// and the toggle shortcut only while the keyboard helper is unavailable), Shortcuts (the bar
-// switch, the hold and hands-free lists, Start or stop recording), Personalization (rows to the
+// `voiceTyping.enabled` is on): the enable row, General (languages, with a line that says what
+// the engine in use can hear, microphone, transcription), Shortcuts (the hold list, the
+// hands-free list, which holds every start-and-stop shortcut, with the toggle's note while the
+// keyboard helper is down or another app may answer it, the bar switch, Start or stop
+// recording), Personalization (rows to the
 // `voice-typing-styles` and `voice-typing-dictionary` sub-pages, screen context), Sound
 // (sounds, muting other audio), Data and privacy (local retention), and the History and
 // Feedback rows.
@@ -12,9 +14,8 @@
 // Turning voice typing on here before the onboarding is done opens it too. While main reports
 // the neutral conflict note, the page opens scrolled to the shortcut rows.
 
-import { useCallback, useEffect, useRef, useState, type JSX, type KeyboardEvent } from 'react'
+import { useEffect, useRef, useState, type JSX } from 'react'
 import {
-  DICTATION_DEFAULT_SHORTCUT,
   DICTATION_LANGUAGE_LISTS,
   DICTATION_LIMITS,
   type DictationAsrChoice,
@@ -22,10 +23,11 @@ import {
   type DictationMicrophone,
   type DictationStatus
 } from '@shared/types/dictation'
+import { shortcutLabel } from '@shared/types/dictation-bar'
+import { localAsrModelInfo } from '@shared/types/transcript'
 import { navigateToSettings } from '../../app/navigation'
 import { isMac } from '../../app/platform'
-import { KeyChips, StandaloneShortcut, useHookStatus } from '../keyboard-shortcuts/KeyboardShortcutsSettings'
-import { readKey } from '../keyboard-shortcuts/keys'
+import { StandaloneShortcut, useHookStatus } from '../keyboard-shortcuts/KeyboardShortcutsSettings'
 import { Select, Switch, type SelectOption } from '../settings/controls'
 import { SettingsCard, SettingsRow } from '../settings/primitives'
 import { setPrefs, usePrefs } from '../settings/prefs-store'
@@ -70,15 +72,30 @@ export function languageName(code: string): string {
   }
 }
 
-/** Until each provider's list is pinned: AssemblyAI list A, Deepgram list B. */
-function languageCodes(provider: DictationStatus['asr']): readonly string[] {
-  if (provider === 'assemblyai') return DICTATION_LANGUAGE_LISTS.a
+/** The on-device model's own languages; until each cloud provider's list is pinned: AssemblyAI list A, Deepgram list B. */
+function languageCodes(status: DictationStatus | null): readonly string[] {
+  if (status?.localModel) return localAsrModelInfo(status.localModel).languages.filter((c) => c !== 'multi')
+  if (status?.asr === 'assemblyai') return DICTATION_LANGUAGE_LISTS.a
   return DICTATION_LANGUAGE_LISTS.b
 }
 
+const PICK_HINT = 'Add the languages you speak, up to 5. With none or several, Notula detects the language.'
+
+/** The on-device model hears English only: the one installed, or the only one for these languages. */
+const englishModel = (status: DictationStatus | null): boolean =>
+  !!status?.englishOnly || (!!status?.localModel && !localAsrModelInfo(status.localModel).languages.includes('multi'))
+
+/** What the engine in use can hear. A cloud engine gets the plain line. */
+function languagesHint(status: DictationStatus | null): string {
+  if (englishModel(status)) return 'The on-device model knows English only. For other languages, download Whisper in Settings ▸ AI.'
+  if (status?.localModel === 'whisper-large-v3-turbo-int8') return `Whisper, the on-device model, knows 99 languages. ${PICK_HINT}`
+  if (status?.localModel === 'parakeet-tdt-0.6b-v3-int8') return `Parakeet, the on-device model, knows 25 European languages. ${PICK_HINT}`
+  return PICK_HINT
+}
+
 /** Up to 5 language chips; none = automatic. The system languages are suggested first. */
-function Languages({ value, status, disabled }: { value: string[]; status: DictationStatus | null; disabled: boolean }): JSX.Element {
-  const codes = languageCodes(status?.asr ?? null)
+function Languages({ value, status, disabled, addable }: { value: string[]; status: DictationStatus | null; disabled: boolean; addable: boolean }): JSX.Element {
+  const codes = languageCodes(status)
   const system = (status?.systemLanguages ?? []).filter((c) => codes.includes(c) && !value.includes(c))
   const rest = codes
     .filter((c) => !value.includes(c) && !system.includes(c))
@@ -113,106 +130,11 @@ function Languages({ value, status, disabled }: { value: string[]; status: Dicta
           label="Add a language"
           value=""
           options={options}
-          disabled={disabled}
+          disabled={disabled || !addable}
           onChange={(v) => {
             if (v) setPrefs({ 'dictation.languages': [...value, v] })
           }}
         />
-      ) : null}
-    </div>
-  )
-}
-
-// ---------- the toggle shortcut (the fallback) ----------
-
-function ShortcutButton({ status, disabled }: { status: DictationStatus | null; disabled: boolean }): JSX.Element {
-  const prefs = usePrefs()
-  const [recording, setRecording] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const current = prefs?.['dictation.shortcut'] ?? DICTATION_DEFAULT_SHORTCUT
-
-  const stop = useCallback((): void => {
-    if (timer.current) clearTimeout(timer.current)
-    timer.current = null
-    setRecording(false)
-    window.notula.dictation.suspendShortcut({ suspended: false })
-  }, [])
-
-  useEffect(() => () => {
-    if (timer.current) {
-      clearTimeout(timer.current)
-      window.notula.dictation.suspendShortcut({ suspended: false })
-    }
-  }, [])
-
-  const apply = (accelerator: string | null): void => {
-    void window.notula.dictation.setShortcut({ accelerator }).then(
-      (r) => setError(r.ok ? null : (r.error ?? 'Couldn’t record shortcut. Try again.')),
-      () => setError('Couldn’t record shortcut. Try again.')
-    )
-  }
-
-  const begin = (): void => {
-    setError(null)
-    setRecording(true)
-    window.notula.dictation.suspendShortcut({ suspended: true })
-    timer.current = setTimeout(() => {
-      stop()
-      setError('Shortcut recording timed out')
-    }, DICTATION_LIMITS.shortcutRecordMs)
-  }
-
-  const onKeyDown = (e: KeyboardEvent<HTMLButtonElement>): void => {
-    if (!recording) return
-    e.preventDefault()
-    e.stopPropagation()
-    const r = readKey(e.nativeEvent)
-    if (r.kind === 'escape') return stop()
-    if (r.kind === 'modifiers' || r.kind === 'reserved' || r.kind === 'unsupported') return
-    if (r.kind === 'needs-modifier') {
-      setError('Add a letter, number or function key.')
-      return
-    }
-    if (/^(Alt|Option)\+Space$/.test(r.accelerator)) return
-    stop()
-    apply(r.accelerator === DICTATION_DEFAULT_SHORTCUT ? null : r.accelerator)
-  }
-
-  const onKeyUp = (e: KeyboardEvent<HTMLButtonElement>): void => {
-    // A modifier-only combination is complete when the last modifier comes up.
-    if (!recording) return
-    if (['Shift', 'Control', 'Alt', 'Meta'].includes(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
-      setError('Add a letter, number or function key.')
-    }
-  }
-
-  const failed = !recording && !error && status?.armed && !status.shortcutRegistered ? status.shortcutError : null
-  return (
-    <div className="vt-shortcut">
-      <div className="vt-shortcut__row">
-        <button
-          type="button"
-          className={`vt-shortcut__btn${recording ? ' is-recording' : ''}`}
-          aria-label={recording ? 'Recording shortcut' : 'Change voice typing shortcut'}
-          disabled={disabled}
-          onClick={() => (recording ? stop() : begin())}
-          onKeyDown={onKeyDown}
-          onKeyUp={onKeyUp}
-          onBlur={() => recording && stop()}
-        >
-          {recording ? 'Press the keys you want' : <KeyChips accelerator={current} />}
-        </button>
-        {prefs?.['dictation.shortcut'] && !recording ? (
-          <button type="button" className="n-btn n-btn--ghost n-btn--sm" disabled={disabled} onClick={() => apply(null)}>
-            Reset
-          </button>
-        ) : null}
-      </div>
-      {error || failed ? (
-        <p className="vt-error" role="alert">
-          {error ?? failed}
-        </p>
       ) : null}
     </div>
   )
@@ -330,6 +252,8 @@ export function VoiceTypingSettingsView(): JSX.Element | null {
   const offerTry = !onboarded && !used && status?.platformSupported === true
   // The toggle is the fallback: it shows only while the keyboard helper can't run.
   const helperDown = !!hook && !hook.available && (!!hook.reason || !!hook.lost)
+  // The toggle (the fallback while the helper is down), named on its note.
+  const toggle = status ? shortcutLabel(status.shortcut, isMac ? 'darwin' : 'win32') : ''
   const retention = prefs['dictation.localRetention']
 
   return (
@@ -376,13 +300,9 @@ export function VoiceTypingSettingsView(): JSX.Element | null {
         <div className="settings-row vt-row--stack">
           <div className="settings-row__text">
             <div className="settings-row__label">Languages</div>
-            <div className="settings-row__hint">
-              {status?.englishOnly
-                ? 'The on-device model listens for English only.'
-                : 'Add the languages you speak, up to 5. With none or several, Notula detects the language.'}
-            </div>
+            <div className="settings-row__hint">{languagesHint(status)}</div>
           </div>
-          <Languages value={prefs['dictation.languages']} status={status} disabled={off || !!status?.englishOnly} />
+          <Languages value={prefs['dictation.languages']} status={status} disabled={off} addable={!englishModel(status)} />
         </div>
         <SettingsRow title="Microphone" description="Built-in and wired microphones work best. Bluetooth headsets sound worse while their microphone is on." control={<MicrophoneSelect value={prefs['dictation.microphone']} disabled={off} />} />
         <SettingsRow
@@ -398,19 +318,24 @@ export function VoiceTypingSettingsView(): JSX.Element | null {
             </button>
           </p>
         ) : null}
-        {helperDown || status?.conflict === 'dictation' ? (
-          <SettingsRow
-            title="Shortcut"
-            description={helperDown ? 'The keyboard helper isn’t running, so this shortcut starts and stops voice typing. Press it once to start and again to stop.' : 'Press it once to start voice typing and again to stop.'}
-            control={<ShortcutButton status={status} disabled={off} />}
-          />
-        ) : null}
       </SettingsCard>
 
       <div ref={shortcuts}>
         <SettingsCard title="Shortcuts">
           <SettingsRow title="Hold to talk" description="Hold to dictate, release to paste. Add Space to keep going hands-free." control={<StandaloneShortcut id="dictationHold" />} />
           <SettingsRow title="Hands-free" description="Press to start, press again to finish. Esc cancels." control={<StandaloneShortcut id="dictationHandsFree" />} />
+          {enabled && (helperDown || status?.conflict === 'dictation') ? (
+            <p className="vt-row-note" role="status">
+              {helperDown
+                ? `The keyboard helper isn’t running, so ${toggle} starts and stops voice typing for now.`
+                : `Another app may also answer ${toggle}. If voice typing starts twice or not at all, change it in Keyboard shortcuts.`}{' '}
+              {helperDown ? null : (
+                <button type="button" className="vt-link" onClick={() => navigateToSettings('keyboard-shortcuts')}>
+                  Open keyboard shortcuts
+                </button>
+              )}
+            </p>
+          ) : null}
           <SettingsRow
             title="Show the dictation bar"
             description="Keeps a small bar on screen so you can start voice typing with one click."

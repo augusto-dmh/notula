@@ -154,7 +154,8 @@ export function registerShortcuts(ctx: MainContext): ShortcutsApi {
     const mine = mergedKeys(e.keys)
     if (RESERVED_EDIT.has(mine)) return SHORTCUT_COPY.reserved
     for (const row of SHORTCUTS) {
-      if (isHookShortcut(row.id)) continue
+      // The voice typing toggle may sit in the hands-free list: both start and stop dictation.
+      if (isHookShortcut(row.id) || (id === 'dictationHandsFree' && row.id === 'dictation')) continue
       const keys = keysOf(row.id, row.keys)
       if (keys !== '' && mergedKeys(keys) === mine) return SHORTCUT_COPY.usedBy(row.label)
     }
