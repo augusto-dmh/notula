@@ -5,6 +5,7 @@
 
 import { useEffect, useRef, useState, type JSX, type ReactNode } from 'react'
 import type { SpeakerNoticeLanguage } from '@shared/types/speakers'
+import type { LocalModelId, LocalModelState } from '@shared/types/transcript'
 import { navigateToSettings } from '../../app/navigation'
 import { debugLog, isMac } from '../../app/platform'
 import { showToast } from '../../app/toast'
@@ -77,7 +78,7 @@ export async function copyParticipantNotice(language: SpeakerNoticeLanguage): Pr
     await window.notula.clipboard.writeText({ text })
     showToast({ id: 'speaker-participant-notice', kind: 'success', title: S.noticeCopied() })
   } catch {
-    showToast({ id: 'speaker-participant-notice', kind: 'error', title: S.couldnt('copy the notice') })
+    showToast({ id: 'speaker-participant-notice', kind: 'error', title: S.couldnt(S.failWhat.copyNotice()) })
   }
 }
 
@@ -87,7 +88,7 @@ export async function addChatNoticeLine(language: SpeakerNoticeLanguage): Promis
     await window.notula.speakers.addChatNoticeLine({ language })
     showToast({ id: 'speaker-chat-notice', kind: 'success', title: S.noticeAdded() })
   } catch {
-    showToast({ id: 'speaker-chat-notice', kind: 'error', title: S.couldnt('change the meeting notice') })
+    showToast({ id: 'speaker-chat-notice', kind: 'error', title: S.couldnt(S.failWhat.changeNotice()) })
   }
 }
 
@@ -112,6 +113,7 @@ function IconClose(): JSX.Element {
 export function NoticeCard(): JSX.Element | null {
   const prefs = usePrefs()
   const diarization = useLocalModelState('diarization-en')
+  const voiceModel = useLocalModelState('speaker-id')
   const [leaving, setLeaving] = useState(false)
   const [gone, setGone] = useState(false)
 
@@ -127,12 +129,20 @@ export function NoticeCard(): JSX.Element | null {
     setTimeout(() => setGone(true), LEAVE_MS)
   }
 
-  const separationOn = prefs['transcription.diarization']
-  const modelMissing = separationOn && (diarization?.state === 'missing' || diarization?.state === 'error')
+  // The models the switches that are on need: speaker separation, and the voice model while a voice row is on.
+  const needed: { id: LocalModelId; state: LocalModelState }[] = [
+    ...(prefs['transcription.diarization'] && diarization ? [{ id: 'diarization-en' as const, state: diarization }] : []),
+    ...((prefs['speakers.voices'] || prefs['speakers.selfVoice']) && voiceModel ? [{ id: 'speaker-id' as const, state: voiceModel }] : [])
+  ]
+  const missing = needed.filter((m) => m.state.state === 'missing' || m.state.state === 'error')
+  const downloading = needed.some((m) => m.state.state === 'downloading')
+  const missingMb = Math.round(missing.reduce((n, m) => n + m.state.totalBytes, 0) / 1_000_000) || 33
   const download = (): void => {
-    window.notula.asr.downloadLocalModel({ modelId: 'diarization-en' }).catch(() =>
-      showToast({ id: 'diarization-download', kind: 'error', title: 'Couldn’t start the model download. Try again.' })
-    )
+    for (const m of missing) {
+      window.notula.asr.downloadLocalModel({ modelId: m.id }).catch(() =>
+        showToast({ id: `${m.id}-download`, kind: 'error', title: S.couldntStartDownload() })
+      )
+    }
   }
 
   return (
@@ -149,10 +159,15 @@ export function NoticeCard(): JSX.Element | null {
         <IconClose />
       </button>
       <p className="nt-notice__body">{S.noticeBody(!isMac)}</p>
+      {needed.length > 0 && !missing.length ? (
+        <p className="nt-notice__status" role="status">
+          {downloading ? S.noticeModelsDownloading() : S.noticeModelsReady()}
+        </p>
+      ) : null}
       <div className="nt-notice__actions">
-        {modelMissing && diarization ? (
+        {missing.length ? (
           <button type="button" className="n-btn n-btn--sm" onClick={download}>
-            {S.noticeDownloadModels(Math.round(diarization.totalBytes / 1_000_000) || 33)}
+            {missing.length > 1 ? S.noticeDownloadModels(missingMb) : S.noticeDownloadModel(missingMb)}
           </button>
         ) : null}
         <LanguageMenuButton label={S.noticeCopyForParticipants()} onPick={(l) => void copyParticipantNotice(l)} />

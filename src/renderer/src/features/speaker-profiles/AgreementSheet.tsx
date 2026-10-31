@@ -48,6 +48,37 @@ function defaultLanguage(): SpeakerNoticeLanguage {
   return navigator.language.toLowerCase().startsWith('pt') ? 'pt' : 'en'
 }
 
+// Common words that tell the two message languages apart where the transcript has no language tags.
+const PT_WORDS = new Set(['que', 'não', 'nao', 'é', 'uma', 'com', 'você', 'voce', 'isso', 'está', 'mas', 'também', 'então', 'eu', 'vamos', 'pra', 'para', 'muito', 'sim'])
+const EN_WORDS = new Set(['the', 'and', 'is', 'that', 'you', 'it', 'we', 'this', 'with', 'are', 'was', 'but', 'have', 'yes', 'okay', 'what'])
+
+/** The meeting's language, so the message goes out in the language people spoke: word tags first, else common words. */
+async function meetingLanguage(noteId: string): Promise<SpeakerNoticeLanguage | null> {
+  const chunks = await window.notula.transcript.get({ noteId })
+  let pt = 0
+  let en = 0
+  const count = (word: string): void => {
+    const w = word.toLowerCase().replace(/[^\p{L}]/gu, '')
+    if (PT_WORDS.has(w)) pt++
+    else if (EN_WORDS.has(w)) en++
+  }
+  for (const c of chunks) {
+    if (!c.is_final) continue
+    const words = c.providerDetails?.words
+    if (!words?.length) {
+      for (const w of c.text.split(/\s+/)) count(w)
+      continue
+    }
+    for (const w of words) {
+      const tag = w.lang?.toLowerCase()
+      if (tag?.startsWith('pt')) pt++
+      else if (tag?.startsWith('en')) en++
+      else count(w.w)
+    }
+  }
+  return pt > en ? 'pt' : en > pt ? 'en' : null
+}
+
 function userName(): string {
   return (getPrefs()?.['profile.name'] ?? '').trim()
 }
@@ -110,6 +141,7 @@ function Sheet({ req, onDone }: { req: AgreementSheetRequest; onDone(r: Agreemen
   const [agreed, setAgreed] = useState(false)
   const [method, setMethod] = useState<SpeakerAgreementMethod | null>(null)
   const [language, setLanguage] = useState<SpeakerNoticeLanguage>(defaultLanguage)
+  const languagePicked = useRef(false)
   const [showMessage, setShowMessage] = useState(false)
   const [copied, setCopied] = useState(false)
   const [reply, setReply] = useState('')
@@ -136,6 +168,20 @@ function Sheet({ req, onDone }: { req: AgreementSheetRequest; onDone(r: Agreemen
   const proofKind = method === 'email' || method === 'written' ? 'reply' : method === 'spoken' ? 'moment' : null
 
   useEffect(() => subscribePrefs(() => setUser(userName())), [])
+
+  // From a meeting, the message defaults to the language spoken in it, until the user picks one.
+  useEffect(() => {
+    if (!req.noteId) return
+    let live = true
+    void meetingLanguage(req.noteId)
+      .then((l) => {
+        if (live && l && !languagePicked.current) setLanguage(l)
+      })
+      .catch(() => undefined)
+    return () => {
+      live = false
+    }
+  }, [req.noteId])
 
   useEffect(() => {
     let live = true
@@ -309,7 +355,7 @@ function Sheet({ req, onDone }: { req: AgreementSheetRequest; onDone(r: Agreemen
         <h2 className="nt-ags__title" id="nt-ags-title">
           {S.sheetTitle(name)}
         </h2>
-        <p className="nt-ags__intro">{S.sheetIntro(name)}</p>
+        <p className="nt-ags__intro">{S.sheetIntro()}</p>
 
         <section className="nt-ags__block">
           {askSender ? (
@@ -337,7 +383,16 @@ function Sheet({ req, onDone }: { req: AgreementSheetRequest; onDone(r: Agreemen
           <div className="nt-ags__row">
             <span className="nt-ags__label">{S.sheetMessageTo(name)}</span>
             <span className="nt-ags__row-end">
-              <Segmented<SpeakerNoticeLanguage> name="nt-ags-lang" label={S.languageLabel()} options={LANGUAGES} value={language} onChange={setLanguage} />
+              <Segmented<SpeakerNoticeLanguage>
+                name="nt-ags-lang"
+                label={S.languageLabel()}
+                options={LANGUAGES}
+                value={language}
+                onChange={(l) => {
+                  languagePicked.current = true
+                  setLanguage(l)
+                }}
+              />
               <button type="button" className="n-btn n-btn--sm" disabled={!sender || busy !== null} onClick={() => void copy()} aria-live="polite">
                 {copied ? S.sheetCopied() : S.sheetCopyMessage()}
               </button>
@@ -361,9 +416,9 @@ function Sheet({ req, onDone }: { req: AgreementSheetRequest; onDone(r: Agreemen
           </label>
           <div className="nt-ags__field">
             <span className="nt-ags__label" id="nt-ags-how">
-              {S.sheetHow(name)}
+              {S.sheetHow()}
             </span>
-            <Segmented<SpeakerAgreementMethod> name="nt-ags-method" label={S.sheetHow(name)} options={METHODS} value={method} onChange={setMethod} />
+            <Segmented<SpeakerAgreementMethod> name="nt-ags-method" label={S.sheetHow()} options={METHODS} value={method} onChange={setMethod} />
           </div>
           {proofKind === 'reply' ? (
             <div className="nt-ags__field">
@@ -375,7 +430,7 @@ function Sheet({ req, onDone }: { req: AgreementSheetRequest; onDone(r: Agreemen
                 className="n-input nt-ags__reply"
                 value={reply}
                 maxLength={MAX_REPLY}
-                placeholder={S.sheetPastePlaceholder(name)}
+                placeholder={S.sheetPastePlaceholder()}
                 spellCheck={false}
                 onChange={(e) => setReply(e.target.value.slice(0, MAX_REPLY))}
                 aria-describedby={left < COUNTER_FROM ? 'nt-ags-left' : undefined}
@@ -424,7 +479,8 @@ function Sheet({ req, onDone }: { req: AgreementSheetRequest; onDone(r: Agreemen
         </section>
 
         <p className="nt-ags__free">{S.sheetFreeChoice(name)}</p>
-        {canAsk ? <p className="nt-ags__fine">{S.sheetAskFirstHint(name)}</p> : null}
+        {req.naming ? <p className="nt-ags__fine">{S.sheetNameWithoutHint()}</p> : null}
+        {canAsk ? <p className="nt-ags__fine">{S.sheetAskFirstHint()}</p> : null}
         {error ? (
           <p className="nt-ags__error" role="alert">
             {error}
@@ -433,7 +489,7 @@ function Sheet({ req, onDone }: { req: AgreementSheetRequest; onDone(r: Agreemen
 
         <div className="nt-ags__footer">
           <button type="button" className="n-btn" disabled={busy !== null} onClick={() => onDone({ outcome: 'cancel' })}>
-            {S.cancel()}
+            {req.naming ? S.sheetNameWithout() : S.cancel()}
           </button>
           <span className="nt-ags__spacer" />
           {canAsk ? (

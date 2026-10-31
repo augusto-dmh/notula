@@ -119,10 +119,11 @@ function StateDot({ kind, label }: { kind: 'on' | 'wait' | 'off'; label: string 
 
 // ---------- Voice ----------
 
+/** The meetings where Notula recognized the person by voice, as "Recognized in N meetings" counts them. */
 function MeetingsList({ personId }: { personId: string }): JSX.Element {
   const [rows, setRows] = useState<SpeakerMatchRow[] | null>(null)
   useEffect(() => {
-    window.notula.speakerPeople.matches({ personId }).then(setRows, fail('load the meetings'))
+    window.notula.speakerPeople.matches({ personId }).then((r) => setRows(r.filter((m) => m.kind === 'auto_voice')), fail(S.failWhat.loadMeetings()))
   }, [personId])
   if (!rows) return <ul className="nt-pv__list" aria-busy="true" />
   return (
@@ -130,7 +131,7 @@ function MeetingsList({ personId }: { personId: string }): JSX.Element {
       {rows.map((m) => (
         <li key={`${m.noteId}:${m.kind}`}>
           <button type="button" className="nt-pv__link" onClick={() => navigate(`/meeting/${encodeURIComponent(m.noteId)}`)}>
-            {m.title || 'Untitled'}
+            {m.title || S.untitled()}
           </button>
           <span className="nt-pv__sub">
             {day(m.date)} · {S.matchKind[m.kind]?.() ?? ''}
@@ -145,7 +146,7 @@ function SamplesList({ personId, name, skipped }: { personId: string; name: stri
   const [rows, setRows] = useState<SpeakerSampleRow[] | null>(null)
   const [removing, setRemoving] = useState<Set<string>>(new Set())
   const load = useCallback(() => {
-    window.notula.speakerPeople.samples({ personId }).then(setRows, fail('load the samples'))
+    window.notula.speakerPeople.samples({ personId }).then(setRows, fail(S.failWhat.loadSamples()))
   }, [personId])
   useEffect(load, [load])
 
@@ -177,7 +178,7 @@ function SamplesList({ personId, name, skipped }: { personId: string; name: stri
           : {})
       })
     } catch (err) {
-      fail('remove the sample')(err)
+      fail(S.failWhat.removeSample())(err)
     }
   }
 
@@ -192,7 +193,7 @@ function SamplesList({ personId, name, skipped }: { personId: string; name: stri
                 <span>
                   {r.noteId ? (
                     <button type="button" className="nt-pv__link" onClick={() => navigate(`/meeting/${encodeURIComponent(r.noteId ?? '')}`)}>
-                      {r.noteTitle || 'Untitled'}
+                      {r.noteTitle || S.untitled()}
                     </button>
                   ) : (
                     S.sampleDeletedMeeting()
@@ -226,7 +227,7 @@ function ForgetVoiceDialog({ personId, name, withdrawal, onClose }: { personId: 
       onClose()
     } catch (err) {
       setBusy(false)
-      fail(withdrawal ? 'withdraw the agreement' : 'forget the voice')(err)
+      fail(withdrawal ? S.failWhat.withdraw() : S.failWhat.forget())(err)
     }
   }
   if (withdrawal) {
@@ -279,7 +280,9 @@ function VoiceCard({ view, othersOn }: { view: SpeakerPersonView; othersOn: bool
   const [forgetting, setForgetting] = useState(false)
 
   const recordAgreement = async (): Promise<boolean> => {
-    const r = await openAgreementSheet({ personId, name, canAskFirst: false })
+    // With a request waiting, its meeting gives the sheet Pick the moment and the message's language.
+    const noteId = pending[0]?.noteId
+    const r = await openAgreementSheet({ personId, name, canAskFirst: false, ...(noteId ? { noteId } : {}) })
     if (r.outcome === 'recorded') showToast({ kind: 'success', title: S.toastAgreementRecorded(name) })
     return r.outcome === 'recorded'
   }
@@ -299,20 +302,33 @@ function VoiceCard({ view, othersOn }: { view: SpeakerPersonView; othersOn: bool
         ...(token ? { action: { label: S.toastUndo(), onClick: () => void window.notula.speakerNames.undo({ undoToken: token }) } } : {})
       })
     } catch (err) {
-      fail(`name ${name} in ${title || 'this meeting'}`)(err)
+      fail(S.failWhat.nameIn(name, title || S.thisMeeting()))(err)
+    }
+  }
+
+  const cancelRequest = async (): Promise<void> => {
+    try {
+      // Forgetting with no voice and no agreement ends only the requests.
+      await window.notula.speakerPeople.forgetVoice({ personId, reason: 'forget', confirmed: true })
+      showToast({ kind: 'success', title: S.toastRequestCancelled(name) })
+    } catch (err) {
+      fail(S.failWhat.cancelRequest())(err)
     }
   }
 
   const remembered = voice.state === 'remembered' || voice.state === 'stale' || voice.since !== null
   const waiting = pending.length > 0
+  const withdrawn = agreement?.revokedVia === 'withdrawn'
   const withdrawButton = (
     <button type="button" className="n-btn n-btn--sm n-btn--ghost" onClick={() => setForgetting(true)}>
       {S.voiceWithdraw()}
     </button>
   )
 
+  // One status per card, in the chip; the rows carry details and actions.
   let state: JSX.Element
   if (remembered) state = <StateDot kind="on" label={S.voiceSince(day(voice.since))} />
+  else if (active) state = <StateDot kind="on" label={S.voiceAgreedState()} />
   else if (waiting) state = <StateDot kind="wait" label={S.waitingForReply(name)} />
   else state = <StateDot kind="off" label={S.off()} />
 
@@ -321,10 +337,7 @@ function VoiceCard({ view, othersOn }: { view: SpeakerPersonView; othersOn: bool
       {remembered ? (
         <>
           {voice.stale ? <Row main={<span className="nt-pv__warn">{S.voiceNeedsNewSample(name)}</span>} /> : null}
-          <Row
-            main={S.voiceSince(day(voice.since))}
-            sub={voice.expiresAt ? S.voiceForgottenBy(day(voice.expiresAt)) : undefined}
-          />
+          {voice.expiresAt ? <Row main={<span className="nt-pv__sub">{S.voiceForgottenBy(day(voice.expiresAt))}</span>} /> : null}
           <Row
             main={
               voice.recognizedCount > 0 ? (
@@ -344,7 +357,7 @@ function VoiceCard({ view, othersOn }: { view: SpeakerPersonView; othersOn: bool
               <SpeechSwitch
                 label={S.voiceRecognizeAutomatically()}
                 checked={voice.autoRecognize}
-                onChange={(enabled) => void window.notula.speakerPeople.setAuto({ personId, enabled }).catch(fail('change the setting'))}
+                onChange={(enabled) => void window.notula.speakerPeople.setAuto({ personId, enabled }).catch(fail(S.failWhat.changeSetting()))}
               />
             }
           />
@@ -365,14 +378,19 @@ function VoiceCard({ view, othersOn }: { view: SpeakerPersonView; othersOn: bool
       ) : waiting ? (
         <>
           <Row
-            main={S.waitingForReply(name)}
+            main={<span className="nt-pv__sub">{active ? S.voicePendingReady() : S.voicePendingDetail()}</span>}
             actions={
               active ? (
                 withdrawButton
               ) : (
-                <button type="button" className="n-btn n-btn--sm n-btn--primary" onClick={() => void recordAgreement()}>
-                  {S.voiceRecordAgreement(name)}
-                </button>
+                <>
+                  <button type="button" className="n-btn n-btn--sm n-btn--ghost" onClick={() => void cancelRequest()}>
+                    {S.voiceCancelRequest()}
+                  </button>
+                  <button type="button" className="n-btn n-btn--sm n-btn--primary" onClick={() => void recordAgreement()}>
+                    {S.voiceRecordAgreement(name)}
+                  </button>
+                </>
               )
             }
           />
@@ -381,13 +399,13 @@ function VoiceCard({ view, othersOn }: { view: SpeakerPersonView; othersOn: bool
               <li key={p.noteId}>
                 <div className="nt-pv__text">
                   <button type="button" className="nt-pv__link" onClick={() => navigate(`/meeting/${encodeURIComponent(p.noteId)}`)}>
-                    {p.title || 'Untitled'}
+                    {p.title || S.untitled()}
                   </button>
                   <span className="nt-pv__sub">{day(p.askedAt)}</span>
                 </div>
                 {p.canName ? (
                   <button type="button" className="n-btn n-btn--sm" onClick={() => void namePending(p.noteId, p.title)}>
-                    {S.voiceNameIn(name, p.title || 'this meeting')}
+                    {S.voiceNameIn(name, p.title || S.thisMeeting())}
                   </button>
                 ) : null}
               </li>
@@ -398,13 +416,20 @@ function VoiceCard({ view, othersOn }: { view: SpeakerPersonView; othersOn: bool
         <Row main={<p className="nt-pv__note">{S.voiceAgreedNoSample(name)}</p>} actions={withdrawButton} />
       ) : (
         <Row
-          main={S.voiceNone(name)}
+          main={withdrawn ? S.voiceWithdrewNone(name) : S.voiceNone(name)}
           sub={explain ? S.voiceStartsNextTime(name) : undefined}
           actions={
             othersOn && !explain ? (
-              <button type="button" className="n-btn n-btn--sm" onClick={() => void rememberVoice()}>
-                {S.voiceRemember(name)}
-              </button>
+              // After an agreement ended, asking again is a quiet option, not the page's lead.
+              agreement ? (
+                <button type="button" className="nt-pv__link" onClick={() => void rememberVoice()}>
+                  {S.voiceRecordNewAgreement()}
+                </button>
+              ) : (
+                <button type="button" className="n-btn n-btn--sm" onClick={() => void rememberVoice()}>
+                  {S.voiceRemember(name)}
+                </button>
+              )
             ) : null
           }
         />
@@ -431,19 +456,19 @@ function AgreementCard({ view }: { view: SpeakerPersonView }): JSX.Element | nul
       setText(null)
       return
     }
-    window.notula.speakerPeople.agreementText({ personId }).then(setText, fail('load the message'))
+    window.notula.speakerPeople.agreementText({ personId }).then(setText, fail(S.failWhat.loadMessage()))
   }
   const exportRecord = (): void => {
     window.notula.speakerPeople.exportAgreement({ personId }).then((r) => {
       if ('ok' in r) showToast({ kind: 'success', title: S.toastAgreementSaved() })
-    }, fail('export the agreement record'))
+    }, fail(S.failWhat.exportRecord()))
   }
   const remove = async (): Promise<void> => {
     try {
       await window.notula.speakerPeople.deleteAgreement({ personId, confirmed: true })
       showToast({ kind: 'success', title: S.toastAgreementRemoved() })
     } catch (err) {
-      fail('remove the record')(err)
+      fail(S.failWhat.removeRecord())(err)
     }
     setRemoving(false)
   }
@@ -451,17 +476,16 @@ function AgreementCard({ view }: { view: SpeakerPersonView }): JSX.Element | nul
   const method = S.agreementMethod[a.method]?.() ?? a.method
   const language = a.language === 'pt' ? S.languagePortuguese() : S.languageEnglish()
   const why = a.revokedVia ? (S.agreementEndedVia[a.revokedVia]?.(name) ?? '') : ''
+  const detail = [S.agreementMessageLine(language, a.noticeVersion), a.hasEvidence ? S.agreementWithReply() : null].filter(Boolean).join(' · ')
 
+  // The chip is the record's state (its method, or when it ended); the rows only add detail.
   return (
     <Card
       title={S.agreementSection()}
-      state={a.revokedAt ? <StateDot kind="off" label={S.agreementEnded(day(a.revokedAt), why)} /> : <StateDot kind="on" label={method} />}
+      state={a.revokedAt ? <StateDot kind="off" label={S.agreementEnded(day(a.revokedAt))} /> : <StateDot kind="on" label={method} />}
     >
-      <Row
-        main={S.agreementSummary(method, day(a.attestedAt))}
-        sub={[S.agreementMessageLine(language, a.noticeVersion), a.hasEvidence ? S.agreementWithReply() : null].filter(Boolean).join(' · ')}
-      />
-      {a.revokedAt ? <Row main={S.agreementEnded(day(a.revokedAt), why)} sub={S.agreementKeptAsProof()} /> : null}
+      <Row main={a.revokedAt ? S.agreementSummary(method, day(a.attestedAt)) : S.agreementRecordedOn(day(a.attestedAt))} sub={detail} />
+      {a.revokedAt ? <Row main={why} sub={S.agreementKeptAsProof()} /> : null}
       <Row
         main={
           <button type="button" className="nt-pv__link" aria-expanded={!!text} onClick={toggleMessage}>
@@ -530,7 +554,7 @@ function MergePicker({ view, onPick, onClose }: { view: SpeakerPersonView; onPic
     const t = setTimeout(() => {
       window.notula.speakerPeople.list({ query: query.trim() }).then((r) => {
         if (alive) setRows(r.filter((x) => x.personId && x.personId !== view.person.personId && !x.isSelf))
-      }, fail('load people'))
+      }, fail(S.failWhat.loadPeople()))
     }, 120)
     return () => {
       alive = false
@@ -564,6 +588,16 @@ function MergePicker({ view, onPick, onClose }: { view: SpeakerPersonView; onPic
   )
 }
 
+/** What keeps a person from being deleted, so the line names the step that's actually left. */
+function deleteBlocker(view: SpeakerPersonView): keyof typeof S.personDeleteBlocked {
+  const voice = view.voice.since !== null || view.voice.state === 'remembered' || view.voice.state === 'stale'
+  const a = view.agreement
+  if (voice) return a ? 'voice-record' : 'voice'
+  if (a && !a.revokedAt) return 'agreement'
+  if (a) return 'record'
+  return 'pending'
+}
+
 function PersonCard({ view }: { view: SpeakerPersonView }): JSX.Element {
   const { person } = view
   const [picking, setPicking] = useState(false)
@@ -594,7 +628,7 @@ function PersonCard({ view }: { view: SpeakerPersonView }): JSX.Element {
         ...(preview.withdrawnAt ? { withdrawnAt: preview.withdrawnAt } : {})
       })
     } catch (err) {
-      fail('prepare the merge')(err)
+      fail(S.failWhat.prepareMerge())(err)
     }
   }
 
@@ -605,7 +639,7 @@ function PersonCard({ view }: { view: SpeakerPersonView }): JSX.Element {
       setPlan(null)
       if (p.intoId !== person.personId) navigate(`/person/${encodeURIComponent(p.intoRoute)}`, { replace: true })
     } catch (err) {
-      fail('merge')(err)
+      fail(S.failWhat.merge())(err)
     }
   }
 
@@ -619,7 +653,7 @@ function PersonCard({ view }: { view: SpeakerPersonView }): JSX.Element {
       showToast({ kind: 'success', title: S.toastLinked(email) })
       navigate(`/person/${encodeURIComponent(email)}`, { replace: true })
     } catch (err) {
-      fail('link the email')(err)
+      fail(S.failWhat.linkEmail())(err)
     }
   }
 
@@ -630,7 +664,7 @@ function PersonCard({ view }: { view: SpeakerPersonView }): JSX.Element {
       navigate('/people', { replace: true })
     } catch (err) {
       setDeleting(false)
-      fail('delete the person')(err)
+      fail(S.failWhat.deletePerson())(err)
     }
   }
 
@@ -659,9 +693,7 @@ function PersonCard({ view }: { view: SpeakerPersonView }): JSX.Element {
           {S.personDelete()}
         </button>
       ) : (
-        <span className="nt-pv__sub nt-pv__blocked">
-          {S.personDeleteBlocked(person.name)}
-        </span>
+        <span className="nt-pv__sub nt-pv__blocked">{S.personDeleteBlocked[deleteBlocker(view)](person.name)}</span>
       )}
       {picking ? (
         <MergePicker

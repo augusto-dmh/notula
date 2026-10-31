@@ -312,9 +312,15 @@
 
 .nt-ags__footer {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   margin-top: 16px;
+}
+
+/* Three buttons with a long name wrap: the decision stays on the right. */
+.nt-ags__footer > .n-btn--primary {
+  margin-left: auto;
 }
 
 .nt-ags__spacer {
@@ -540,6 +546,12 @@
   color: var(--fg-2);
   font-size: var(--text-sm);
   line-height: 1.55;
+}
+
+.nt-notice__status {
+  margin: -6px 0 14px;
+  color: var(--fg-3);
+  font-size: var(--text-xs);
 }
 
 .nt-notice__close {

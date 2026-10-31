@@ -214,7 +214,7 @@ function SpeakerTagsVoiceSlot({ prefs }: { prefs: Settings | null }): JSX.Elemen
     const start = (modelId: 'speaker-id' | 'diarization-en'): void => {
       window.notula.asr.downloadLocalModel({ modelId }).catch((err: unknown) => {
         debugLog('speaker-model-download-failed', { modelId, err: String(err).slice(0, 200) })
-        showToast({ id: `speaker-model-${modelId}`, kind: 'error', title: 'Couldn’t start the model download. Try again.' })
+        showToast({ id: `speaker-model-${modelId}`, kind: 'error', title: S.couldntStartDownload() })
       })
     }
     if (!idReady && !idBusy) start('speaker-id')
@@ -404,8 +404,9 @@ function SpeakerTagsVoiceSlot({ prefs }: { prefs: Settings | null }): JSX.Elemen
           title={S.settingsAlsoForgetOthers()}
           onClose={close}
           actions={[
-            { label: S.settingsKeep(), onClick: close },
-            { label: S.settingsForgetVoices(), kind: 'danger', autoFocus: true, onClick: () => void forgetOthers() }
+            // Focus on the safe choice: Enter right after flipping the switch keeps the voices.
+            { label: S.settingsKeep(), onClick: close, autoFocus: true },
+            { label: S.settingsForgetVoices(), kind: 'danger', onClick: () => void forgetOthers() }
           ]}
         >
           <p>{S.settingsAlsoForgetOthersBody()}</p>
@@ -416,8 +417,8 @@ function SpeakerTagsVoiceSlot({ prefs }: { prefs: Settings | null }): JSX.Elemen
           title={S.settingsAlsoForgetMine()}
           onClose={close}
           actions={[
-            { label: S.settingsKeep(), onClick: close },
-            { label: S.settingsForgetMyVoice(), kind: 'danger', autoFocus: true, onClick: () => void forgetMine() }
+            { label: S.settingsKeep(), onClick: close, autoFocus: true },
+            { label: S.settingsForgetMyVoice(), kind: 'danger', onClick: () => void forgetMine() }
           ]}
         >
           <p>{S.settingsAlsoForgetMineBody()}</p>
@@ -484,10 +485,11 @@ export function SpeakerTagsSettings(): JSX.Element {
   const paused = !!prefs && prefs['llm.provider'] !== 'local' && !!prefs['privacy.localOnly']
   return (
     <>
-      <SettingsCard title={S.settingsTitle()} description={S.settingsNamingDescription()}>
+      {/* The page is titled Speaker tags already: the first card has no title of its own. */}
+      <SettingsCard description={S.settingsNamingDescription()}>
         <SettingsRow
           title={S.settingsAppNames()}
-          description={supported ? S.settingsAppNamesDetail() : 'Coming later on macOS'}
+          description={supported ? S.settingsAppNamesDetail() : S.settingsComingLaterMac()}
           control={
             <SpeechSwitch
               label={S.settingsAppNames()}
@@ -533,12 +535,12 @@ export function SpeakerTagsSettings(): JSX.Element {
       </SettingsCard>
       <SpeakerTagsVoiceSlot prefs={prefs} />
       <SpeakerTagsNoticeSlot prefs={prefs} />
-      <SettingsCard title="Advanced">
+      <SettingsCard title={S.settingsAdvanced()}>
         <SettingsRow
-          title="Google Meet page selectors"
-          description="The class names Notula looks for in Meet's page. Google changes them from time to time."
+          title={S.settingsMeetSelectors()}
+          description={S.settingsMeetSelectorsDetail()}
           onClick={() => setAdvanced((v) => !v)}
-          control={<span className="nt-st-chevron">{advanced ? 'Hide' : 'Edit'}</span>}
+          control={<span className="nt-st-chevron">{advanced ? S.settingsHide() : S.settingsEdit()}</span>}
         />
         {advanced ? <MeetSelectorEditor value={selectors} onSave={(v) => setSpeechPrefs({ 'attribution.meetSelectors': v })} /> : null}
       </SettingsCard>
