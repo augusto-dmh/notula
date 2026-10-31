@@ -186,11 +186,22 @@ export function localModelCovers(id: LocalAsrModelId, language: string): boolean
   return localAsrModelInfo(id).languages.includes(localLanguageCode(language))
 }
 
+/**
+ * An install's steps, in order: the download (`receivedBytes`), then for an archive the
+ * unpacking, then each file's fingerprint check. A model of several downloads goes round once
+ * per download.
+ */
+export type LocalModelStep = 'downloading' | 'unpacking' | 'verifying'
+
+/**
+ * `downloading` covers the whole install: `step` says which part runs, and `stepProgress`
+ * (0–1) how far unpacking or checking has got. `error.step`: the step that failed.
+ */
 export type LocalModelState = { modelId: LocalModelId } & (
   | { state: 'missing'; totalBytes: number }
-  | { state: 'downloading'; receivedBytes: number; totalBytes: number }
+  | { state: 'downloading'; receivedBytes: number; totalBytes: number; step: LocalModelStep; stepProgress?: number }
   | { state: 'ready'; totalBytes: number }
-  | { state: 'error'; message: string; totalBytes: number }
+  | { state: 'error'; message: string; totalBytes: number; step?: LocalModelStep }
 )
 
 /** The English local ASR model; the default of the `asr:*-local-model` requests. */

@@ -5,6 +5,8 @@
 // download, started only by the user, with its languages, size, licence and
 // attribution. Whisper large-v3-turbo is the recommended one, listed first with a
 // one-click "Download and use".
+// An install shows its step and that step's own progress: the download in bytes, then
+// unpacking (a minute or two for the big models) and the file check.
 
 import { useState, type JSX } from 'react'
 import type { Settings } from '@shared/types/settings'
@@ -15,7 +17,8 @@ import {
   type LocalAsrChoice,
   type LocalAsrModelId,
   type LocalAsrModelInfo,
-  type LocalModelState
+  type LocalModelState,
+  type LocalModelStep
 } from '@shared/types/transcript'
 import { showToast } from '../../app/toast'
 import { SettingsRow } from '../settings'
@@ -55,6 +58,36 @@ export function SpeechSwitch({
       <span className="settings-switch__thumb" />
     </button>
   )
+}
+
+/** "412 of 564 MB": the unit once when both sizes share it. */
+function bytesOf(received: number, total: number): string {
+  const a = formatBytes(received)
+  const b = formatBytes(total)
+  const unit = b.slice(b.lastIndexOf(' '))
+  return a.endsWith(unit) ? `${a.slice(0, -unit.length)} of ${b}` : `${a} of ${b}`
+}
+
+/** The failed step, named. */
+const FAILED: Record<LocalModelStep, string> = {
+  downloading: 'The download didn’t finish.',
+  unpacking: 'Couldn’t unpack the model.',
+  verifying: 'The model files didn’t pass the check.'
+}
+
+/** The install's line and its bar (0–100) for the current step. */
+function installProgress(s: Extract<LocalModelState, { state: 'downloading' }>): { line: string; percent: number } {
+  const pct = Math.round((s.stepProgress ?? 0) * 100)
+  switch (s.step) {
+    case 'unpacking':
+      return { line: `Unpacking… ${pct}%`, percent: pct }
+    case 'verifying':
+      return { line: 'Checking files…', percent: pct }
+    default:
+      // Every byte in but still on this step: reused files being checked before anything else.
+      if (s.totalBytes > 0 && s.receivedBytes >= s.totalBytes) return { line: 'Checking files…', percent: 100 }
+      return { line: `Downloading ${bytesOf(s.receivedBytes, s.totalBytes)}`, percent: s.totalBytes ? Math.min(100, (s.receivedBytes / s.totalBytes) * 100) : 0 }
+  }
 }
 
 function ModelRow({
@@ -98,12 +131,7 @@ function ModelRow({
       )
       break
     case 'downloading':
-      // Every byte in: the files are being unpacked and checked, which takes some seconds
-      // and would otherwise look like a stalled download.
-      status =
-        state.totalBytes > 0 && state.receivedBytes >= state.totalBytes
-          ? 'Installing…'
-          : `Downloading ${formatBytes(state.receivedBytes)} of ${formatBytes(state.totalBytes)}`
+      status = installProgress(state).line
       break
     case 'ready':
       status = inUse ? 'Downloaded. In use for your meetings.' : 'Downloaded. Not in use right now.'
@@ -125,7 +153,7 @@ function ModelRow({
       )
       break
     case 'error':
-      status = 'The download didn’t finish.'
+      status = FAILED[state.step ?? 'downloading']
       actions = (
         <button type="button" className="n-btn n-btn--sm" onClick={() => void download(info.recommended)}>
           Try again
@@ -136,7 +164,7 @@ function ModelRow({
       status = 'Checking…'
   }
 
-  const percent = state?.state === 'downloading' && state.totalBytes ? Math.min(100, (state.receivedBytes / state.totalBytes) * 100) : 0
+  const percent = state?.state === 'downloading' ? installProgress(state).percent : 0
 
   return (
     <div className="nt-sp-model">
@@ -157,7 +185,7 @@ function ModelRow({
         <div
           className="nt-sp-progress"
           role="progressbar"
-          aria-label={`${info.name} download`}
+          aria-label={`${info.name} install`}
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={Math.round(percent)}
@@ -165,6 +193,7 @@ function ModelRow({
           <div className="nt-sp-progress__bar" style={{ width: `${percent}%` }} />
         </div>
       )}
+      {state?.state === 'downloading' && state.step === 'unpacking' && <div className="nt-sp-model__fine">This takes a minute or two.</div>}
       {state?.state === 'error' && <div className="nt-sp-model__error">{state.message}</div>}
       <div className="nt-sp-model__fine">{info.attribution}</div>
     </div>

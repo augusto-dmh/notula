@@ -13,14 +13,19 @@
 // verified members (archives are extracted with the OS `tar`). Only when every
 // download and member verifies is `<dir>.partial` renamed to `<dir>`. Any mismatch
 // deletes both staging folders and leaves the state `error` (in memory only).
+//
+// While installing, the state names its step (`LocalModelStep`): the download in bytes, then
+// unpacking, which reads the archive twice (a listing, fed through stdin so the bytes tar
+// has read can be counted, then the extraction, measured by the bytes written against the
+// members' pinned sizes), then the fingerprint check, file by file.
 
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { createWriteStream, existsSync, statSync, type WriteStream } from 'node:fs'
+import { createReadStream, createWriteStream, existsSync, statSync, type WriteStream } from 'node:fs'
 import { copyFile, link, mkdir, rename, rm, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { SpeakerModelState } from '@shared/types/speakers'
-import { DEFAULT_LOCAL_ASR_MODEL, type LocalModelId, type LocalModelState } from '@shared/types/transcript'
+import { DEFAULT_LOCAL_ASR_MODEL, type LocalModelId, type LocalModelState, type LocalModelStep } from '@shared/types/transcript'
 import { log } from '../log'
 import { aliasesOf, MODEL_MANIFEST, modelFiles, modelHome, speakerIdModelId, type ModelDownload, type ModelFile, type ModelManifestEntry } from './manifest'
 import type { VerifiedFile } from './protocol'
@@ -29,6 +34,15 @@ import { baseName, sha256File } from './verify'
 /** Progress pushes: at most one per 250 ms per model; the final state always. */
 const PUSH_EVERY_MS = 250
 const TAR_TIMEOUT_MS = 10 * 60_000
+/** How often the extraction's bytes written are measured. */
+const UNPACK_POLL_MS = 500
+/**
+ * Unpacking's share of its bar for the listing pass; the extraction, which also writes, takes
+ * the rest. Both decompress the whole archive.
+ */
+const LIST_SHARE = 0.45
+/** Unpacking never shows done: the members still move into place. */
+const UNPACK_CAP = 0.99
 
 export type FetchLike = (url: string, init: { signal: AbortSignal; redirect: 'follow' }) => Promise<Response>
 
@@ -60,6 +74,49 @@ function tarCommand(): string {
     if (existsSync(sys)) return sys
   }
   return 'tar'
+}
+
+const tarError = (stderr: string, fallback: string): ModelError =>
+  new ModelError(`tar failed: ${(stderr || fallback).trim().split(/\r?\n/).slice(-2).join(' ')}`)
+
+/**
+ * `tar -tjf -` with the archive on stdin, so `onRead` can count the bytes tar has taken.
+ * `-j` because a pipe isn't sniffed for compression by every tar; every archive is .tar.bz2.
+ */
+function listArchive(cmd: string, archive: string, onRead: (bytes: number) => void): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, ['-tjf', '-'], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
+    const timer = setTimeout(() => child.kill(), TAR_TIMEOUT_MS)
+    const out: Buffer[] = []
+    let stderr = ''
+    let outBytes = 0
+    child.stdout.on('data', (d: Buffer) => {
+      outBytes += d.length
+      if (outBytes > 8 * 1024 * 1024) child.kill()
+      else out.push(d)
+    })
+    child.stderr.on('data', (d: Buffer) => (stderr = (stderr + d.toString()).slice(-4096)))
+    // tar may stop reading early (a bad archive); its exit code says why, not the pipe.
+    child.stdin.on('error', () => undefined)
+    const input = createReadStream(archive)
+    input.on('data', (d) => onRead(d.length))
+    input.on('error', (err) => {
+      stderr ||= err.message
+      child.kill()
+    })
+    input.pipe(child.stdin)
+    child.on('error', (err) => {
+      clearTimeout(timer)
+      input.destroy()
+      reject(tarError('', err.message))
+    })
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      input.destroy()
+      if (code === 0) resolve(Buffer.concat(out).toString())
+      else reject(tarError(stderr, `exit ${code ?? 'killed'}`))
+    })
+  })
 }
 
 function run(cmd: string, args: string[]): Promise<string> {
@@ -142,6 +199,10 @@ export class LocalModelManager {
   private readonly errors = new Map<LocalModelId, string>()
   private readonly jobs = new Map<LocalModelId, Promise<void>>()
   private readonly received = new Map<LocalModelId, number>()
+  /** The running install's step and, for unpacking and checking, its progress (0–1). */
+  private readonly steps = new Map<LocalModelId, { step: LocalModelStep; progress: number }>()
+  /** The step an install failed in, kept with its error. */
+  private readonly failedSteps = new Map<LocalModelId, LocalModelStep>()
   private queue: Promise<unknown> = Promise.resolve()
   private readonly listeners = new Set<(s: LocalModelState) => void>()
   private readonly throttles = new Map<LocalModelId, Throttle>()
@@ -239,10 +300,21 @@ export class LocalModelManager {
     const id = modelHome(model)
     if (id !== model) return { ...this.stateNow(id), modelId: model }
     const totalBytes = MODEL_MANIFEST[id].totalBytes
-    if (this.jobs.has(id)) return { modelId: id, state: 'downloading', receivedBytes: this.received.get(id) ?? 0, totalBytes }
+    if (this.jobs.has(id)) {
+      const s = this.steps.get(id) ?? { step: 'downloading', progress: 0 }
+      return {
+        modelId: id,
+        state: 'downloading',
+        receivedBytes: this.received.get(id) ?? 0,
+        totalBytes,
+        step: s.step,
+        ...(s.step === 'downloading' ? {} : { stepProgress: s.progress })
+      }
+    }
     if (this.isReady(id)) return { modelId: id, state: 'ready', totalBytes }
     const message = this.errors.get(id)
-    if (message !== undefined) return { modelId: id, state: 'error', message, totalBytes }
+    const step = this.failedSteps.get(id)
+    if (message !== undefined) return { modelId: id, state: 'error', message, totalBytes, ...(step ? { step } : {}) }
     return { modelId: id, state: 'missing', totalBytes }
   }
 
@@ -277,6 +349,7 @@ export class LocalModelManager {
       await rm(`${dir}.partial`, { recursive: true, force: true })
       await rm(`${dir}.download`, { recursive: true, force: true })
       this.errors.delete(id)
+      this.failedSteps.delete(id)
       log('info', 'asr:model-deleted', { modelId: id })
       this.push(id, true)
       return this.stateNow(id)
@@ -299,7 +372,9 @@ export class LocalModelManager {
 
   private start(id: LocalModelId): void {
     this.errors.delete(id)
+    this.failedSteps.delete(id)
     this.received.set(id, 0)
+    this.steps.set(id, { step: 'downloading', progress: 0 })
     const entry = MODEL_MANIFEST[id]
     const started = Date.now()
     log('info', 'asr:model-download-start', { modelId: id, totalBytes: entry.totalBytes })
@@ -309,12 +384,15 @@ export class LocalModelManager {
       })
       .catch((err: unknown) => {
         const message = err instanceof Error ? err.message : String(err)
+        const step = this.steps.get(id)?.step ?? 'downloading'
         this.errors.set(id, message)
-        log('warn', 'asr:model-download-failed', { modelId: id, message })
+        this.failedSteps.set(id, step)
+        log('warn', 'asr:model-download-failed', { modelId: id, step, message })
       })
       .finally(() => {
         this.jobs.delete(id)
         this.received.delete(id)
+        this.steps.delete(id)
         this.push(id, true)
       })
     this.jobs.set(id, job)
@@ -324,6 +402,14 @@ export class LocalModelManager {
   private addReceived(id: LocalModelId, n: number): void {
     this.received.set(id, (this.received.get(id) ?? 0) + n)
     this.push(id, false)
+  }
+
+  /** Moves the install to `step` at `progress` (0–1). A new step goes out at once, progress with the throttle. */
+  private setStep(id: LocalModelId, step: LocalModelStep, progress = 0): void {
+    const was = this.steps.get(id)
+    this.steps.set(id, { step, progress: Math.max(0, Math.min(1, progress)) })
+    if (was?.step !== step) log('info', 'asr:model-install-step', { modelId: id, step })
+    this.push(id, was?.step !== step)
   }
 
   /** Throttled to one push per 250 ms per model; `final` always goes out at once. */
@@ -371,15 +457,19 @@ export class LocalModelManager {
           continue
         }
         const file = join(dl, baseName(d.url))
+        this.setStep(entry.id, 'downloading')
         await this.fetchVerified(entry.id, d, file)
-        if (d.kind === 'archive') await this.extract(d, file, stage)
-        else {
+        if (d.kind === 'archive') {
+          this.setStep(entry.id, 'unpacking')
+          await this.extract(d, file, stage, (p) => this.setStep(entry.id, 'unpacking', Math.min(UNPACK_CAP, p)))
+        } else {
           const m = d.members[0] as ModelFile
           await mkdir(dirname(join(stage, m.path)), { recursive: true })
           await rename(file, join(stage, m.path))
         }
         // Layer 2: every member's SHA-256 against its pin.
-        const bad = await this.firstBadMember(stage, d.members)
+        this.setStep(entry.id, 'verifying')
+        const bad = await this.firstBadMember(stage, d.members, (p) => this.setStep(entry.id, 'verifying', p))
         if (bad) throw new ModelError(bad)
       }
       await rm(final, { recursive: true, force: true })
@@ -396,7 +486,10 @@ export class LocalModelManager {
     return (await this.firstBadMember(dir, members)) === null
   }
 
-  private async firstBadMember(dir: string, members: ModelFile[]): Promise<string | null> {
+  /** `onProgress`: the share of the members' bytes checked so far, after each file. */
+  private async firstBadMember(dir: string, members: ModelFile[], onProgress?: (p: number) => void): Promise<string | null> {
+    const total = members.reduce((n, m) => n + m.bytes, 0)
+    let checked = 0
     for (const m of members) {
       const p = join(dir, m.path)
       let size: number
@@ -408,6 +501,8 @@ export class LocalModelManager {
       if (size !== m.bytes) return `model file ${m.path} has ${size} bytes, expected ${m.bytes}`
       const got = await sha256File(p)
       if (got !== m.sha256) return `integrity check failed for ${m.path}: expected ${m.sha256}, got ${got}`
+      checked += m.bytes
+      onProgress?.(total ? checked / total : 1)
     }
     return null
   }
@@ -469,11 +564,18 @@ export class LocalModelManager {
   /**
    * Extracts only the pinned members with the OS `tar`. Member paths are relative
    * to the archive's single top-level directory; anything else in the archive
-   * (test audio, scripts) is never written.
+   * (test audio, scripts) is never written. `onProgress` (0–1): the listing's bytes read, then
+   * the extraction's bytes written against the members' sizes.
    */
-  private async extract(d: ModelDownload, archive: string, stage: string): Promise<void> {
+  private async extract(d: ModelDownload, archive: string, stage: string, onProgress: (p: number) => void): Promise<void> {
     const tar = tarCommand()
-    const listing = (await run(tar, ['-tf', archive]))
+    let read = 0
+    const listing = (
+      await listArchive(tar, archive, (n) => {
+        read += n
+        onProgress(LIST_SHARE * Math.min(1, read / d.bytes))
+      })
+    )
       .split(/\r?\n/)
       .map((l) => l.trim())
       .filter(Boolean)
@@ -489,9 +591,24 @@ export class LocalModelManager {
     const x = join(dirname(archive), 'x')
     await rm(x, { recursive: true, force: true })
     await mkdir(x, { recursive: true })
+    const expected = d.members.reduce((n, m) => n + m.bytes, 0)
+    // A measure that lands after tar exits is dropped, so it can't pull the state back from the check.
+    let extracting = true
+    const poll = setInterval(() => {
+      void Promise.all(d.members.map((m) => stat(join(x, top, m.path)).then((s) => s.size, () => 0))).then((sizes) => {
+        if (!extracting) return
+        const written = sizes.reduce((n, b) => n + b, 0)
+        onProgress(LIST_SHARE + (1 - LIST_SHARE) * Math.min(1, expected ? written / expected : 1))
+      })
+    }, UNPACK_POLL_MS)
     // -m: members get the extraction time, not the archive's (2024–2025) dates, so no
     // cleanup tool mistakes a freshly installed model for a stale file.
-    await run(tar, ['-xmf', archive, '-C', x, ...stored.map((s) => s.stored)])
+    try {
+      await run(tar, ['-xmf', archive, '-C', x, ...stored.map((s) => s.stored)])
+    } finally {
+      extracting = false
+      clearInterval(poll)
+    }
     for (const { m } of stored) {
       const to = join(stage, m.path)
       await mkdir(dirname(to), { recursive: true })
