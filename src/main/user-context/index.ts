@@ -169,7 +169,7 @@ export async function profileMarkdown(ctx: MainContext): Promise<{ markdown: str
   const projects = entries.filter((e) => e.kind === 'project')
   if (projects.length) {
     const rows = projects.map((e) => `| ${cell(e.name)} | ${cell(e.body)} | ${cell(e.role ?? '')} |`)
-    parts.push(`## Projects\n\n| Project | Summary | Your part |\n| --- | --- | --- |\n${rows.join('\n')}`)
+    parts.push(`## Projects\n\n| Project | Summary | Your role |\n| --- | --- | --- |\n${rows.join('\n')}`)
   }
   const terms = entries.filter((e) => e.kind === 'term')
   if (terms.length) {

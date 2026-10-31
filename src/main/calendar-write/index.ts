@@ -210,7 +210,7 @@ const DRAFT_SCHEMA = {
     },
     colorId: { type: 'string', enum: ['default', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11'], description: 'Google event color 1–11; default is the calendar’s color. Not available on Microsoft calendars.' },
     visibility: { type: 'string', enum: ['default', 'public', 'private'], description: 'Who can see the event: the calendar’s setting, anyone who can see the calendar, or only the user and the guests.' },
-    notifyGuests: { type: 'boolean', description: 'Edits only. By default (true), guests receive an update. Set false for a silent change only when the user explicitly asks for one (Google; Outlook always sends the update).' },
+    notifyGuests: { type: 'boolean', description: 'Edits only. Leave it out and every guest hears about the change. A quiet edit (false) is for a user who says not to tell anyone (Google; Outlook always tells guests).' },
     autoDeclineMode: {
       type: 'string',
       enum: ['declineNone', 'declineOnlyNewConflictingInvitations', 'declineAllConflictingInvitations'],
@@ -466,7 +466,7 @@ export function registerCalendarWrite(ctx: MainContext): void {
               'Drafts a new calendar event, or a change to an existing one, for the user to review: title, one to three proposed times, guests (required or optional), meeting rooms, video link, location, description, repeat rule, color and visibility. ' +
               'For a repeating event, a change can cover one occurrence, the whole series, or this occurrence and the later ones. ' +
               'Book a room through rooms, by its calendar address; the free-text location never books one. ' +
-              'By default, guests receive an update about a change. Set notifyGuests to false for a silent change only when the user explicitly asks for one. ' +
+              'Guests hear about every change unless the user says not to tell them; only then pass notifyGuests: false. ' +
               'Auto-decline can be changed only on the user’s Google focus-time and out-of-office events. ' +
               'Nothing is written until the user confirms it on the card this shows, so draft it as soon as the request is clear.',
             inputSchema: DRAFT_SCHEMA as unknown as ChatToolSpec['def']['inputSchema']

@@ -58,7 +58,7 @@ export const SHORTCUT_COPY = {
   usedBy: (label: string) => `${label} uses this shortcut. Pick another one.`,
   chord: 'Use two to four keys with at least one of Ctrl, Alt, Shift or the Windows key, plus at most one other key.',
   chordMac: 'Use two to four keys with at least one of ⌃, ⌥, ⇧ or ⌘, plus at most one other key.',
-  inList: 'That shortcut is already in this list.',
+  inList: 'You added this one already.',
   listFull: 'You can add up to 3 shortcuts. Remove one to add another.',
   doubleTapMac: 'Double tap isn’t available on macOS yet.',
   doubleTapHold: 'A double tap can only start hands-free dictation.',
