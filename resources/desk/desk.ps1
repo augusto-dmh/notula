@@ -289,6 +289,42 @@ public static class NotulaDuck {
     return list;
   }
 
+  // Processes with an active input session: audio routers and virtual mixers (they take one
+  // app's sound in and play it out again) and call apps. Lowering a router too would stack
+  // the dip on every hop of the chain, and a call should stay as loud as the user set it.
+  static HashSet<uint> Capturing() {
+    var pids = new HashSet<uint>();
+    var en = (INotulaMMDeviceEnumerator)(new NotulaMMDeviceEnumerator());
+    INotulaMMDeviceCollection devs;
+    if (en.EnumAudioEndpoints(1, 1, out devs) != 0) return pids;
+    uint n;
+    if (devs.GetCount(out n) != 0) return pids;
+    var iid = typeof(INotulaSessionManager2).GUID;
+    for (uint i = 0; i < n; i++) {
+      try {
+        INotulaMMDevice dev;
+        if (devs.Item(i, out dev) != 0) continue;
+        object o;
+        if (dev.Activate(ref iid, 23, IntPtr.Zero, out o) != 0) continue;
+        INotulaSessionEnumerator se;
+        if (((INotulaSessionManager2)o).GetSessionEnumerator(out se) != 0) continue;
+        int c;
+        if (se.GetCount(out c) != 0) continue;
+        for (int k = 0; k < c; k++) {
+          object so;
+          if (se.GetSession(k, out so) != 0) continue;
+          var ctl = so as INotulaSessionControl2;
+          if (ctl == null) continue;
+          int state;
+          if (ctl.GetState(out state) != 0 || state != 1) continue;
+          uint pid;
+          if (ctl.GetProcessId(out pid) == 0 && pid != 0) pids.Add(pid);
+        }
+      } catch { /* one device failing leaves the others */ }
+    }
+    return pids;
+  }
+
   // Steps every live entry toward Set (down) or Saved (up), never above Saved. A level that
   // moved since Notula's last step is the user's: that session is let go and never raised.
   static void Fade(List<NotulaDuckEntry> list, bool up, int ms) {
@@ -339,10 +375,12 @@ public static class NotulaDuck {
     NotulaDuckEntry[] got = null;
     Run(delegate () {
       var procs = Snapshot();
+      var capturing = Capturing();
       var mine = new List<NotulaDuckEntry>();
       foreach (var f in Sessions(true)) {
         if (root > 0 && Under(procs, f.Pid, (uint)root)) continue;
         if (only > 0 && !Under(procs, f.Pid, (uint)only)) continue;
+        if (capturing.Contains(f.Pid)) continue;
         string inst = f.Instance;
         if (held.Exists(delegate (NotulaDuckEntry h) { return h.Instance == inst; })) continue;
         float lv;
