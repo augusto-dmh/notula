@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Speaker-name suggestions: the LLM step of speaker profiles.
 //
-// - Gate: `speakerNames.suggestions`. With it off, no model call is made.
+// - Gate: `speakerNames.suggestions`. With it off, no model call is made. Never stored, it stays
+//   off until the speaker notice has been seen.
 // - With a pass, the step runs inside the post-meeting job (`suggestForJob`, below): no
 //   `awaitSpeakerLabels`, 60 s, and a timeout abstains. Its accepted mappings are evidence for
 //   `decide`; the job writes the rows.

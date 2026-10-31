@@ -6,7 +6,7 @@
 // - The texts come from `@shared/lib/speaker-notices`; `<contact>` is never filled here.
 // - The provider sentence is added while names from the conversation would reach a cloud LLM:
 //   `speakerNames.suggestions` on, local-only mode not blocking it, and a provider that isn't a
-//   local model on a loopback host.
+//   local model on a loopback host. The voices sentence is added while `speakers.voices` is on.
 // - The chat line is only ever added on the user's tap; the message stays theirs to edit.
 // - Locked: refused by the IPC guard like every `speakers:*` invoke.
 
@@ -66,7 +66,10 @@ const MEETING_APPS = process.platform === 'win32'
 
 async function noticeProvider(ctx: MainContext): Promise<string | null> {
   const s = await ctx.settings.getAll()
-  if (!s['speakerNames.suggestions']) return null
+  // Never chosen, the step is off only until the notice is seen, and the notice card copies
+  // this text before that: say what will happen.
+  const chosen = (await ctx.storage.getSettingsRaw())['speakerNames.suggestions']
+  if (!(chosen ?? true)) return null
   // Local-only mode skips the step with a cloud provider: nothing reaches it.
   if (await egressBlocked(ctx, { kind: 'llm' })) return null
   return cloudProviderName(s)
@@ -100,7 +103,8 @@ export function registerSpeakerNotice(ctx: MainContext): void {
     'speakers:participant-notice' satisfies InvokeChannel,
     async (_e, req: InvokeReq<'speakers:participant-notice'>): Promise<InvokeRes<'speakers:participant-notice'>> => {
       const lang = language(req)
-      return { text: participantNotice(lang, await noticeProvider(ctx), MEETING_APPS) }
+      const voices = await ctx.settings.get('speakers.voices')
+      return { text: participantNotice(lang, await noticeProvider(ctx), MEETING_APPS, voices) }
     }
   )
   ipcMain.handle(

@@ -147,7 +147,10 @@ export interface Settings {
   'attribution.meet': boolean
   /** The Meet reader's class names; null = DEFAULT_MEET_SELECTORS. */
   'attribution.meetSelectors': MeetSelectors | null
-  /** AI speaker-name suggestions ("Suggest names from the conversation"). */
+  /**
+   * AI speaker-name suggestions ("Suggest names from the conversation"). Never stored, it reads as
+   * `speakers.noticeSeen` (main's settings merge): the step waits for the notice.
+   */
   'speakerNames.suggestions': boolean
   // Speaker profiles (Settings ▸ Speaker tags). Saved choices are kept: only a key never stored takes a new default.
   /** Master over the meeting-app readers (with each app's own switch). Windows only. */

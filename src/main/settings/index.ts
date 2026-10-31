@@ -53,7 +53,12 @@ export function applyRendererPatch(settings: SettingsApi, patch: unknown): Promi
 }
 
 function merged(raw: Partial<Settings>): Settings {
-  return { ...structuredClone(DEFAULT_SETTINGS), ...structuredClone(raw) }
+  const out = { ...structuredClone(DEFAULT_SETTINGS), ...structuredClone(raw) }
+  // Naming from the conversation sends the transcript to the AI provider. Never chosen, it waits
+  // for the speaker notice that explains it, so an update doesn't start the transfer unread. A
+  // stored choice (from Labs, or the Settings switch) always wins.
+  if (raw['speakerNames.suggestions'] === undefined) out['speakerNames.suggestions'] = out['speakers.noticeSeen']
+  return out
 }
 
 export function createSettings(storage: StorageApi, bus: MainBus): SettingsApi {

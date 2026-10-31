@@ -175,12 +175,24 @@ The texts other people read live in `src/shared/lib/speaker-notices.ts`, so the 
 | Text | Version | Where |
 |---|---|---|
 | The voice agreement message, English and Portuguese | `voice-agreement-1` | Copy message on the agreement sheet; stored in the agreement record |
-| The participant notice, English and Portuguese, with the AI-provider sentence when names from the conversation use a cloud provider | `participants-1` | The notice card and Settings ▸ Speaker tags |
+| The participant notice, English and Portuguese, with the voices sentence while Recognize voices is on, and the AI-provider sentence when names from the conversation use a cloud provider | `participants-1` | The notice card and Settings ▸ Speaker tags |
 | The meeting-notice sentence, English and Portuguese | — | Add to meeting notice |
 
 The interface strings of speaker profiles (the notice card, Settings ▸ Speaker tags, the agreement sheet, the person page, the dialogs and toasts) are in `src/renderer/src/features/speaker-profiles/strings.ts`.
 
-## 13. Checklist before you ship a string
+## 13. Drafts for owner review
+
+These strings say what voice data Notula keeps. They are drafts until the owner signs them off, so edit them here and in the code together.
+
+| Text | Where |
+|---|---|
+| “With Recognize voices on, Notula compares everyone’s voices in a meeting on this computer and keeps them up to 14 days to suggest names. It remembers a voice only when that person agrees.” | The notice card, last sentences (`voice-disclosure-strings.ts`) |
+| “Notula compares everyone’s voices in a meeting on this computer and keeps them up to 14 days to suggest names. It remembers a voice only when that person agrees.” | Settings ▸ Speaker tags ▸ Recognize voices (`voice-disclosure-strings.ts`) |
+| “It also compares the voices of everyone in the meeting, on my computer, and keeps them for up to 14 days to suggest names. It keeps a voice longer only if that person agrees.” and its Portuguese | The participant notice while Recognize voices is on (`speaker-notices.ts`). `participants-1` has not shipped, so it keeps its id. |
+| “It also keeps any voices Notula remembers, where Forget voice can’t reach them.” | The recovery screen, under Export a copy (`StorageGate.tsx`) |
+| “The moved files keep any voices Notula remembers, where Forget voice can’t reach them. Delete that folder when you no longer need it.” | The recovery screen’s Start fresh dialog (`StorageGate.tsx`) |
+
+## 14. Checklist before you ship a string
 
 1. Is it in sentence case, in the user's terms, and within its budget?
 2. Does it use the glossary terms?

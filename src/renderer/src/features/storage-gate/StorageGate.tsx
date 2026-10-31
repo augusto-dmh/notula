@@ -103,6 +103,15 @@ function PathText({ path }: { path: string }): JSX.Element {
   )
 }
 
+/**
+ * The moved and exported files are raw copies of a database that won't open, so they keep the
+ * voices it holds. Draft, for owner review (`style/COPY.md`, section 13).
+ */
+const VOICES_IN_EXPORT = 'It also keeps any voices Notula remembers, where Forget voice can’t reach them.'
+const VOICES_IN_RECOVERED =
+  'The moved files keep any voices Notula remembers, where Forget voice can’t reach them. ' +
+  'Delete that folder when you no longer need it.'
+
 const ACTION_LABEL: Record<RecoveryAction, string> = {
   retry: 'Try again',
   'export-copy': 'Export a copy…',
@@ -317,7 +326,7 @@ function RecoveryScreen({
         {actions.includes('export-copy') ? (
           <p className="storage-gate__note">
             An exported copy stays encrypted. It includes the key files, so it opens only on this computer, signed in as
-            the same user.
+            the same user. {VOICES_IN_EXPORT}
           </p>
         ) : null}
         {error ? (
@@ -341,6 +350,7 @@ function RecoveryScreen({
             Notula will move the current database files into a “recovered” folder inside its data folder and create a
             new, empty database. Nothing is deleted, but notes in the moved files won’t appear in Notula.
           </p>
+          <p>{VOICES_IN_RECOVERED}</p>
           <div className="storage-gate__actions">
             <button type="submit" value="cancel" className="storage-gate__button" autoFocus>
               Cancel

@@ -4,12 +4,14 @@
 // The texts other people read (the agreement message, the participant notice, the chat
 // sentence) are in `@shared/lib/speaker-notices`.
 
+import { VOICES_KEPT_NOTICE, VOICES_KEPT_SETTINGS } from './voice-disclosure-strings'
+
 // ---------- the notice card ----------
 
 export const noticeTitle = (): string => 'Notula now puts names on speakers'
 /** `meetingApps` is false on macOS, where no meeting-app reader runs. */
 export const noticeBody = (meetingApps: boolean): string =>
-  `After a meeting, Notula names who spoke from ${meetingApps ? 'the names your meeting app shows and what people say' : 'what people say'}. Voices are separated on this computer. To name from the conversation, Notula sends your AI provider the transcript, the guests’ names and the names of up to 10 other people from your notes. Notula remembers a voice only if you turn that on and the person agrees.`
+  `After a meeting, Notula names who spoke from ${meetingApps ? 'the names your meeting app shows and what people say' : 'what people say'}. Voices are separated on this computer. To name from the conversation, Notula sends your AI provider the transcript, the guests’ names and the names of up to 10 other people from your notes. ${VOICES_KEPT_NOTICE}`
 export const noticeDownloadModels = (mb: number): string => `Download models (${mb} MB)`
 export const noticeDownloadModel = (mb: number): string => `Download the model (${mb} MB)`
 export const noticeModelsReady = (): string => 'The speaker models are on this computer.'
@@ -32,8 +34,7 @@ export const settingsRecordMyVoice = (): string => 'Record my voice'
 export const settingsForgetMyVoice = (): string => 'Forget my voice'
 export const settingsKeepImproving = (): string => 'Keep improving from my online meetings'
 export const settingsRecognizeVoices = (): string => 'Recognize voices'
-export const settingsRecognizeVoicesDetail = (): string =>
-  'Remember the voices of people who agree, and name them in later meetings. Stays on this computer.'
+export const settingsRecognizeVoicesDetail = (): string => VOICES_KEPT_SETTINGS
 export const settingsRetentionLine = (): string => 'Notula forgets a voice that’s not recognized in a meeting for 12 months.'
 export const settingsForgetAllVoices = (): string => 'Forget all voices'
 export const settingsPeopleWithVoice = (): string => 'People with a remembered voice'

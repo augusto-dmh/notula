@@ -8,6 +8,10 @@
 // set of database files opens only together with that file, on this computer and
 // under the same user account. Every export and recovered set therefore gets
 // a copy of `Local State` and a README.txt that says so and how to restore.
+//
+// Both sets stay raw byte copies, voices included: these actions exist because the database
+// can't be opened, so the voice-free copy of backups and exports (which needs an open, keyed
+// connection) can't run here, and a restore needs the files as they were. The README says so.
 
 import { createHash } from 'node:crypto'
 import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -64,6 +68,9 @@ function writeReadme(dir: string, how: string, files: string[], fingerprint: str
     'and notula.key into the "data" folder inside Notula\'s data folder, replacing what is there. On',
     'Windows, if Notula\'s data folder was reset or reinstalled since, also copy "Local State" into',
     'Notula\'s data folder (the folder that contains "data"), replacing that file.',
+    '',
+    'These files also hold any voices Notula remembered: voice samples, and the voices of recent meetings.',
+    'Forget voice in Notula doesn\'t reach them. Delete this folder when you no longer need it.',
     '',
     'The "attachments" folder (when present) holds note images and chat or folder files, each one',
     'encrypted with its own key, which only this database can unlock. Copy it into Notula\'s data folder',

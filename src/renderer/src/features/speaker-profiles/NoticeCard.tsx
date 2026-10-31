@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // The one-time notice card at the top of Home: shown while
 // `speakers.noticeSeen` is false; Got it or its close button sets it, and it never returns.
-// It's a card in the page, not a modal: the layers run whether or not it's read.
+// It's a card in the page, not a modal: the layers run whether or not it's read, except naming
+// from the conversation, which waits for it unless the user chose that switch (main's settings merge).
 
 import { useEffect, useRef, useState, type JSX, type ReactNode } from 'react'
 import type { SpeakerNoticeLanguage } from '@shared/types/speakers'

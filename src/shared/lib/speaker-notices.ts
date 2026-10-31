@@ -39,6 +39,16 @@ const PARTICIPANTS_NO_APPS: Record<SpeakerNoticeLanguage, string> = {
   pt: 'Uso o Notula no meu computador para transcrever e anotar nossas reuniões. Ele indica quem falou o quê a partir do que é dito na conversa. Se preferir que não, é só me dizer, a qualquer momento: <contato>.'
 }
 
+/**
+ * Added while Recognize voices is on: the job compares every speaker's voice and keeps the
+ * unconfirmed ones up to 14 days (`clusterVectorDays`). Draft, for owner review
+ * (`style/COPY.md`, section 13).
+ */
+const VOICES_SENTENCE: Record<SpeakerNoticeLanguage, string> = {
+  en: 'It also compares the voices of everyone in the meeting, on my computer, and keeps them for up to 14 days to suggest names. It keeps a voice longer only if that person agrees.',
+  pt: 'Ele também compara as vozes de todos na reunião, no meu computador, e as guarda por até 14 dias para sugerir nomes. Só guarda a voz de alguém por mais tempo se essa pessoa concordar.'
+}
+
 /** Added when names from the conversation go to a cloud AI provider. */
 const PROVIDER_SENTENCE: Record<SpeakerNoticeLanguage, string> = {
   en: 'An AI service (<provider>) receives the transcript to help with the names.',
@@ -65,13 +75,16 @@ export function voiceAgreementMessage(language: SpeakerNoticeLanguage, names: { 
 /**
  * The participant notice. `provider` is the cloud provider's display name when names from the
  * conversation are on with a cloud provider, else null. `meetingApps` is false where the
- * meeting-app readers can't run (macOS), so the notice doesn't claim them. The contact
- * placeholder stays for the user to fill.
+ * meeting-app readers can't run (macOS), so the notice doesn't claim them. `voices`: Recognize
+ * voices is on. The contact placeholder stays for the user to fill.
  */
-export function participantNotice(language: SpeakerNoticeLanguage, provider: string | null, meetingApps = true): string {
+export function participantNotice(language: SpeakerNoticeLanguage, provider: string | null, meetingApps = true, voices = false): string {
   const base = (meetingApps ? PARTICIPANTS : PARTICIPANTS_NO_APPS)[language]
-  if (!provider) return base
+  const added = [
+    ...(voices ? [VOICES_SENTENCE[language]] : []),
+    ...(provider ? [PROVIDER_SENTENCE[language].replace('<provider>', provider)] : [])
+  ]
+  if (!added.length) return base
   const cut = base.lastIndexOf(CONTACT_SENTENCE_START[language])
-  const sentence = PROVIDER_SENTENCE[language].replace('<provider>', provider)
-  return `${base.slice(0, cut)} ${sentence}${base.slice(cut)}`
+  return `${base.slice(0, cut)} ${added.join(' ')}${base.slice(cut)}`
 }
