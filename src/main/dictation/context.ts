@@ -12,8 +12,8 @@
 //   names, camelCase and snake_case identifiers) count double; mid-sentence capitalised
 //   phrases of 3–50 characters count too, except UI and common words, weekdays and months.
 //   The app's own name is excluded.
-// - The context block stays under 2,400 characters. It is untrusted text: the formatter
-//   uses it only as a spelling reference.
+// - The context block stays under 1,500 characters, the text nearest the caret first. It is
+//   untrusted text: the formatter uses it only as a spelling reference.
 
 import { DICTATION_LIMITS as L, DICTATION_TERM_LIMITS, type DictationTerm } from '@shared/types/dictation'
 import type { DeskContext } from './desk'
@@ -151,26 +151,44 @@ export function termsUsedIn(text: string, terms: readonly DictationTerm[]): stri
     .map((x) => x.id)
 }
 
-const line = (label: string, v: string | null | undefined): string | null => (v ? `${label}: ${v.replace(/\s+/g, ' ').slice(0, 240)}` : null)
+const line = (label: string, v: string | null | undefined): string | null => (v ? `${label}: ${v.replace(/\s+/g, ' ').slice(0, 120)}` : null)
 
-/** The context block under the 2,400-character budget, or '' when there is nothing. */
+/** Room for a line's label ("Text before the cursor: "). */
+const LABEL_CHARS = 30
+
+/** Runs of spaces as one, blank lines dropped: a long thread's layout costs the model time and says nothing. */
+const squeeze = (s: string): string => s.replace(/[ \t]+/g, ' ').replace(/\s*\n\s*/g, '\n')
+
+/**
+ * The context block under the 1,500-character budget, or '' when there is nothing. The text
+ * nearest the caret goes first: a long page (a mail thread) would otherwise push the model
+ * past its budget.
+ */
 export function buildContextBlock(ctx: DeskContext | null, target: Target, screen: string[]): string {
   if (!ctx || ctx.result !== 'captured') return ''
-  const parts: string[] = []
-  let left = L.contextChars
-  const take = (s: string | null): void => {
-    if (!s || left <= 0) return
-    const piece = s.slice(0, left)
-    parts.push(piece)
-    left -= piece.length + 1
-  }
-  take(line('App', target.app))
-  take(line('Window', ctx.title))
-  take(line('Site', target.site))
-  take(line('Field', ctx.field?.name))
-  if (ctx.selection) take(`Selected text: ${ctx.selection.slice(0, 2_000)}`)
-  if (ctx.before) take(`Text before the cursor: ${ctx.before.slice(-Math.min(800, Math.max(0, left - 40)))}`)
-  if (ctx.after) take(`Text after the cursor: ${ctx.after.slice(0, Math.min(400, Math.max(0, left - 40)))}`)
-  if (screen.length) take(`Visible entities: ${screen.join(', ').slice(0, 320)}`)
-  return parts.join('\n')
+  const head = [line('App', target.app), line('Window', ctx.title), line('Site', target.site), line('Field', ctx.field?.name)].filter(
+    (x): x is string => !!x
+  )
+  let left = L.contextChars - head.reduce((n, h) => n + h.length + 1, 0)
+  const selection = ctx.selection ? squeeze(ctx.selection).slice(0, Math.max(0, Math.min(400, Math.floor(left / 3)))) : ''
+  left -= selection ? selection.length + LABEL_CHARS : 0
+  const beforeAll = squeeze(ctx.before)
+  const afterAll = squeeze(ctx.after)
+  // Two thirds before the caret, the rest after; either side gives what it doesn't use to the other.
+  const room = Math.max(0, left - (beforeAll ? LABEL_CHARS : 0) - (afterAll ? LABEL_CHARS : 0))
+  let afterRoom = Math.min(afterAll.length, Math.floor(room / 3))
+  const beforeRoom = Math.min(beforeAll.length, room - afterRoom)
+  afterRoom = Math.min(afterAll.length, room - beforeRoom)
+  const before = beforeRoom > 0 ? beforeAll.slice(-beforeRoom) : ''
+  const after = afterRoom > 0 ? afterAll.slice(0, afterRoom) : ''
+  left -= (before ? before.length + LABEL_CHARS : 0) + (after ? after.length + LABEL_CHARS : 0)
+  const entities = screen.length && left > 60 ? screen.join(', ').slice(0, Math.min(200, left - LABEL_CHARS)) : ''
+  const parts = [
+    ...head,
+    selection ? `Selected text: ${selection}` : null,
+    before ? `Text before the cursor: ${before}` : null,
+    after ? `Text after the cursor: ${after}` : null,
+    entities ? `Visible entities: ${entities}` : null
+  ].filter((x): x is string => !!x)
+  return parts.join('\n').slice(0, L.contextChars)
 }

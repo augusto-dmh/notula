@@ -1086,6 +1086,7 @@ export interface SendChannels {
       | 'undo-learned'
       | 'change-shortcut'
       | 'keep-going'
+      | 'open-ai-settings'
     hovered?: boolean
   }
   'dictation:chat-cancel': { sessionId: string }

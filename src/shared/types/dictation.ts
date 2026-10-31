@@ -5,7 +5,7 @@
 
 import type { IsoTime } from './common'
 import type { HookStatus } from './dictation-bar'
-import type { AsrProviderId } from './transcript'
+import type { AsrProviderId, LocalAsrModelId } from './transcript'
 
 export type DictationTone = 'formal' | 'casual' | 'relaxed' | 'excited'
 /** Where the text is going, from the foreground app (./targets.ts in main). */
@@ -56,6 +56,8 @@ export type DictationCard =
   | { kind: 'mic-lid' }
   | { kind: 'learned'; words: string[] }
   | { kind: 'in-history' }
+  /** On a paste whose formatting failed (once per cause per app session): a link to Settings ▸ AI. */
+  | { kind: 'unformatted' }
 
 /** A short sound the pill plays (`dictation.sounds`). */
 export type DictationSound = 'start' | 'lock' | 'finish' | 'notice'
@@ -170,8 +172,10 @@ export interface DictationStatus {
   accessibility: 'granted' | 'missing' | 'not-needed'
   /** The shortcut row another app may also answer (the neutral conflict note), or null. */
   conflict: DictationConflictNote['id'] | null
-  /** The local model only knows English, so voice typing listens for English. */
+  /** The installed local model can't hear the chosen languages, so voice typing listens for English. */
   englishOnly: boolean
+  /** The on-device model voice typing uses; null with a cloud engine. */
+  localModel: LocalAsrModelId | null
   /** `app.getPreferredSystemLanguages()` as base codes, suggested first in the language picker. */
   systemLanguages: string[]
 }
@@ -203,7 +207,7 @@ export const DICTATION_LIMITS = {
   keytermsMax: 100,
   screenKeytermsMax: 40,
   keytermMaxChars: 50,
-  contextChars: 2_400,
+  contextChars: 1_500,
   minSpeechMs: 300,
   restoreClipboardMs: 750,
   modifiersWaitMs: 1_000,

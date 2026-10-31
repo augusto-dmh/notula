@@ -46,7 +46,15 @@
 //   the pure ./chord-machine.ts), and Start or stop recording on `shortcuts.recordToggle`. A session
 //   starts the mic at once and buffers audio until the recognizer exists (a hold is short);
 //   with the hook available, Esc comes from the hook instead of a global Escape registration.
-//   The Ctrl+Shift+Space toggle stays registered as the fallback.
+//   The Ctrl+Shift+Space toggle stays registered as the fallback. A toggle the user picked joins
+//   the hands-free list, so the page has one list of start-and-stop shortcuts; removing it from
+//   the list resets the toggle.
+// - The on-device engine: the model that covers the chosen languages (none or several: a
+//   multilingual one); only when none is installed does voice typing listen for English with the
+//   English model. With it as the engine, the recognizer loads 20 s after launch (2 s after a
+//   change) and stays loaded (transcription/speech.ts).
+// - Formatting that fails pastes the raw text; the pill's "Pasted without formatting" hint shows
+//   once per cause per app session, never for code or a terminal.
 
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs'
@@ -72,9 +80,20 @@ import {
   type DictationTerm,
   type DictationTermResult
 } from '@shared/types/dictation'
-import { DICTATION_BAR_LIMITS, hookEntryLabel, parseChord, shortcutLabel, type DictationBarAction } from '@shared/types/dictation-bar'
+import {
+  DICTATION_BAR_LIMITS,
+  derivedHandsFree,
+  hookEntryLabel,
+  parseChord,
+  sameHookEntry,
+  shortcutLabel,
+  toHookEntry,
+  type DictationBarAction,
+  type HookEntry
+} from '@shared/types/dictation-bar'
 import type { Settings } from '@shared/types/settings'
-import type { AsrProviderId } from '@shared/types/transcript'
+import { defaultShortcut } from '@shared/types/shortcuts'
+import { localModelCovers, type AsrProviderId, type LocalAsrModelId } from '@shared/types/transcript'
 import type { MainContext } from '../context'
 import { FramedWriter, randomKey, readFramed } from '../crypto/blobs'
 import { openSettingsSection, showMainWindow } from '../lifecycle'
@@ -87,7 +106,7 @@ import { setDictationBusy } from './activity'
 import { Desk, type DeskContext } from './desk'
 import type { ChordEffect } from './chord-machine'
 import { DictationBar } from './dictation-bar'
-import { formatDictation, midSentence, toneFor } from './format'
+import { forgetRejectedProvider, formatDictation, midSentence, toneFor, type FormatFailure } from './format'
 import { HookShortcuts } from './hook'
 import { candidates, judge } from './learn'
 import { PasteWatcher } from './observe'
@@ -100,6 +119,9 @@ const DAY_MS = 86_400_000
 const PEOPLE_TTL_MS = 600_000
 /** The formatter's dictionary: the best-ranked live terms. */
 const FORMAT_TERMS = 60
+/** The on-device recognizer loads once launch work has settled; sooner after a settings change. */
+const WARM_START_MS = 20_000
+const WARM_CHANGE_MS = 2_000
 
 type Trigger = DictationConflictNote['id'] | null
 
@@ -212,6 +234,9 @@ export function registerDictation(ctx: MainContext): void {
   /** The terms the last learned card offers to undo. */
   let learned: DictationTerm[] = []
   let people: { at: number; names: string[] } | null = null
+  /** The causes the "pasted without formatting" hint has shown for, this app session. */
+  const hinted = new Set<FormatFailure>()
+  let warmTimer: ReturnType<typeof setTimeout> | null = null
   const sessionStartedAt = new Date().toISOString()
   const audioDir = join(ctx.userDataPath, 'dictation-audio')
   const muteMarker = join(ctx.userDataPath, 'dictation-muted')
@@ -290,13 +315,15 @@ export function registerDictation(ctx: MainContext): void {
     const persistent = state.kind === 'error' && (state.reason === 'mic_denied' || state.reason === 'mic_missing')
     const noticeMs = state.card?.kind === 'learned' ? L.learnedCardMs : state.card?.kind === 'conflict' ? 15_000 : AUTO_DISMISS_MS
     const ms =
-      state.kind === 'empty' || state.kind === 'copied' || state.kind === 'pasted'
-        ? L.copiedMs
-        : state.kind === 'saved' || state.kind === 'error'
-          ? AUTO_DISMISS_MS
-          : state.kind === 'notice'
-            ? noticeMs
-            : 0
+      state.kind === 'pasted' && state.card?.kind === 'unformatted'
+        ? AUTO_DISMISS_MS
+        : state.kind === 'empty' || state.kind === 'copied' || state.kind === 'pasted'
+          ? L.copiedMs
+          : state.kind === 'saved' || state.kind === 'error'
+            ? AUTO_DISMISS_MS
+            : state.kind === 'notice'
+              ? noticeMs
+              : 0
     if (ms && !persistent) armDismiss(ms)
   }
 
@@ -422,8 +449,33 @@ export function registerDictation(ctx: MainContext): void {
     const choice = s('dictation.asr', 'auto')
     return choice === 'auto' ? s('asr.provider', 'deepgram') : choice
   }
-  const englishOnly = (): boolean => chosenProvider() === 'local'
+  /** The language the user's choice asks for, before any on-device fallback. */
+  const wantedLanguage = (): string => dictationLanguage(s('dictation.languages', []), false)
+  /** The installed on-device model voice typing uses, or null with a cloud engine (as ctx.speech chooses). */
+  const localModel = (): LocalAsrModelId | null => {
+    const fit = ctx.speech.localModelFor(wantedLanguage())
+    if (s('dictation.asr', 'auto') === 'auto' && fit) return fit
+    if (chosenProvider() !== 'local') return null
+    return fit ?? ctx.speech.localModelFor('en')
+  }
+  /** Only the English model is installed for the chosen languages. */
+  const englishOnly = (): boolean => {
+    const model = localModel()
+    return !!model && !localModelCovers(model, wantedLanguage())
+  }
   const language = (): string => dictationLanguage(s('dictation.languages', []), englishOnly())
+
+  /** With an on-device engine, the recognizer loads in the background and stays loaded. */
+  const warmSoon = (ms: number): void => {
+    if (warmTimer) clearTimeout(warmTimer)
+    warmTimer = setTimeout(() => {
+      warmTimer = null
+      if (!armed) return
+      if (localModel()) ctx.speech.setLocalWarm(true, language())
+      else ctx.speech.setLocalWarm(false)
+    }, ms)
+    warmTimer.unref()
+  }
 
   const retention = (): DictationLocalRetention => s('dictation.localRetention', 'keep')
 
@@ -596,7 +648,7 @@ export function registerDictation(ctx: MainContext): void {
       sess.writer?.append(pcm)
     }
     if (recognizer.provider !== 'local' && !net.isOnline()) return fail(sess, 'offline')
-    ctx.speech.setLocalWarm(true)
+    if (recognizer.provider === 'local') ctx.speech.setLocalWarm(true, lang)
     const cold = recognizer.provider === 'local' ? L.coldLocalReadyMs : L.readyMs
     const timeout = new Promise<never>((_, reject) => setTimeout(() => reject(new RecognizerError('connection_timeout', 'not ready')), cold + 500))
     try {
@@ -677,6 +729,7 @@ export function registerDictation(ctx: MainContext): void {
     sess.writer = null
     const status = d.outcome
     const delivered = d.outcome !== 'delivery_failed' && !!formatted.text
+    const hint = d.outcome === 'pasted' && unformattedHint(formatted.failure, where.destination)
     const keepText = retention() !== 'never'
     try {
       await ctx.storage.updateDictationAttempt(sess.id, {
@@ -702,15 +755,24 @@ export function registerDictation(ctx: MainContext): void {
       destination: where.destination,
       singleLine: where.singleLine,
       tone,
-      chars: formatted.text.length
+      chars: formatted.text.length,
+      failure: formatted.failure,
+      hinted: hint
     })
     endSession()
     historyChanged()
     if (d.outcome === 'pasted') {
-      setState({ kind: 'pasted' })
+      setState({ kind: 'pasted', card: hint ? { kind: 'unformatted' } : null })
       observePaste(sess, formatted.text, field)
     } else if (d.outcome === 'clipboard') setState({ kind: 'copied', reason: d.reason as DictationDeliveryFailure })
     else setState({ kind: 'error', reason: 'clipboard_failed', card: keepText ? { kind: 'in-history' } : null }, 'notice')
+  }
+
+  /** The hint after a paste that formatting failed for: once per cause per app session; code and terminals expect raw text. */
+  const unformattedHint = (failure: FormatFailure | null, destination: string): boolean => {
+    if (!failure || destination === 'code' || destination === 'terminal' || hinted.has(failure)) return false
+    hinted.add(failure)
+    return true
   }
 
   const cancel = async (why: string): Promise<void> => {
@@ -1035,6 +1097,7 @@ export function registerDictation(ctx: MainContext): void {
       void desk.start().then(() => clearStaleMute())
       configureHook()
       bar.setArmed(true)
+      warmSoon(app.isReady() && settingsSeen ? WARM_CHANGE_MS : WARM_START_MS)
       log('info', 'dictation:armed')
     } else {
       void cancel('disarmed')
@@ -1052,6 +1115,8 @@ export function registerDictation(ctx: MainContext): void {
       setTimeout(() => {
         if (!armed) desk.stop()
       }, 500).unref()
+      if (warmTimer) clearTimeout(warmTimer)
+      warmTimer = null
       ctx.speech.setLocalWarm(false)
       log('info', 'dictation:disarmed')
     }
@@ -1116,8 +1181,62 @@ export function registerDictation(ctx: MainContext): void {
     }, 300_000).unref()
   }
 
+  // ---------- the toggle in the hands-free list ----------
+
+  /** The toggle's accelerator as a hook chord ("CommandOrControl+Alt+D" → "Ctrl+Alt+D"), or null. */
+  const toggleChord = (accelerator: string | null): string | null => {
+    if (!accelerator) return null
+    const mac = process.platform === 'darwin'
+    const text = accelerator
+      .split('+')
+      .map((k) => {
+        const t = k.trim().toLowerCase()
+        if (t === 'commandorcontrol' || t === 'cmdorctrl') return mac ? 'Cmd' : 'Ctrl'
+        if (t === 'meta' || t === 'super' || t === 'command' || t === 'cmd') return mac ? 'Cmd' : 'Win'
+        return k.trim()
+      })
+      .join('+')
+    return parseChord(text, process.platform) ? text : null
+  }
+
+  /** The hands-free list as it applies with these settings (its own entries, or the derived ones). */
+  const handsFreeOf = (all: Settings): HookEntry[] => {
+    const own = all['shortcuts.dictationHandsFree']
+    if (own?.length) return own.map(toHookEntry)
+    return derivedHandsFree(all['shortcuts.dictationHold'] ?? [defaultShortcut('dictationHold', process.platform)], process.platform)
+  }
+
+  /**
+   * One list of start-and-stop shortcuts: a toggle the user picked joins the hands-free list
+   * (the registered toggle keeps answering it too); taking it out of the list resets the toggle.
+   */
+  const foldToggle = (prev: Settings | null, keys: readonly string[] | null): void => {
+    const all = settings
+    if (!all) return
+    const chord = toggleChord(all['dictation.shortcut'])
+    if (!chord) return
+    const entry: HookEntry = { keys: chord, doubleTap: false }
+    const list = handsFreeOf(all)
+    const listed = list.some((e) => sameHookEntry(e, entry, process.platform))
+    if (prev && keys?.includes('shortcuts.dictationHandsFree') && !listed) {
+      if (!handsFreeOf(prev).some((e) => sameHookEntry(e, entry, process.platform))) return
+      log('info', 'dictation:toggle-removed')
+      void ctx.settings.set('dictation.shortcut', null)
+      return
+    }
+    if (listed || (prev && !keys?.includes('dictation.shortcut'))) return
+    const hold = all['shortcuts.dictationHold'] ?? [defaultShortcut('dictationHold', process.platform)]
+    if (list.length >= L.maxShortcutEntries || hold.some((h) => sameHookEntry({ keys: h, doubleTap: false }, entry, process.platform))) {
+      return log('info', 'dictation:toggle-fold-skipped', { reason: list.length >= L.maxShortcutEntries ? 'full' : 'hold' })
+    }
+    const next = [...list, entry].map((e) => (e.doubleTap ? { keys: e.keys, doubleTap: true as const } : e.keys))
+    log('info', 'dictation:toggle-folded', { entries: next.length })
+    void ctx.settings.set('shortcuts.dictationHandsFree', next)
+  }
+
   // ---------- settings ----------
 
+  let settingsSeen = false
   void app.whenReady().then(async () => {
     try {
       settings = await ctx.settings.getAll()
@@ -1126,6 +1245,8 @@ export function registerDictation(ctx: MainContext): void {
       log('warn', 'dictation:read-failed', { err: err instanceof Error ? err.message : String(err) })
     }
     evaluate()
+    settingsSeen = true
+    foldToggle(null, null)
     try {
       if ((await ctx.storage.status()).state === 'ready') startSweeps()
     } catch {
@@ -1140,6 +1261,12 @@ export function registerDictation(ctx: MainContext): void {
     settings = e.settings
     bar.setSettings(e.settings)
     if (e.keys.some((k) => k === 'voiceTyping.enabled' || k === 'dictation.enabled')) evaluate()
+    // A new key or model may work now.
+    if (e.keys.some((k) => k.startsWith('llm.'))) forgetRejectedProvider()
+    if (armed && e.keys.some((k) => k === 'dictation.asr' || k === 'dictation.languages' || k === 'asr.provider' || k.startsWith('asr.local.'))) {
+      warmSoon(WARM_CHANGE_MS)
+    }
+    if (e.keys.some((k) => k === 'dictation.shortcut' || k === 'shortcuts.dictationHandsFree')) foldToggle(prev, e.keys)
     if (e.keys.some((k) => k === 'shortcuts.dictationHold' || k === 'shortcuts.dictationHandsFree')) configureHook()
     if (e.keys.includes('shortcuts.recordToggle') && armed && !suspended) {
       const next = effectiveOf('recordToggle')
@@ -1192,6 +1319,7 @@ export function registerDictation(ctx: MainContext): void {
       accessibility: process.platform === 'darwin' ? (systemPreferences.isTrustedAccessibilityClient(false) ? 'granted' : 'missing') : 'not-needed',
       conflict: conflictNow(),
       englishOnly: englishOnly(),
+      localModel: localModel(),
       systemLanguages: [...new Set(app.getPreferredSystemLanguages().map((l) => l.split('-')[0]!.toLowerCase()))]
     }
     return status
@@ -1322,6 +1450,10 @@ export function registerDictation(ctx: MainContext): void {
       }
       case 'keep-going':
         if (state.kind === 'notice') setState({ kind: 'idle' })
+        return
+      case 'open-ai-settings':
+        if (state.kind === 'pasted') setState({ kind: 'idle' })
+        openSettingsSection('ai', 'dictation-pill')
         return
       case 'undo-learned': {
         const undo = learned

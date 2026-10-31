@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Dictation formatting: LLM purpose `dictation-format`
-// on the user's provider, temperature 0, 10 s. A timeout, an error, an empty or a truncated
-// reply falls back to the raw transcript; so does having no LLM set up.
+// on the user's provider, temperature 0, 10 s (15 s with screen context). A timeout, an error,
+// an empty or a truncated reply falls back to the raw transcript, with the cause for the pill's
+// hint; so does having no LLM set up, without a cause.
+//
+// A provider that refuses the call outright (the key or the model: 401, 403, 404) is not asked
+// again for 5 minutes, or until the settings change, so a broken setup pastes at once.
 //
 // The prompt is the rules, then the inputs (tone, destination, field, languages, the caret
 // position, the dictionary and screen text as untrusted references) and the transcript in a
@@ -19,6 +23,7 @@ import {
   type DictationTone
 } from '@shared/types/dictation'
 import type { MainContext } from '../context'
+import { EnhanceError } from '../enhance/errors'
 import { currentProvider } from '../llm/registry'
 import { MAX_TOKENS } from '../llm/types'
 import { log } from '../log'
@@ -77,6 +82,33 @@ const SINGLE_LINE =
 const ADDRESS_FIELD =
   'Field: an email address line. Join a spelled-out address into one lower-case address ("john at example dot com" → john@example.com), several addresses separated by "; ".'
 const SUBJECT_FIELD = 'Field: an email subject. Write it as a subject line; join a spelled-out address into one lower-case address.'
+
+/** The budget with screen context: the longer prompt takes the model longer. */
+const CONTEXT_TIMEOUT_MS = 15_000
+const REJECTED_MS = 5 * 60_000
+
+/** Why a dictation went out unformatted: the key or the model, a timeout, the network, or the reply. */
+export type FormatFailure = 'setup' | 'timeout' | 'network' | 'reply'
+
+/** The provider and model that last refused the call outright. */
+let rejected: { key: string; at: number } | null = null
+
+/** A settings change may have fixed the key or the model. */
+export function forgetRejectedProvider(): void {
+  rejected = null
+}
+
+function failureOf(err: unknown): FormatFailure {
+  if (err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError')) return 'timeout'
+  if (err instanceof EnhanceError) {
+    if (err.code === 'missing-key' || err.code === 'no-model') return 'setup'
+    if (err.code === 'timeout') return 'timeout'
+    if (/could not reach/i.test(err.message)) return 'network'
+    // Some servers answer an unknown model with a 400.
+    if (/\(400\).*model/i.test(err.message)) return 'setup'
+  }
+  return 'reply'
+}
 
 const escape = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
@@ -144,18 +176,34 @@ export interface FormatInput {
   dictionary: readonly string[]
 }
 
+export interface FormatResult {
+  text: string
+  path: 'llm' | 'raw'
+  /** Set when formatting was tried and failed; null when it worked or no AI is set up. */
+  failure: FormatFailure | null
+}
+
 /** The formatted text, or the raw transcript (`path: 'raw'`). */
-export async function formatDictation(ctx: MainContext, input: FormatInput): Promise<{ text: string; path: 'llm' | 'raw' }> {
+export async function formatDictation(ctx: MainContext, input: FormatInput): Promise<FormatResult> {
   const raw = input.raw.trim()
-  if (!raw) return { text: '', path: 'raw' }
-  const finish = (text: string, path: 'llm' | 'raw'): { text: string; path: 'llm' | 'raw' } => ({
+  if (!raw) return { text: '', path: 'raw', failure: null }
+  const finish = (text: string, path: 'llm' | 'raw', failure: FormatFailure | null = null): FormatResult => ({
     text: dropFinalStop(path === 'raw' && input.emailField === 'address' ? joinSpokenAddress(text) : text, input.tone, input.singleLine),
-    path
+    path,
+    failure
   })
+  const budget = input.contextBlock ? CONTEXT_TIMEOUT_MS : DICTATION_LIMITS.formatTimeoutMs
+  const t0 = Date.now()
+  let key = ''
   try {
     const provider = await currentProvider(ctx.settings, ctx.secrets)
     const avail = await provider.available()
     if (!avail.ok) return finish(raw, 'raw')
+    key = `${provider.id}:${provider.model}`
+    if (rejected?.key === key && Date.now() - rejected.at < REJECTED_MS) {
+      log('info', 'dictation-cleanup-failed', { reason: 'rejected-before', failure: 'setup' })
+      return finish(raw, 'raw', 'setup')
+    }
     const field = input.emailField === 'address' ? ADDRESS_FIELD : input.emailField === 'subject' ? SUBJECT_FIELD : input.singleLine ? SINGLE_LINE : null
     const languages = input.languages.length ? input.languages.join(', ') : input.detected && input.detected !== 'auto' ? input.detected : null
     const tokensExact = input.destination === 'code' || input.destination === 'terminal'
@@ -169,28 +217,51 @@ export async function formatDictation(ctx: MainContext, input: FormatInput): Pro
       input.contextBlock ? `<screen_context>\n${escape(input.contextBlock)}\n</screen_context>` : null,
       `<transcript>\n${escape(raw)}\n</transcript>`
     ].filter(Boolean)
-    const signal = AbortSignal.timeout(DICTATION_LIMITS.formatTimeoutMs)
-    let text = ''
-    let stop: string | null = null
-    for await (const ev of provider.stream(
-      { purpose: 'dictation-format', system: SYSTEM, user: parts.join('\n\n'), maxTokens: MAX_TOKENS['dictation-format'], temperature: 0 },
-      signal
-    )) {
-      if (ev.type === 'text') text += ev.delta
-      else stop = ev.reason
+    const ac = new AbortController()
+    // The budget holds even if a provider ignores the abort: the race pastes the raw text.
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const expired = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        const e = new Error('The formatting budget ran out.')
+        e.name = 'TimeoutError'
+        ac.abort(e)
+        reject(e)
+      }, budget)
+    })
+    expired.catch(() => undefined)
+    const read = async (): Promise<{ text: string; stop: string | null }> => {
+      let text = ''
+      let stop: string | null = null
+      for await (const ev of provider.stream(
+        { purpose: 'dictation-format', system: SYSTEM, user: parts.join('\n\n'), maxTokens: MAX_TOKENS['dictation-format'], temperature: 0 },
+        ac.signal
+      )) {
+        if (ev.type === 'text') text += ev.delta
+        else stop = ev.reason
+      }
+      return { text, stop }
     }
+    let reply: { text: string; stop: string | null }
+    try {
+      reply = await Promise.race([read(), expired])
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+    const { text, stop } = reply
     let out = text.trim().replace(/^<transcript>\s*|\s*<\/transcript>$/g, '')
     if (input.singleLine) out = out.replace(/\s*\n+\s*/g, ' ')
     if (stop !== 'end' || !out) {
-      log('info', 'dictation-cleanup-failed', { reason: stop ?? 'empty' })
-      return finish(raw, 'raw')
+      log('info', 'dictation-cleanup-failed', { reason: stop ?? 'empty', failure: 'reply', ms: Date.now() - t0 })
+      return finish(raw, 'raw', 'reply')
     }
     return finish(out, 'llm')
   } catch (err) {
+    const failure = failureOf(err)
+    if (failure === 'setup' && key) rejected = { key, at: Date.now() }
     // The code says why (key, quota, timeout, model) without logging any dictated text.
     const code = err instanceof Error && 'code' in err && typeof err.code === 'string' ? err.code : null
     const detail = err instanceof Error ? err.message.slice(0, 160) : null
-    log('info', 'dictation-cleanup-failed', { reason: err instanceof Error ? err.name : 'error', code, detail })
-    return finish(raw, 'raw')
+    log('info', 'dictation-cleanup-failed', { reason: err instanceof Error ? err.name : 'error', code, detail, failure, ms: Date.now() - t0, budgetMs: budget })
+    return finish(raw, 'raw', failure)
   }
 }

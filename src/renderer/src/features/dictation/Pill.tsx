@@ -9,6 +9,7 @@
 // - saved: the retry card (Retry, Open history, Dismiss), which fits the 320 × 180 window;
 // - cards (`state.card`): the neutral conflict card (Change shortcut, Keep going), learned words
 //   (Undo), check-your-mic while recording is silent, and "the text is in your history";
+// - pasted without formatting (formatting failed): one line with a link to Settings ▸ AI;
 // - sounds (`state.sound`, only sent while `dictation.sounds` is on): start, lock, finish, notice.
 // Hovering makes the window clickable (`dictation:pill-action` `hover`); a click finishes a recording,
 // opens the microphone settings on `mic_denied`, or starts a hands-free dictation.
@@ -51,7 +52,7 @@ const ERRORS: Record<string, string> = {
 
 /** A card button: the action goes to main, never to the pill's own click. */
 const pillAction =
-  (action: 'retry' | 'open-history' | 'dismiss' | 'undo-learned' | 'change-shortcut' | 'keep-going') =>
+  (action: 'retry' | 'open-history' | 'dismiss' | 'undo-learned' | 'change-shortcut' | 'keep-going' | 'open-ai-settings') =>
   (e: { stopPropagation(): void }): void => {
     e.stopPropagation()
     window.notula.dictation.pillAction({ action })
@@ -115,6 +116,18 @@ function Card({ card }: { card: DictationCard }): JSX.Element {
       return <span className="dict-pill__hint">Your laptop lid may be closed. Open it or pick another microphone.</span>
     case 'mic-silent':
       return <span className="dict-pill__hint">Notula can’t hear you. Check your microphone.</span>
+    case 'unformatted':
+      return (
+        <span className="dict-pill__text" role="status">
+          <strong>Pasted without formatting</strong>
+          <span className="dict-pill__sub" aria-hidden="true">
+            ·
+          </span>
+          <button type="button" className="dict-pill__link" onClick={pillAction('open-ai-settings')}>
+            AI settings
+          </button>
+        </span>
+      )
   }
 }
 
@@ -262,11 +275,14 @@ export function DictationPill(): JSX.Element {
       )
       break
     case 'pasted':
-      body = (
-        <span className="dict-pill__text" role="status">
-          <strong>Pasted</strong>
-        </span>
-      )
+      body =
+        state.card?.kind === 'unformatted' ? (
+          <Card card={state.card} />
+        ) : (
+          <span className="dict-pill__text" role="status">
+            <strong>Pasted</strong>
+          </span>
+        )
       break
     case 'saved':
       body = (
@@ -305,7 +321,8 @@ export function DictationPill(): JSX.Element {
       body = null
   }
 
-  const cardShown = !!state.card && state.kind !== 'recording'
+  // The unformatted hint is one line, not a card.
+  const cardShown = !!state.card && state.kind !== 'recording' && state.card.kind !== 'unformatted'
 
   if (bar?.enabled) {
     return (
