@@ -25,12 +25,14 @@ export const GEMINI_PRESET = {
  * (preview, exp, lite, image, tts, live and the like) is a pre-release or a
  * special-purpose model. Versions compare numerically (3.10 is newer than 3.9), and
  * at one version the bare id, which tracks the stable build, wins over a pinned one.
+ * `variant: 'flash-lite'` looks for the lighter `gemini-<version>-flash-lite` the same way.
  */
-export function newestFlashModel(ids: readonly string[]): string | null {
+export function newestFlashModel(ids: readonly string[], variant: 'flash' | 'flash-lite' = 'flash'): string | null {
+  const pattern = variant === 'flash' ? /^gemini-(\d+(?:\.\d+)*)-flash(?:-(\d+))?$/ : /^gemini-(\d+(?:\.\d+)*)-flash-lite(?:-(\d+))?$/
   let best: { id: string; version: number[]; pin: number } | null = null
   for (const raw of ids) {
     const id = raw.replace(/^models\//, '')
-    const m = /^gemini-(\d+(?:\.\d+)*)-flash(?:-(\d+))?$/.exec(id)
+    const m = pattern.exec(id)
     if (!m) continue
     const version = (m[1] ?? '').split('.').map(Number)
     // No pin sorts above every pinned build.

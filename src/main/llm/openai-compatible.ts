@@ -17,7 +17,7 @@
 // is sent when a purpose sets it; a 2xx `text/html` answer is an intercepting network
 // (intercept.ts).
 
-import { GEMINI_PRESET, parseRetiredModel, type LlmProviderId } from '@shared/types/enhance'
+import { GEMINI_PRESET, newestFlashModel, parseRetiredModel, type LlmProviderId } from '@shared/types/enhance'
 import { enhanceError, EnhanceError } from '../enhance/errors'
 import { log } from '../log'
 import { checkIntercepted, LlmInterceptedError } from './intercept'
@@ -127,6 +127,16 @@ function isGemini(baseUrl: string): boolean {
  * seconds, which outlasts voice typing's 10 s budget; these ask for `minimal`.
  */
 const QUICK_PURPOSES: ReadonlySet<LlmPurpose> = new Set<LlmPurpose>(['dictation-format', 'dictation-learn', 'off-record-check'])
+
+/**
+ * The quick tasks also run on the key's newest Flash-Lite, Gemini's lightest model, while
+ * notes and chat keep the chosen one. Looked up from the model list once an hour per base URL;
+ * null when the key lists none or the lite model failed (then the chosen model is used).
+ */
+const QUICK_MODEL_TTL_MS = 60 * 60_000
+const quickModels = new Map<string, { model: string | null; at: number }>()
+/** `baseUrl|model` pairs that refused `minimal`; they get `low`. */
+const minimalRejected = new Set<string>()
 
 /**
  * Drops a leading `<think>…</think>` block, which many local reasoning models write
@@ -276,13 +286,32 @@ export function createOpenAiCompatibleProvider(opts: Options): LlmProvider {
     })
   }
 
-  // A model that rejects `minimal` gets `low` from then on (see post).
-  let minimalOk = true
-  const minimalFor = (req: LlmRequest): boolean => minimalOk && QUICK_PURPOSES.has(req.purpose) && isGemini(baseUrl)
+  // A model that rejects `minimal` gets `low` from then on, across providers built later (see post).
+  const used = (req: LlmRequest): string => req.model?.trim() || model
+  const minimalFor = (req: LlmRequest): boolean =>
+    QUICK_PURPOSES.has(req.purpose) && isGemini(baseUrl) && !minimalRejected.has(`${baseUrl}|${used(req)}`)
 
-  async function post(req: LlmRequest, stream: boolean, signal: AbortSignal): Promise<Response> {
+  /** A quick task on Gemini runs on the newest Flash-Lite, when the key lists one. */
+  async function quickModel(req: LlmRequest, signal: AbortSignal): Promise<LlmRequest> {
+    if (req.model?.trim() || !QUICK_PURPOSES.has(req.purpose) || !isGemini(baseUrl)) return req
+    const hit = quickModels.get(baseUrl)
+    let lite = hit && Date.now() - hit.at < QUICK_MODEL_TTL_MS ? hit.model : undefined
+    if (lite === undefined) {
+      try {
+        lite = newestFlashModel(await listModels(AbortSignal.any([signal, AbortSignal.timeout(3_000)])), 'flash-lite')
+      } catch {
+        lite = null
+      }
+      quickModels.set(baseUrl, { model: lite, at: Date.now() })
+      log('info', 'llm:quick-model', { provider: opts.id, model: lite })
+    }
+    return lite ? { ...req, model: lite } : req
+  }
+
+  async function post(given: LlmRequest, stream: boolean, signal: AbortSignal): Promise<Response> {
     if (!baseUrl) throw enhanceError('no-model', 'No base URL is set for this provider.')
-    if (!model && !req.model?.trim()) throw enhanceError('no-model', 'No model is selected for this provider.')
+    if (!model && !given.model?.trim()) throw enhanceError('no-model', 'No model is selected for this provider.')
+    const req = await quickModel(given, signal)
     let res: Response
     try {
       res = await fetch(`${baseUrl}/chat/completions`, {
@@ -297,13 +326,19 @@ export function createOpenAiCompatibleProvider(opts: Options): LlmProvider {
     if (!res.ok && res.status === 400 && minimalFor(req)) {
       const text = await res.text().catch(() => '')
       if (/reasoning|thinking/i.test(text)) {
-        minimalOk = false
-        log('info', 'llm:minimal-effort-unsupported', { provider: opts.id })
-        return post(req, stream, signal)
+        minimalRejected.add(`${baseUrl}|${used(req)}`)
+        log('info', 'llm:minimal-effort-unsupported', { provider: opts.id, model: used(req) })
+        return post(given, stream, signal)
       }
-      throw await errorFromResponse(opts.id, new Response(text, { status: res.status }), req.model?.trim() || model)
+      res = new Response(text, { status: res.status })
     }
-    if (!res.ok) throw await errorFromResponse(opts.id, res, req.model?.trim() || model)
+    // The lite model failed outright (retired, or not open to this key): the chosen model takes over.
+    if (!res.ok && req !== given && (res.status === 400 || res.status === 403 || res.status === 404)) {
+      quickModels.set(baseUrl, { model: null, at: Date.now() })
+      log('info', 'llm:quick-model-failed', { provider: opts.id, model: used(req), status: res.status })
+      return post(given, stream, signal)
+    }
+    if (!res.ok) throw await errorFromResponse(opts.id, res, used(req))
     try {
       checkIntercepted(res, `${baseUrl}/chat/completions`)
     } catch (err) {
