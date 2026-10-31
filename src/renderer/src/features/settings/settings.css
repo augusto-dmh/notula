@@ -415,9 +415,66 @@
   flex: none;
 }
 
-.model-picker__spinner {
-  width: 14px;
-  height: 14px;
+/* "Now using …": shown at once, faded out by the time AiSection removes it (2 s). */
+.model-picker__confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  color: var(--success);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+  animation: model-picker-confirm 2s var(--ease) forwards;
+}
+
+@keyframes model-picker-confirm {
+  0%,
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.model-picker__retired {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--warning-soft);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+.model-picker__retired p {
+  margin: 0;
+}
+
+.model-picker__retired-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--fg);
+}
+
+.model-picker__retired-title svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--warning);
+}
+
+.model-picker__retired-reason {
+  color: var(--fg-2);
+  overflow-wrap: anywhere;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .model-picker__confirm {
+    animation: none;
+  }
 }
 
 /* ---------- personal jargon ---------- */

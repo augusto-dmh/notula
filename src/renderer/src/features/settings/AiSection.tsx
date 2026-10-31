@@ -15,12 +15,20 @@
 
 import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type JSX } from 'react'
 import { parseError } from '@shared/errors'
-import { GEMINI_PRESET, isGeminiBaseUrl, OPENAI_DEFAULT_BASE_URL, type CloudLlmProviderId, type LlmProviderId } from '@shared/types/enhance'
+import {
+  GEMINI_PRESET,
+  isGeminiBaseUrl,
+  newestFlashModel,
+  OPENAI_DEFAULT_BASE_URL,
+  type CloudLlmProviderId,
+  type LlmProviderId,
+  type RetiredModel
+} from '@shared/types/enhance'
 import type { AssemblyAiRegion, Settings, SettingsPatch } from '@shared/types/settings'
 import type { CloudAsrProviderId } from '@shared/types/transcript'
 import { LocalAsrSettings } from '../transcript'
 import { Group, Row, Segmented, Select, StatusLine, type Status } from './controls'
-import { IconLock, IconRefresh } from './icons'
+import { IconCheck, IconLock, IconWarning } from './icons'
 import { setPrefs } from './prefs-store'
 
 // ---------- helpers ----------
@@ -107,13 +115,16 @@ function KeyField({
   area,
   provider,
   providerName,
-  onKeyChanged
+  onKeyChanged,
+  onTested
 }: {
   area: KeyArea
   provider: string
   providerName: string
   /** After a save or a removal: what depends on the key (the model list) reloads. */
   onKeyChanged?(): void
+  /** After a Test, passed or failed. */
+  onTested?(): void
 }): JSX.Element {
   const api = keyApi(area)
   const inputId = useId()
@@ -201,6 +212,7 @@ function KeyField({
       setStatus({ kind: 'error', text: describeError(err) })
     } finally {
       setBusy(null)
+      onTested?.()
     }
   }
 
@@ -307,15 +319,67 @@ function PrefText({
 
 // ---------- model picker ----------
 
-/** The model for a Notes AI provider, from `llm:list-models`; typed by hand when the list is unavailable. */
-function ModelPicker({ provider, prefs, refreshKey }: { provider: LlmProviderId; prefs: Settings; refreshKey: string }): JSX.Element {
+/** How long "Now using …" stays after the model changes; the fade is in settings.css. */
+const MODEL_CONFIRM_MS = 2_000
+
+/**
+ * The model for a Notes AI provider, from `llm:list-models`; typed by hand when the list is
+ * unavailable. A change shows "Now using …" for a moment, and a model the provider has
+ * retired (`llm:retired-model`) gets a notice with a one-click switch.
+ */
+function ModelPicker({
+  provider,
+  providerName,
+  prefs,
+  refreshKey,
+  checkKey
+}: {
+  provider: LlmProviderId
+  providerName: string
+  prefs: Settings
+  refreshKey: string
+  /** Changes after a Test, when a failed call may have reported a retired model. */
+  checkKey: number
+}): JSX.Element {
   const id = useId()
   const settingKey = MODEL_KEY[provider]
   const value = prefs[settingKey]
   const [models, setModels] = useState<string[] | null>(null)
   const [status, setStatus] = useState<Status>(null)
   const [loading, setLoading] = useState(false)
+  const [confirmed, setConfirmed] = useState<string | null>(null)
+  const [retired, setRetired] = useState<RetiredModel | null>(null)
   const seq = useRef(0)
+  const shown = useRef({ provider, value })
+
+  // Any change of the model, by the user or by the pick after a key is saved, is confirmed.
+  useEffect(() => {
+    const prev = shown.current
+    shown.current = { provider, value }
+    if (prev.provider !== provider || !value) {
+      setConfirmed(null)
+      return
+    }
+    if (prev.value === value) return
+    setConfirmed(value)
+    const t = setTimeout(() => setConfirmed(null), MODEL_CONFIRM_MS)
+    return () => clearTimeout(t)
+  }, [provider, value])
+
+  useEffect(() => {
+    let live = true
+    window.notula.llm
+      .retiredModel({ provider })
+      .then((r) => {
+        if (live) setRetired(r)
+      })
+      .catch(() => {
+        if (live) setRetired(null)
+      })
+    return () => {
+      live = false
+    }
+  }, [provider, value, refreshKey, checkKey])
 
   const load = useCallback(() => {
     const mine = ++seq.current
@@ -344,9 +408,11 @@ function ModelPicker({ provider, prefs, refreshKey }: { provider: LlmProviderId;
 
   const set = (next: string): void => setPrefs({ [settingKey]: next } as SettingsPatch)
   const options = models && models.length ? (value && !models.includes(value) ? [value, ...models] : models) : null
+  // The provider's named replacement first; else the newest Flash it lists, if any.
+  const switchTo = retired ? (retired.replacement ?? newestFlashModel((models ?? []).filter((m) => m !== retired.model))) : null
 
   return (
-    <Row label="Model" htmlFor={id} stacked hint="Used for enhanced notes and titles.">
+    <Row label="Model" htmlFor={id} stacked hint="Used for notes, titles, chat and voice typing.">
       <div className="model-picker">
         <div className="model-picker__line">
           {options ? (
@@ -366,16 +432,39 @@ function ModelPicker({ provider, prefs, refreshKey }: { provider: LlmProviderId;
           )}
           <button
             type="button"
-            className="n-icon-btn n-icon-btn--sm model-picker__refresh"
-            aria-label="Refresh the model list"
-            title="Refresh the model list"
+            className="n-btn n-btn--sm n-btn--ghost model-picker__refresh"
+            title="Reload the models this provider offers"
             disabled={loading}
             onClick={load}
           >
-            {loading ? <span className="n-spinner model-picker__spinner" /> : <IconRefresh size={15} />}
+            {loading ? 'Refreshing…' : 'Refresh list'}
           </button>
+          {confirmed ? (
+            <span key={confirmed} className="model-picker__confirm" role="status">
+              <IconCheck size={14} />
+              Now using {confirmed}
+            </span>
+          ) : null}
         </div>
         <StatusLine status={status} />
+        {retired ? (
+          <div className="model-picker__retired" role="status">
+            <p className="model-picker__retired-title">
+              <IconWarning size={14} />
+              <span>
+                Couldn’t use {retired.model}. {providerName || 'The provider'} says it’s no longer available.
+              </span>
+            </p>
+            <p className="model-picker__retired-reason">{retired.reason}</p>
+            {switchTo ? (
+              <button type="button" className="n-btn n-btn--sm n-btn--primary" onClick={() => set(switchTo)}>
+                Use {switchTo}
+              </button>
+            ) : (
+              <p className="model-picker__retired-reason">{options ? 'Choose another model in the list.' : 'Enter another model name.'}</p>
+            )}
+          </div>
+        ) : null}
       </div>
     </Row>
   )
@@ -406,7 +495,7 @@ function ModelText({ id, value, onCommit }: { id: string; value: string; onCommi
 }
 
 /** Test for the local server, which has no key. */
-function LocalTest(): JSX.Element {
+function LocalTest({ onTested }: { onTested(): void }): JSX.Element {
   const [status, setStatus] = useState<Status>(null)
   const [busy, setBusy] = useState(false)
   async function test(): Promise<void> {
@@ -419,6 +508,7 @@ function LocalTest(): JSX.Element {
       setStatus({ kind: 'error', text: describeError(err) })
     } finally {
       setBusy(false)
+      onTested()
     }
   }
   return (
@@ -446,6 +536,9 @@ export function AiSection({ prefs, drafts }: { prefs: Settings; drafts?: KeyDraf
   if (llmProvider !== 'local') lastCloudLlm.current = llmProvider
   /** Bumped when a Notes AI key is saved or removed, so the model list reloads with it. */
   const [llmKeyVersion, setLlmKeyVersion] = useState(0)
+  /** Bumped after a Notes AI Test, so a retired model it ran into shows its notice. */
+  const [llmTestVersion, setLlmTestVersion] = useState(0)
+  const tested = (): void => setLlmTestVersion((v) => v + 1)
 
   const deepgramModels = DEEPGRAM_MODELS.includes(prefs['asr.deepgram.model'] as (typeof DEEPGRAM_MODELS)[number])
     ? DEEPGRAM_MODELS
@@ -517,8 +610,14 @@ export function AiSection({ prefs, drafts }: { prefs: Settings; drafts?: KeyDraf
               placeholder="http://127.0.0.1:11434/v1"
               onCommit={(v) => setPrefs({ 'llm.local.baseUrl': v })}
             />
-            <ModelPicker provider="local" prefs={prefs} refreshKey={prefs['llm.local.baseUrl']} />
-            <LocalTest />
+            <ModelPicker
+              provider="local"
+              providerName="The local server"
+              prefs={prefs}
+              refreshKey={prefs['llm.local.baseUrl']}
+              checkKey={llmTestVersion}
+            />
+            <LocalTest onTested={tested} />
           </>
         ) : (
           <>
@@ -550,11 +649,14 @@ export function AiSection({ prefs, drafts }: { prefs: Settings; drafts?: KeyDraf
               provider={llmProvider}
               providerName={llmName}
               onKeyChanged={() => setLlmKeyVersion((v) => v + 1)}
+              onTested={tested}
             />
             <ModelPicker
               provider={llmProvider}
+              providerName={llmName}
               prefs={prefs}
               refreshKey={`${llmProvider === 'openai' ? prefs['llm.openai.baseUrl'] : ''}#${llmKeyVersion}`}
+              checkKey={llmTestVersion}
             />
           </>
         )}
