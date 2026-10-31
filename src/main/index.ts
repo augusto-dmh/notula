@@ -268,7 +268,8 @@ function placeholderSpeech(): SpeechApi {
     openRecognizer: () => {
       throw new RecognizerError('transcription_start', 'speech not registered')
     },
-    setLocalWarm: () => undefined
+    setLocalWarm: () => undefined,
+    localModelFor: () => null
   }
 }
 

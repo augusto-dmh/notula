@@ -18,13 +18,16 @@
 //   fails it. A later segment's failure keeps the earlier text.
 // - Readiness: 6 s (30 s for a cold local worker); failures map to RecognizerError reasons.
 // - Local: one notula-asr worker per recognizer, or the warm one kept while `setLocalWarm(true)`
-//   (for the same model and language), unloaded after 10 min idle. Its own VAD segments the
-//   audio; finish drains it.
+//   (for the same model and language). The first recognizer opened while a warm one is wanted
+//   and none exists becomes the warm one, and a warm load never starts while a worker for the
+//   same model and language is loading, so one dictation never spawns two (`speech:warm-skipped`).
+//   After 15 min unused, the warm worker is freed only when memory is short (under 2 GB or
+//   15% free); otherwise it stays loaded. Its own VAD segments the audio; finish drains it.
 
 import { EventEmitter } from 'node:events'
+import { freemem, totalmem } from 'node:os'
 import { net } from 'electron'
 import { DEFAULT_SETTINGS, type Settings } from '@shared/types/settings'
-import { dictationLanguage } from '@shared/types/dictation'
 import { localLanguageCode, type AsrProviderId, type CloudAsrProviderId, type LocalAsrModelId } from '@shared/types/transcript'
 import type { LocalModelManager } from '../asr/models'
 import type { MainContext } from '../context'
@@ -45,7 +48,10 @@ const SILENCE_TAIL_SAMPLES = 4_800
 const SILENCE_MEAN_SQUARE = 1e-4
 const RETRY_MAX_WAIT_MS = 5_000
 const CLOSE_WAIT_MS = 5_000
-const WARM_IDLE_MS = 10 * 60_000
+const WARM_IDLE_MS = 15 * 60_000
+/** After the idle wait, how often memory is checked. */
+const WARM_CHECK_MS = 60_000
+const LOW_MEMORY_BYTES = 2 * 1024 ** 3
 const LOCAL_DRAIN_MS = 15_000
 /** s16le mono at 16 kHz. */
 const BYTES_PER_MS = 32
@@ -536,7 +542,10 @@ class SpeechService implements SpeechApi {
   private warmKey = ''
   private warmBusy = false
   private idleTimer: NodeJS.Timeout | null = null
-  private readonly coldKeys = new WeakMap<LocalConnection, string>()
+  /** The language the dictation asks for (`setLocalWarm`). */
+  private warmLang = 'en'
+  /** Workers not kept warm, while they live: `<model>:<base code>`. */
+  private readonly coldKeys = new Map<LocalConnection, string>()
 
   constructor(
     private readonly ctx: MainContext,
@@ -618,28 +627,37 @@ class SpeechService implements SpeechApi {
     return { url: `${devAsrEndpoint('assemblyai') ?? ASSEMBLYAI_URLS[region] ?? ASSEMBLYAI_URLS.edge}?${q.toString()}`, headers }
   }
 
+  /** The installed on-device model that would serve this language, or null. */
+  localModelFor(language: string): LocalAsrModelId | null {
+    const model = pickLocalModel(this.models, language, this.settings)
+    return model && this.models.isReady(model) ? model : null
+  }
+
   /** A local recognizer: the warm worker when it is free and the same model and language, else a cold one. */
   private local(model: LocalAsrModelId, language: string): SpeechRecognizer {
     if (this.idleTimer) clearTimeout(this.idleTimer)
     this.idleTimer = null
+    const key = warmKeyOf(model, language)
     let conn: LocalConnection
     let warm = false
-    if (this.warm && !this.warmBusy && this.warmKey === warmKeyOf(model, language)) {
+    if (this.warm && !this.warmBusy && this.warmKey === key) {
       conn = this.warm
       warm = conn.isReady()
       this.warmBusy = true
+    } else if (this.warmWanted && !this.warm) {
+      // Dictation wants a warm worker and none exists: this one is it, so no second load starts.
+      conn = new LocalConnection(this.models, 'microphone', [], model, language).start()
+      this.warm = conn
+      this.warmKey = key
+      this.warmBusy = true
+      log('info', 'speech:warm-loading', { model, language, why: 'open' })
     } else {
       conn = new LocalConnection(this.models, 'microphone', [], model, language).start()
       // A cold worker for another model or language may replace an idle warm one on release.
-      this.coldKeys.set(conn, warmKeyOf(model, language))
+      this.coldKeys.set(conn, key)
     }
     const code = localLanguageCode(language)
     return new LocalRecognizer(conn, warm, (c, healthy) => this.release(c, healthy), code === 'multi' ? null : code)
-  }
-
-  /** The language dictation would ask for now (as dictation/index.ts derives it). */
-  private warmLanguage(): string {
-    return dictationLanguage(this.settings['dictation.languages'], true)
   }
 
   private release(conn: LocalConnection, healthy: boolean): void {
@@ -666,30 +684,40 @@ class SpeechService implements SpeechApi {
     void conn.close(3_000)
   }
 
-  private armIdle(): void {
+  /** Unused for 15 min: the warm worker goes only when memory is short, checked every minute after that. */
+  private armIdle(ms = WARM_IDLE_MS): void {
     if (this.idleTimer) clearTimeout(this.idleTimer)
     this.idleTimer = setTimeout(() => {
       this.idleTimer = null
       if (!this.warm || this.warmBusy) return
-      log('info', 'speech:warm-unloaded', { reason: 'idle' })
+      const free = freemem()
+      if (this.warmWanted && free >= Math.max(LOW_MEMORY_BYTES, totalmem() * 0.15)) return this.armIdle(WARM_CHECK_MS)
+      log('info', 'speech:warm-unloaded', { reason: this.warmWanted ? 'memory' : 'idle', freeMb: Math.round(free / 1024 ** 2) })
       const c = this.warm
       this.warm = null
       void c.close(3_000)
-    }, WARM_IDLE_MS)
+    }, ms)
     this.idleTimer.unref()
   }
 
-  setLocalWarm(on: boolean): void {
+  setLocalWarm(on: boolean, language?: string): void {
     this.warmWanted = on
+    if (language) this.warmLang = language
     if (on) {
-      const language = this.warmLanguage()
-      const model = pickLocalModel(this.models, language, this.settings)
-      if (!this.warm && model && this.models.isReady(model)) {
-        this.warm = new LocalConnection(this.models, 'microphone', [], model, language).start()
-        this.warmKey = warmKeyOf(model, language)
-        log('info', 'speech:warm-loading', { model, language })
+      const lang = this.warmLang
+      const model = this.localModelFor(lang)
+      if (!this.warm && model) {
+        const key = warmKeyOf(model, lang)
+        // A worker for the same model and language is loading: it becomes the warm one on release.
+        if ([...this.coldKeys.values()].includes(key)) {
+          log('info', 'speech:warm-skipped', { reason: 'loading', model })
+        } else {
+          this.warm = new LocalConnection(this.models, 'microphone', [], model, lang).start()
+          this.warmKey = key
+          log('info', 'speech:warm-loading', { model, language: lang, why: 'warm' })
+        }
       }
-      this.armIdle()
+      if (!this.warmBusy) this.armIdle()
       return
     }
     if (this.idleTimer) clearTimeout(this.idleTimer)

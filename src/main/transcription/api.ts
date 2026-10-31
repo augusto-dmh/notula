@@ -7,7 +7,7 @@
 
 import type { AudioSource, IsoTime, SourceState } from '@shared/types/common'
 import type { TranscriptionLanguage } from '@shared/types/settings'
-import type { AsrProviderId, TranscriptChunk } from '@shared/types/transcript'
+import type { AsrProviderId, LocalAsrModelId, TranscriptChunk } from '@shared/types/transcript'
 
 export interface StartOptions {
   noteId: string
@@ -106,8 +106,10 @@ export interface SpeechRecognizer {
 export interface SpeechApi {
   /** `auto`: local when installed and covering the language, else `asr.provider`. */
   openRecognizer(opts: RecognizerOptions): SpeechRecognizer
-  /** Keeps one dictation notula-asr worker warm; it unloads after 10 min idle. */
-  setLocalWarm(on: boolean): void
+  /** Keeps one dictation notula-asr worker warm for `language` (the last one given); after 15 min unused it goes when memory is short. */
+  setLocalWarm(on: boolean, language?: string): void
+  /** The installed on-device model that would serve this language, or null. */
+  localModelFor(language: string): LocalAsrModelId | null
 }
 
 // ---------- simulated sessions for the demo ----------
