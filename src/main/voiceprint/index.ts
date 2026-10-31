@@ -322,7 +322,7 @@ export function registerVoiceprint(ctx: MainContext): void {
   ipcMain.handle(
     'voiceprint:record-sample' satisfies InvokeChannel,
     async (e, req: InvokeReq<'voiceprint:record-sample'>): Promise<InvokeRes<'voiceprint:record-sample'>> => {
-      const sessionId = typeof req?.sessionId === 'string' ? req.sessionId : ''
+      const sessionId = typeof req?.sessionId === 'string' && req.sessionId.length <= 200 ? req.sessionId : ''
       const durationMs = Math.round(Number(req?.durationMs))
       if (!sessionId || !Number.isFinite(durationMs) || durationMs < 5_000 || durationMs > MAX_SAMPLE_MS) {
         throw expected(notulaError('invalid-input', 'A sample of 5 to 60 seconds is required.'))

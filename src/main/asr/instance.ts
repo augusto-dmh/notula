@@ -4,8 +4,8 @@
 // before registerLocalAsr) or registerLocalAsr itself.
 
 import { basename, dirname, join } from 'node:path'
-import { net } from 'electron'
 import type { MainContext } from '../context'
+import { egressFetch } from '../net/egress'
 import { LocalModelManager } from './models'
 
 let models: LocalModelManager | null = null
@@ -14,7 +14,7 @@ export function getLocalModels(ctx: MainContext): LocalModelManager {
   if (!models) {
     models = new LocalModelManager({
       root: join(ctx.userDataPath, 'models'),
-      fetch: (url, init) => net.fetch(url, init),
+      fetch: (url, init) => egressFetch(ctx, { kind: 'model-download' }, url, init, 'local-models'),
       busyReason: (id) => {
         // Read at call time: capture is wired before this runs.
         if (ctx.capture.isCapturing()) return 'a meeting is being transcribed'

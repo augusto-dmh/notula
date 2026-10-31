@@ -34,7 +34,7 @@
 
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { builtinModules, createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
@@ -926,7 +926,20 @@ try {
   )
   const decDb = new Database(join(exportRoot, 'database', 'notula-decrypted.db'), { readonly: true, fileMustExist: true })
   const decT = tallies(decDb)
+  const provenance = (db) => ({
+    matches: db.prepare(`SELECT count(*) AS n FROM speaker_matches`).get().n,
+    pending: db.prepare(`SELECT count(*) AS n FROM speaker_pending`).get().n,
+    traces: db.prepare(`SELECT count(*) AS n FROM speaker_people WHERE skipped_samples > 0 OR last_matched_at IS NOT NULL`).get().n
+  })
+  const decP = provenance(decDb)
   decDb.close()
+  const liveP = raw(provenance)
+  check(
+    'the decrypted export also drops the match rows and requests, and clears skipped samples and last matched',
+    liveP.matches > 0 && decP.matches === 0 && decP.pending === 0 && decP.traces === 0,
+    { live: liveP, decrypted: decP }
+  )
+  check('no voice-free scratch copy is left in the tmp folder', !existsSync(join(dirname(dataDir), 'tmp')) || !readdirSync(join(dirname(dataDir), 'tmp')).some((n) => n.startsWith('voice-free-')))
   check(
     'the decrypted export drops the five tables (and the legacy one), and keeps the people',
     dec.files.includes('database/notula-decrypted.db') && decT.speaker_exemplars === 0 && decT.speaker_voice_spaces === 0 && decT.speaker_cluster_vectors === 0 && decT.voiceprints === 0 &&

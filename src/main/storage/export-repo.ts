@@ -17,12 +17,12 @@
 //   stamped body (`notes_md_stamped`), and a sibling `<name>.transcript.md`.
 // - `index.csv`: RFC 4180, UTF-8 with a BOM, CRLF, a `'` before a cell that starts with
 //   `= + - @`.
-// - `database/`: the encrypted copy is `VACUUM INTO` a partial file (it keeps the key) with the
-//   biometric tables cleared, plus the key file and `Local State`; the decrypted copy is
-//   `VACUUM INTO` a partial file, attached (it inherits the key), stripped of the voice and
-//   agreement tables, rekeyed to no key and checked (the SQLite3MultipleCiphers build has no
-//   `sqlcipher_export`). Speaker profiles: no copy carries a voice; agreement records travel
-//   only in the encrypted one.
+// - `database/`: the encrypted copy is a voice-free copy (it keeps the key; the voices are cleared
+//   in a scratch file under `<userData>/tmp` first, so no page of a vector reaches the export
+//   folder), plus the key file and `Local State`; the decrypted copy is that voice-free copy,
+//   attached (it inherits the key), stripped of the agreement and voice-provenance tables,
+//   rekeyed to no key and checked (the SQLite3MultipleCiphers build has no `sqlcipher_export`).
+//   Speaker profiles: no copy carries a voice; agreement records travel only in the encrypted one.
 // - Counts may be logged; titles and content never are.
 
 import {
@@ -38,6 +38,7 @@ import {
   statSync,
   writeFileSync
 } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import Database from 'better-sqlite3-multiple-ciphers'
 import { transcriptCopyText } from '@shared/lib/transcript-text'
@@ -522,8 +523,11 @@ export function writeExportReadme(s: StoreCtx, q2: { root: string; text: string 
  * centroids, the 14-day cluster vectors and the legacy self profile.
  */
 export const BIOMETRIC_TABLES = ['speaker_exemplars', 'speaker_voice_spaces', 'speaker_cluster_vectors', 'voiceprints'] as const
-/** Also left out of the decrypted copy: the plaintext copy has no use for them. */
-const PLAINTEXT_DROPPED = ['speaker_agreements', 'speaker_negatives'] as const
+/**
+ * Also left out of the decrypted copy: the plaintext copy has no use for them, and the match rows
+ * and requests would tell who has a remembered voice.
+ */
+const PLAINTEXT_DROPPED = ['speaker_agreements', 'speaker_negatives', 'speaker_matches', 'speaker_pending'] as const
 
 const sqlPath = (p: string): string => p.split("'").join("''")
 
@@ -536,23 +540,31 @@ function clearTables(db: Db, schema: string, tables: readonly string[]): void {
 }
 
 /**
- * An encrypted copy (same key) at `dest`, without voices: `VACUUM INTO`, then the biometric
- * tables emptied with `secure_delete` on and the copy vacuumed, so no free page keeps a vector.
- * The rollback journal stays in memory, so no page image of a vector lands in a `-journal` file
- * next to the copy (an export may go to removable media); a failed copy is discarded anyway.
- * Used by the encrypted export and the pre-migration backup. The live database is never touched.
- * A restored pre-migration backup has no voice either, the Labs one included, so Forget leaves no copy.
+ * An encrypted copy (same key) at `dest`, without voices. The voices are cleared in a scratch
+ * copy in `scratchDir` (beside the live database, not in the export folder, which may be
+ * removable or synced): `VACUUM INTO` it, the biometric tables emptied with `secure_delete` on
+ * and the journal in memory, then `VACUUM ... INTO` `dest` from it, so no page of a vector, free
+ * or not, ever reaches `dest`. The scratch file is removed either way.
+ * Used by the encrypted export, the decrypted one and the pre-migration backup. The live database
+ * is never touched. A restored pre-migration backup has no voice either, the Labs one included,
+ * so Forget leaves no copy.
  */
-export function writeCopyWithoutVoices(db: Db, dest: string): void {
-  db.exec(`VACUUM INTO '${sqlPath(dest)}'`)
-  db.exec(`ATTACH DATABASE '${sqlPath(dest)}' AS voice_free_copy`)
+export function writeCopyWithoutVoices(db: Db, dest: string, scratchDir: string): void {
+  mkdirSync(scratchDir, { recursive: true })
+  const scratch = join(scratchDir, `voice-free-${randomUUID()}.db`)
   try {
-    db.pragma('voice_free_copy.secure_delete = ON')
-    db.pragma('voice_free_copy.journal_mode = MEMORY')
-    clearTables(db, 'voice_free_copy', BIOMETRIC_TABLES)
-    db.exec('VACUUM voice_free_copy')
+    db.exec(`VACUUM INTO '${sqlPath(scratch)}'`)
+    db.exec(`ATTACH DATABASE '${sqlPath(scratch)}' AS voice_free_copy`)
+    try {
+      db.pragma('voice_free_copy.secure_delete = ON')
+      db.pragma('voice_free_copy.journal_mode = MEMORY')
+      clearTables(db, 'voice_free_copy', BIOMETRIC_TABLES)
+      db.exec(`VACUUM voice_free_copy INTO '${sqlPath(dest)}'`)
+    } finally {
+      db.exec('DETACH DATABASE voice_free_copy')
+    }
   } finally {
-    db.exec('DETACH DATABASE voice_free_copy')
+    removePartial(scratch)
   }
 }
 
@@ -626,7 +638,7 @@ export function writeDatabaseCopy(
     const partial = `${copy}.partial`
     if (existsSync(copy) || existsSync(partial)) throw invalid('a database copy already exists in this export')
     try {
-      writeCopyWithoutVoices(s.db, partial)
+      writeCopyWithoutVoices(s.db, partial, s.tmpDir)
       if (existsSync(copy)) throw new Error('a database copy appeared meanwhile')
       renameSync(partial, copy)
     } catch (err) {
@@ -654,16 +666,17 @@ export function writeDatabaseCopy(
   const sql = sqlPath
   let attached = false
   try {
-    // 1. An encrypted, consistent copy (the WAL included), written straight into the export.
-    s.db.exec(`VACUUM INTO '${sql(partial)}'`)
+    // 1. An encrypted, consistent copy (the WAL included) without voices.
+    writeCopyWithoutVoices(s.db, partial, s.tmpDir)
     // 2. Attached without a KEY clause it opens with this connection's key; rekeying it to
     //    an empty key decrypts that copy in place. The live database is never touched.
     s.db.exec(`ATTACH DATABASE '${sql(partial)}' AS export_copy`)
     attached = true
-    // Biometric data and agreement records never leave as plaintext. Deleted while the
+    // Agreement records and voice provenance never leave as plaintext. Deleted while the
     // copy is still encrypted, so no plaintext page image of them reaches the rollback journal.
     s.db.pragma('export_copy.secure_delete = ON')
     clearTables(s.db, 'export_copy', [...BIOMETRIC_TABLES, ...PLAINTEXT_DROPPED])
+    s.db.exec(`UPDATE export_copy.speaker_people SET skipped_samples = 0, last_matched_at = NULL`)
     s.db.pragma(`export_copy.rekey = ''`)
     s.db.pragma('export_copy.journal_mode = DELETE')
     s.db.exec('DETACH DATABASE export_copy')

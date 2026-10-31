@@ -135,10 +135,15 @@ export function secureWrite<T>(s: StoreCtx, fn: () => T): T {
   }
 }
 
-/** The WAL checkpoint (TRUNCATE) after a vector delete: no old page image stays in the WAL. */
+/**
+ * The WAL checkpoint (TRUNCATE) after a vector delete: no old page image stays in the WAL. A
+ * reader on another connection makes it busy (a result, not an error): logged, and the next
+ * voice write checkpoints again.
+ */
 export function checkpointVoice(s: StoreCtx): void {
   try {
-    s.db.pragma('wal_checkpoint(TRUNCATE)')
+    const [cp] = s.db.pragma('wal_checkpoint(TRUNCATE)') as { busy: number }[]
+    if (cp && cp.busy) s.log('warn', 'speakers:checkpoint-busy', {})
   } catch (err) {
     s.log('warn', 'speakers:checkpoint-failed', { err })
   }

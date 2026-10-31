@@ -171,7 +171,7 @@ export function registerSpeakerJob(ctx: MainContext): void {
     if (abandoned) manager.diarizer.cancel(noteId)
   })
   ipcMain.handle('speakers:job-state' satisfies InvokeChannel, (_e, req: InvokeReq<'speakers:job-state'>): SpeakerJobStatus => {
-    const noteId = typeof req?.noteId === 'string' ? req.noteId : ''
+    const noteId = typeof req?.noteId === 'string' && req.noteId.length <= 200 ? req.noteId : ''
     if (!noteId) throw notulaError('invalid-input', 'noteId is required.')
     return status(noteId)
   })
@@ -805,7 +805,7 @@ export type RerunResult =
  */
 export async function rerunDecision(noteId: string): Promise<RerunResult> {
   const ctx = jobCtx
-  if (!ctx || app.isPackaged || process.env['NOTULA_DEV_SPEAKER_BENCH'] !== '1') {
+  if (import.meta.env.MODE === 'release' || !ctx || app.isPackaged || process.env['NOTULA_DEV_SPEAKER_BENCH'] !== '1') {
     throw notulaError('invalid-input', 'rerunDecision is a dev-only bench hook.')
   }
   if (jobBusy(noteId) || capturing(ctx, noteId)) return { status: 'dropped', clusters: [] }

@@ -849,7 +849,7 @@ export class StorageEngine {
     const partial = `${dest}.partial`
     removeCopy(partial)
     try {
-      dataExport.writeCopyWithoutVoices(db, partial)
+      dataExport.writeCopyWithoutVoices(db, partial, trash.tmpDirFor(dataDir))
       const why = this.checkBackup(db, partial)
       if (why) throw new Error(`the backup check failed: ${why}`)
       renameSync(partial, dest)
