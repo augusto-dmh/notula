@@ -361,8 +361,11 @@ export function registerDictation(ctx: MainContext): void {
   const muteFor = (sess: Session): void => {
     if (!s('dictation.muteOtherAudio', true) || process.platform !== 'win32') return
     // A meeting being captured is never muted.
-    if (ctx.capture.isCapturing()) return
+    if (ctx.capture.isCapturing()) return void log('debug', 'dictation:mute', { skipped: 'capturing' })
+    const t0 = Date.now()
     void desk.mute().then((changed) => {
+      // false covers both "already muted" and a helper failure or timeout.
+      log('debug', 'dictation:mute', { changed, ms: Date.now() - t0 })
       if (!changed) return
       try {
         writeFileSync(muteMarker, sess.id)
