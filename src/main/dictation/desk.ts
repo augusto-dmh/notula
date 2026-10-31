@@ -57,8 +57,8 @@ export interface DuckResult {
   processes: string[]
 }
 
-/** About 20 % of each app's level, faded down over 150 ms and back up over 250 ms. */
-const DUCK = { factor: 0.2, downMs: 150, upMs: 250 }
+/** About 40 % of each app's level (still audible, out of the way), faded down over 150 ms and back up over 250 ms. */
+const DUCK = { factor: 0.4, downMs: 150, upMs: 250 }
 
 export function isDuckEntry(v: unknown): v is DuckEntry {
   const e = v as Partial<DuckEntry> | null

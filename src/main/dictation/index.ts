@@ -702,6 +702,8 @@ export function registerDictation(ctx: MainContext): void {
     setBlocker(false)
     // The pill keeps a 100 ms tail; give its last chunk time to arrive.
     await new Promise((r) => setTimeout(r, 250))
+    // The mic is done: other audio comes back now, not after transcribing and formatting.
+    restoreDuck(sess)
     // A short hold can end before the recognizer is ready: let the start sequence finish.
     await sess.setup
     if (session !== sess || sess.cancelled) return
@@ -755,7 +757,7 @@ export function registerDictation(ctx: MainContext): void {
         .map((t) => t.term)
     })
     if (session !== sess || sess.cancelled) return
-    // Other audio comes back up as Notula starts typing.
+    // Already back since the mic stopped; a no-op unless that step was skipped.
     restoreDuck(sess)
     const d = await deliver(desk, formatted.text, field, () => session === sess)
     if (sess.writer) await sess.writer.abort().catch(() => undefined)
