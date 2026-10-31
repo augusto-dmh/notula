@@ -34,6 +34,7 @@ import { log } from '../log'
 import { getCalibration } from '../speakers/calibration'
 import { pushSpeakerPeopleChanged } from '../speakers/people-ipc'
 import { requestRelabel } from '../speakers/relabel'
+import { voiceGeneration } from '../speakers/voice-gen'
 import { startVHarness, vHarness, vHarnessOn } from './harness'
 import { classify, dominant } from './math'
 import type { VoiceprintJob, VoiceprintToMain } from './protocol'
@@ -84,12 +85,38 @@ async function selfPerson(ctx: MainContext): Promise<{ id: string }> {
   return ctx.storage.ensureSelfPerson((await ctx.settings.get('profile.name')).trim() || null)
 }
 
-/** Adds one self mic exemplar; on `added`, the person page and the relabel follow. */
+/**
+ * Adds one self mic exemplar; on `added`, the person page and the relabel follow. The vector was
+ * computed under `voiceGen` and lives only in memory, so a Forget or Recognize my voice off since
+ * then drops it. A sample turns Recognize my voice on first (storage refuses a self exemplar while
+ * it is off); the passive rule needs both of its switches still on.
+ */
 async function addSelfExemplar(
   ctx: MainContext,
-  e: { modelId: string; vector: Float32Array; cleanMs: number; via: 'sample' | 'passive'; noteId: string | null; identityKey: string | null; farCosine: number | null }
+  e: {
+    modelId: string
+    vector: Float32Array
+    cleanMs: number
+    via: 'sample' | 'passive'
+    noteId: string | null
+    identityKey: string | null
+    farCosine: number | null
+    voiceGen: number
+  }
 ): Promise<boolean> {
+  const skip = (code: string): false => {
+    log('info', 'voiceprint:self-exemplar-skipped', { via: e.via, code })
+    return false
+  }
+  const stale = (): boolean => voiceGeneration().current() !== e.voiceGen
+  if (stale()) return skip('stale-voice')
+  const settings = await ctx.settings.getAll()
+  if (e.via === 'passive' && !(settings['speakers.selfVoice'] && settings['speakers.selfPassive'])) return skip('self-voice-off')
+  if (e.via === 'sample' && !settings['speakers.selfVoice']) await ctx.settings.set('speakers.selfVoice', true)
   const self = await selfPerson(ctx)
+  // Right before the call: storage runs calls in order, and a Forget bumps before its delete,
+  // so a Forget either deletes this row or made it stale here.
+  if (stale()) return skip('stale-voice')
   const label = e.identityKey ? e.identityKey.slice(e.identityKey.lastIndexOf(':') + 1) : null
   const r = await ctx.storage.addSpeakerExemplar({
     personId: self.id,
@@ -258,6 +285,7 @@ export function registerVoiceprint(ctx: MainContext): void {
 
   /** The dominant speaker of a sample (20 s, share 0.8) becomes a self exemplar. Zeroes the PCM. */
   async function enrolSample(pcm: Buffer, durationMs: number): Promise<VoiceprintSampleResult> {
+    const voiceGen = voiceGeneration().current()
     const m = modelFiles()
     if (!m) {
       pcm.fill(0)
@@ -274,9 +302,9 @@ export function registerVoiceprint(ctx: MainContext): void {
     const vector = d.speaker?.vector
     try {
       if (!d.speaker || !vector) return { enrolled: false, speechMs: d.speechMs, reason: d.reason ?? 'too-little-speech' }
-      await addSelfExemplar(ctx, { modelId: m.modelId, vector, cleanMs: d.speaker.cleanMs, via: 'sample', noteId: null, identityKey: null, farCosine: null })
-      // Recording a sample turns the row on.
-      if (!(await ctx.settings.get('speakers.selfVoice'))) await ctx.settings.set('speakers.selfVoice', true)
+      // Recording a sample turns the row on (in `addSelfExemplar`). A Forget meanwhile drops it.
+      const added = await addSelfExemplar(ctx, { modelId: m.modelId, vector, cleanMs: d.speaker.cleanMs, via: 'sample', noteId: null, identityKey: null, farCosine: null, voiceGen })
+      if (!added) return { enrolled: false, speechMs: d.speechMs, reason: 'cancelled' }
       return { enrolled: true, speechMs: d.speechMs, reason: null }
     } finally {
       for (const s of r.speakers) s.vector?.fill(0)
@@ -368,6 +396,8 @@ export interface SelfPassiveInput {
     share: number
     vector: Float32Array | null
   }[]
+  /** The voice generation the job computed under. */
+  voiceGen: number
 }
 
 /**
@@ -395,6 +425,7 @@ export async function selfPassive(ctx: MainContext, input: SelfPassiveInput): Pr
     via: 'passive',
     noteId: input.noteId,
     identityKey: top.identityKey,
-    farCosine: calibration?.farCosine.mic ?? null
+    farCosine: calibration?.farCosine.mic ?? null,
+    voiceGen: input.voiceGen
   })
 }

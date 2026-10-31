@@ -664,6 +664,14 @@ async function commitDecision(
   }
   await s.replaceSpeakerNameSuggestions(noteId, rows)
 
+  // Match rows for automatic names, before the vectors: a Forget of the person deletes the
+  // vectors of every note it has a match row in.
+  const matches = [...applied].flatMap((key) => {
+    const c = d.decisions.get(key)
+    return c?.personId ? matchKinds(c.autoSrc).map((kind) => ({ noteId, personId: c.personId as string, kind })) : []
+  })
+  if (matches.length) await s.recordSpeakerMatches(matches)
+
   // Cluster vectors: only while Recognize voices is on, for clusters not confirmed, and
   // only from a pass embedded in mode `all`. The generation is checked again right before the
   // save: a Forget all bumped it before its delete, and storage is serial, so either the save
@@ -684,12 +692,7 @@ async function commitDecision(
     }
   }
 
-  // Match rows for automatic names; `last_matched_at` for voice evidence at suggest or above.
-  const matches = [...applied].flatMap((key) => {
-    const c = d.decisions.get(key)
-    return c?.personId ? matchKinds(c.autoSrc).map((kind) => ({ noteId, personId: c.personId as string, kind })) : []
-  })
-  if (matches.length) await s.recordSpeakerMatches(matches)
+  // `last_matched_at` for voice evidence at suggest or above.
   const matched = new Set<string>()
   for (const c of d.decisions.values()) if (!left(c.key)) for (const p of c.voiceMatched) matched.add(p)
   const now = new Date().toISOString()
@@ -734,7 +737,7 @@ async function decideAndWrite(ctx: MainContext, run: JobRun, pass: DiarizePass):
     if (r.status === 'written') {
       setState(ctx, run, 'written')
       pushNames(ctx, noteId, d.decisions.size > 0)
-      await passiveSelf(ctx, d)
+      await passiveSelf(ctx, d, gen)
       return
     }
     if (r.status === 'dropped') {
@@ -746,8 +749,8 @@ async function decideAndWrite(ctx: MainContext, run: JobRun, pass: DiarizePass):
   setState(ctx, run, 'failed', 'stale')
 }
 
-/** The passive self rule, on the pass's mic clusters, after the write. */
-async function passiveSelf(ctx: MainContext, d: Decision): Promise<void> {
+/** The passive self rule, on the pass's mic clusters, after the write. `voiceGen`: the decision's. */
+async function passiveSelf(ctx: MainContext, d: Decision, voiceGen: number): Promise<void> {
   if (!d.modelId) return
   const mic = [...d.stats.values()].filter((s) => s.channel === 'mic')
   const total = mic.reduce((n, s) => n + s.speechMs, 0)
@@ -758,7 +761,8 @@ async function passiveSelf(ctx: MainContext, d: Decision): Promise<void> {
     micClusters: mic.map((s) => {
       const v = d.voice.get(s.label)
       return { identityKey: s.key, speechMs: s.speechMs, cleanMs: v?.cleanMs ?? 0, share: s.speechMs / total, vector: v?.vector ?? null }
-    })
+    }),
+    voiceGen
   }).catch((err: unknown) => log('warn', 'speakers:self-passive-failed', { noteId: d.noteId, err }))
 }
 

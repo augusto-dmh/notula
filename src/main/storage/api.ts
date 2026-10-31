@@ -442,12 +442,15 @@ export interface NewSpeakerExemplar {
 
 /**
  * `added` (`replacedId` set when the cap replaced one), `skipped-far` (counted on the person),
- * or `refused-no-agreement` (a non-self person without an active agreement; logged as a code).
+ * `refused-no-agreement` (a non-self person without an active agreement) or `refused-off`
+ * (Recognize my voice off for the user, Recognize voices off for anyone else). Refusals are
+ * logged as a code.
  */
 export type AddSpeakerExemplarResult =
   | { status: 'added'; id: string; replacedId: string | null }
   | { status: 'skipped-far' }
   | { status: 'refused-no-agreement' }
+  | { status: 'refused-off' }
 
 /** A `speaker_cluster_vectors` row. `label` is `r<N>`; `source` the audio source. */
 export interface SpeakerClusterVectorRow {

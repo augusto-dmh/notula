@@ -15,12 +15,13 @@
 //    failure rolls back to 11 unchanged, and a retry reuses that backup; a backup whose row
 //    counts no longer match is not reused.
 // 3. On the upgraded file, the speaker-profile storage API: the self row and the legacy
-//    conversion, the agreement guard, exact weighted centroids and a confirmation's w/Σw pull,
+//    conversion, the agreement guard and both switches, exact weighted centroids and a confirmation's w/Σw pull,
 //    the sample cap after confirmations and after a merge, the far-from-profile skip, merges
 //    (into the user, across withdrawals), cluster vectors and pending requests with every trash
 //    path and the transcript retention purge, negatives re-mapped, both exports, Forget and
 //    Forget all (each proven by a byte scan of a decrypted copy, free pages included, and an
-//    empty WAL), no blending across model ids, the sweeps, Delete person, the People list join
+//    empty WAL; Forget with the cluster vectors of the notes the person was named in or asked
+//    about), no blending across model ids, the sweeps, Delete person, the People list join
 //    and the logs. Also the pending request's span: the speaker's longest turn on its channel.
 // 4. The speaker bench's A3, A7 and A15 on synthetic notes: a voice that can't name its person
 //    automatically (a non-attendee's, or one with no calibrated condition, voice autos off, a
@@ -701,7 +702,8 @@ try {
   check('a second conversion is a no-op', JSON.stringify(k('convertLegacyVoiceprints', { aliasModelId: null })) === JSON.stringify({ converted: 0, deleted: 0 }))
   check('movedFromLabs still reads true after the legacy rows are gone', k('speakerVoiceSummary', { modelId: null }).movedFromLabs === true)
 
-  // The agreement guard, exact centroids and the cap.
+  // The agreement guard, exact centroids and the cap. Samples of anyone else need Recognize voices on.
+  k('setSettingRaw', 'speakers.voices', true)
   const ana = k('createSpeakerPerson', { displayName: 'Ana Souza', email: 'Ana@Example.test' })
   const bruno = k('createSpeakerPerson', { displayName: 'Bruno', email: null })
   check('a person keeps a lower-cased email; a taken email is refused', ana.email === 'ana@example.test' && /invalid-input/.test(kFails('createSpeakerPerson', { displayName: 'Other', email: 'ana@example.test' })))
@@ -710,6 +712,10 @@ try {
     'the user needs no agreement, and has mic samples only',
     k('addSpeakerExemplar', ex(me.id, { channel: 'mic', modelId: 'resnet-sha', vector: Float32Array.from(unit(legacyVector)) })).status === 'added' && /invalid-input/.test(kFails('addSpeakerExemplar', ex(me.id)))
   )
+  k('setSettingRaw', 'speakers.selfVoice', false)
+  const selfOff = k('addSpeakerExemplar', ex(me.id, { channel: 'mic', modelId: 'resnet-sha', vector: Float32Array.from(unit(legacyVector)), via: 'passive' }))
+  k('setSettingRaw', 'speakers.selfVoice', true)
+  check('with Recognize my voice off the repo refuses a sample of the user', selfOff.status === 'refused-off' && k('listSpeakerSamples', me.id).length === 2, selfOff)
   agree(ana.id)
   k('addSpeakerExemplar', ex(ana.id, { weight: 1 }))
   k('addSpeakerExemplar', ex(ana.id, { weight: 0.5 }))
@@ -787,6 +793,8 @@ try {
   const tNote = k('createNote', { origin: 'unknown', title: 'Trash me', created_via: 'Windows' }).id
   const cv = (noteId, label, extra = {}) => ({ noteId, passId: 'p1', source: 'system', label, modelId: 'model-a', vector: vec(), speechMs: 40_000, cleanMs: 35_000, ...extra })
   const carla = k('createSpeakerPerson', { displayName: 'Carla', email: null })
+  k('setSettingRaw', 'speakers.voices', false)
+  check('with Recognize voices off the repo refuses a sample of an agreed person', k('addSpeakerExemplar', ex(ana.id)).status === 'refused-off')
   k('saveSpeakerClusterVectors', [cv(tNote, 'r1')])
   check('no cluster vector is stored while Recognize voices is off (its default)', count('speaker_cluster_vectors') === 0)
   check('a pending request needs a note that holds a vector', /invalid-input/.test(kFails('addSpeakerPending', { personId: carla.id, noteId: tNote, startMs: 1_000, endMs: 9_000 })))
@@ -829,7 +837,11 @@ try {
   k('addSpeakerPending', { personId: carla.id, noteId: pNote, startMs: 0, endMs: 4_000 })
   check('a request stored without a channel reads null', k('listSpeakerPending', { noteId: pNote })[0]?.source === null)
   pendingGuess(pNote)
-  check("Forget drops the person's requests and clears their notes' pending flags", k('forgetSpeakerVoice', { personId: carla.id, via: 'forget' }).pending === 1 && flag(pNote) === 'false')
+  check(
+    "Forget drops the person's requests, clears their notes' pending flags and deletes those notes' cluster vectors",
+    k('forgetSpeakerVoice', { personId: carla.id, via: 'forget' }).pending === 1 && flag(pNote) === 'false' && k('listSpeakerClusterVectors', { noteId: pNote }).length === 0
+  )
+  k('saveSpeakerClusterVectors', [cv(pNote, 'r1')])
   const req = k('addSpeakerPending', { personId: carla.id, noteId: pNote, startMs: 0, endMs: 4_000 })
   pendingGuess(pNote)
   check('deleting a request clears the flag once the note holds none', k('deleteSpeakerPending', [req.id]) === 1 && flag(pNote) === 'false')
@@ -950,6 +962,34 @@ try {
   k('deleteSpeakerAgreement', ana.id)
   check('Remove record deletes the revoked records', k('getSpeakerAgreement', ana.id) === null)
 
+  // Forget also deletes the cluster vectors of every note the person was named in or asked about:
+  // the job keeps an automatic name's vector, and a request points at the one the user picked.
+  const lia = k('createSpeakerPerson', { displayName: 'Lia', email: null })
+  agree(lia.id)
+  const fNamed = k('createNote', { origin: 'unknown', title: 'Named by voice', created_via: 'Windows' }).id
+  const fAsked = k('createNote', { origin: 'unknown', title: 'Asked first', created_via: 'Windows' }).id
+  const fOther = k('createNote', { origin: 'unknown', title: 'Someone else', created_via: 'Windows' }).id
+  k('saveSpeakerClusterVectors', [cv(fNamed, 'r1'), cv(fNamed, 'r2'), cv(fAsked, 'r1'), cv(fOther, 'r1')])
+  k('recordSpeakerMatches', [{ noteId: fNamed, personId: lia.id, kind: 'auto_voice' }])
+  k('addSpeakerPending', { personId: lia.id, noteId: fAsked, startMs: 0, endMs: 4_000 })
+  k('addSpeakerPending', { personId: carla.id, noteId: fNamed, startMs: 0, endMs: 4_000 })
+  k('addSpeakerPending', { personId: carla.id, noteId: fOther, startMs: 0, endMs: 4_000 })
+  pendingGuess(fNamed)
+  const liaBytes = Buffer.from(k('listSpeakerClusterVectors', { noteId: fNamed })[0].vector.buffer)
+  check('the scan finds a cluster vector before Forget', scan('before-cluster', liaBytes, { checkpoint: true }))
+  const liaForgot = k('forgetSpeakerVoice', { personId: lia.id, via: 'withdrawn' })
+  check(
+    'Forget deletes the cluster vectors of the notes the person was named in or asked about, and no others',
+    liaForgot.clusterVectors === 3 && k('listSpeakerClusterVectors', { noteId: fNamed }).length === 0 && k('listSpeakerClusterVectors', { noteId: fAsked }).length === 0 &&
+      k('listSpeakerClusterVectors', { noteId: fOther }).length === 1,
+    liaForgot
+  )
+  check(
+    "another person's request on those notes ends with the vectors and clears its flag; one elsewhere stays",
+    k('listSpeakerPending', { noteId: fNamed }).length === 0 && flag(fNamed) === 'false' && k('listSpeakerPending', { noteId: fOther }).length === 1
+  )
+  check('after that Forget the WAL is empty and no page of the file holds the cluster vector', walBytes() === 0 && !scan('after-cluster', liaBytes))
+
   // Never blended across model ids.
   agree(ana.id)
   k('addSpeakerExemplar', ex(ana.id, { modelId: 'model-a' }))
@@ -993,8 +1033,12 @@ try {
   agree(joS.id)
   await sleep(5)
   k('forgetSpeakerVoice', { personId: joS.id, via: 'withdrawn' })
+  const joNote = k('createNote', { origin: 'unknown', title: 'Jo Silva named by voice', created_via: 'Windows' }).id
+  k('saveSpeakerClusterVectors', [cv(joNote, 'r1')])
+  k('recordSpeakerMatches', [{ noteId: joNote, personId: joS.id, kind: 'auto_voice' }])
   const joPreview = k('previewSpeakerMerge', { fromId: joS.id, intoId: jo.id })
   k('mergeSpeakerPeople', { fromId: joS.id, intoId: jo.id })
+  check('a merge that forgets a withdrawn voice deletes the cluster vectors of the notes it was named in', k('listSpeakerClusterVectors', { noteId: joNote }).length === 0)
   const joRecords = k('listSpeakerAgreements', jo.id)
   check(
     'the preview says the voice is forgotten; the merge forgets it and stamps the surviving record withdrawn',

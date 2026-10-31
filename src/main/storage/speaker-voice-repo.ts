@@ -13,6 +13,8 @@
 // - The cap (16 per person × channel × model): a new exemplar replaces the existing one closest to
 //   the centroid; after a merge the closest one is removed until the space fits.
 // - The agreement guard lives here: no exemplar for a non-self person without an active agreement.
+//   The switches too: no exemplar of the user with Recognize my voice off, and none of anyone else
+//   with Recognize voices off, read in the same call as the insert.
 
 import { randomUUID } from 'node:crypto'
 import type { AudioSource, IsoTime } from '@shared/types/common'
@@ -188,12 +190,15 @@ function hasActiveAgreement(s: StoreCtx, personId: string): boolean {
   return !!s.db.prepare(`SELECT 1 FROM speaker_agreements WHERE person_id = ? AND owner_id = ? AND revoked_at IS NULL LIMIT 1`).get(personId, s.identity.ownerId)
 }
 
+/** A boolean setting as stored; a key never stored reads false (both voice switches default off). */
+function switchOn(s: StoreCtx, key: 'speakers.voices' | 'speakers.selfVoice'): boolean {
+  const r = s.db.prepare(`SELECT value FROM settings WHERE owner_id = ? AND key = ?`).get(s.identity.ownerId, key) as { value: string } | undefined
+  return r?.value === 'true'
+}
+
 /** `speakers.voices` as stored (off by default): cluster vectors exist only while it is on. */
 function voicesOn(s: StoreCtx): boolean {
-  const r = s.db.prepare(`SELECT value FROM settings WHERE owner_id = ? AND key = 'speakers.voices'`).get(s.identity.ownerId) as
-    | { value: string }
-    | undefined
-  return r?.value === 'true'
+  return switchOn(s, 'speakers.voices')
 }
 
 /** The note still holds an unexpired cluster vector (the only thing a pending request can name). */
@@ -398,6 +403,11 @@ export function addSpeakerExemplar(s: StoreCtx, raw: NewSpeakerExemplar): AddSpe
   const person = livePerson(s, id(raw.personId, 'personId'))
   if (!person) throw notFound('person', String(raw.personId))
   if (person.isSelf && channel !== 'mic') throw invalid('the user has mic samples only')
+  // A caller that read the switch before an off (and a Forget) had its vector in memory.
+  if (!switchOn(s, person.isSelf ? 'speakers.selfVoice' : 'speakers.voices')) {
+    s.log('warn', 'speakers:exemplar-refused', { code: person.isSelf ? 'self-voice-off' : 'voices-off' })
+    return { status: 'refused-off' }
+  }
   if (!person.isSelf && !hasActiveAgreement(s, person.id)) {
     s.log('warn', 'speakers:exemplar-refused', { code: 'no-agreement' })
     return { status: 'refused-no-agreement' }
@@ -855,6 +865,11 @@ function emptyDeleted(): SpeakerVoiceDeleted {
  * Inside the caller's secure transaction: one person's voice; `last_matched_at` restarts with the
  * next voice. For the user, a legacy profile left by a failed first-start conversion goes too.
  * The notes whose `pending` flags were cleared are added to `guesses`.
+ *
+ * The cluster vectors of every note the person was matched or asked about go too: the job keeps
+ * the vector of a cluster it named automatically, and a request points at the vector the user said
+ * is this person. Words don't say which label is whose here, so the whole note's vectors go, and
+ * other people's requests on those notes end with them.
  */
 export function forgetPersonRows(
   s: StoreCtx,
@@ -864,11 +879,24 @@ export function forgetPersonRows(
   guesses: Set<string>
 ): SpeakerVoiceDeleted {
   const out = emptyDeleted()
+  const notes = (
+    s.db
+      .prepare(`SELECT note_id FROM speaker_matches WHERE person_id = @p UNION SELECT note_id FROM speaker_pending WHERE person_id = @p`)
+      .all({ p: personId }) as { note_id: string }[]
+  ).map((r) => r.note_id)
   out.exemplars = s.db.prepare(`DELETE FROM speaker_exemplars WHERE person_id = ?`).run(personId).changes
   out.spaces = s.db.prepare(`DELETE FROM speaker_voice_spaces WHERE person_id = ?`).run(personId).changes
   const pendingRows = s.db.prepare(`DELETE FROM speaker_pending WHERE person_id = ? RETURNING note_id`).all(personId) as { note_id: string }[]
   out.pending = pendingRows.length
   for (const n of clearDroppedPendingFlags(s, [...new Set(pendingRows.map((r) => r.note_id))])) guesses.add(n)
+  if (notes.length) {
+    out.clusterVectors = s.db
+      .prepare(`DELETE FROM speaker_cluster_vectors WHERE owner_id = ? AND note_id IN (SELECT value FROM json_each(?))`)
+      .run(s.identity.ownerId, JSON.stringify(notes)).changes
+    const dropped = dropOrphanPending(s, notes, now)
+    out.pending += dropped.pending
+    for (const n of dropped.guesses) guesses.add(n)
+  }
   out.agreementsStamped = stampActiveAgreements(s, [personId], via, now)
   s.db
     .prepare(`DELETE FROM voiceprints WHERE owner_id = ? AND EXISTS (SELECT 1 FROM speaker_people WHERE id = ? AND is_self = 1)`)
@@ -881,7 +909,10 @@ function touchVoice(s: StoreCtx, ...ids: string[]): void {
   for (const t of ['speaker_exemplars', 'speaker_voice_spaces', 'speaker_pending', 'speaker_agreements', 'speaker_people']) s.touch(t, ...ids)
 }
 
-/** Forget voice: exemplars, voice spaces and pending requests; the active agreement is stamped `via`. */
+/**
+ * Forget voice: exemplars, voice spaces, pending requests and the cluster vectors of the notes
+ * the person was matched or asked about; the active agreement is stamped `via`.
+ */
 export function forgetSpeakerVoice(s: StoreCtx, q: { personId: string; via: 'forget' | 'withdrawn' | 'expired' }): SpeakerVoiceDeleted {
   if (q?.via !== 'forget' && q?.via !== 'withdrawn' && q?.via !== 'expired') throw invalid('via must be forget, withdrawn or expired')
   const person = livePerson(s, id(q.personId, 'personId'))
@@ -890,6 +921,7 @@ export function forgetSpeakerVoice(s: StoreCtx, q: { personId: string; via: 'for
   const out = secureWrite(s, () => forgetPersonRows(s, person.id, q.via, nowIso(), guesses))
   checkpointVoice(s)
   touchVoice(s, person.id)
+  if (out.clusterVectors) s.touch('speaker_cluster_vectors')
   if (person.isSelf) s.touch('voiceprints')
   if (guesses.size) s.touch('speaker_guesses', ...guesses)
   s.log('info', 'speakers:voice-forgotten', { ...out, via: q.via })

@@ -332,6 +332,7 @@ export function mergeSpeakerPeople(s: StoreCtx, q: { fromId: string; intoId: str
   for (const t of ['speaker_people', 'speaker_exemplars', 'speaker_voice_spaces', 'speaker_negatives', 'speaker_matches', 'speaker_pending', 'speaker_agreements']) {
     s.touch(t, from.id, into.id)
   }
+  if (preview.withdrawnAt) s.touch('speaker_cluster_vectors')
   if (guesses.size) s.touch('speaker_guesses', ...guesses)
   s.log('info', 'speakers:people-merged', {
     samplesRemoved: removed,
