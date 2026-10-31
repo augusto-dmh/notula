@@ -17,12 +17,13 @@
 // is sent when a purpose sets it; a 2xx `text/html` answer is an intercepting network
 // (intercept.ts).
 
-import type { LlmProviderId } from '@shared/types/enhance'
+import { GEMINI_PRESET, type LlmProviderId } from '@shared/types/enhance'
 import { enhanceError, EnhanceError } from '../enhance/errors'
 import { checkIntercepted, LlmInterceptedError } from './intercept'
 import {
   LlmImagesUnsupportedError,
   LlmToolsUnsupportedError,
+  PURPOSE_EFFORT,
   type LlmAvailability,
   type LlmChatEvent,
   type LlmChatMessage,
@@ -96,6 +97,19 @@ function tokenField(baseUrl: string): 'max_completion_tokens' | 'max_tokens' {
     return new URL(baseUrl).hostname === 'api.openai.com' ? 'max_completion_tokens' : 'max_tokens'
   } catch {
     return 'max_tokens'
+  }
+}
+
+/**
+ * Gemini's compatible endpoint thinks at full depth unless told otherwise, which can outlast a
+ * short task's budget (voice typing allows 10 s). It takes the purpose's effort as
+ * `reasoning_effort`; other servers get nothing, since some reject the field.
+ */
+function effortField(baseUrl: string, effort: 'low' | 'medium' | 'high'): { reasoning_effort?: string } {
+  try {
+    return new URL(baseUrl).hostname === GEMINI_PRESET.host ? { reasoning_effort: effort } : {}
+  } catch {
+    return {}
   }
 }
 
@@ -235,6 +249,7 @@ export function createOpenAiCompatibleProvider(opts: Options): LlmProvider {
       ],
       stream,
       ...(typeof req.temperature === 'number' ? { temperature: req.temperature } : {}),
+      ...effortField(baseUrl, PURPOSE_EFFORT[req.purpose]),
       [tokenField(baseUrl)]: req.maxTokens
     })
   }
@@ -272,6 +287,7 @@ export function createOpenAiCompatibleProvider(opts: Options): LlmProvider {
       messages: [{ role: 'system', content: req.system }, ...toOpenAiMessages(req.messages)],
       stream: true,
       ...(tools.length > 0 ? { tools, tool_choice: 'auto' } : {}),
+      ...effortField(baseUrl, PURPOSE_EFFORT.chat),
       [tokenField(baseUrl)]: req.maxTokens
     })
   }
