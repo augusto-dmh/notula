@@ -18,7 +18,7 @@ import type {
   ActionItemsQuery,
   RegeneratedActionItem
 } from '@shared/types/action-items'
-import type { AttachmentInfo, AttachmentKind, AttachmentParentType, AttachmentStatus } from '@shared/types/attachments'
+import type { AttachmentCapture, AttachmentInfo, AttachmentKind, AttachmentParentType, AttachmentStatus } from '@shared/types/attachments'
 import type { PrepBrief } from '@shared/types/briefs'
 import type { CalendarGrant, CalendarInfo, CalendarSource, Participant, UpcomingPage } from '@shared/types/calendar'
 import type { ChatMessage, ChatThread, ChatThreadQuery } from '@shared/types/chat'
@@ -251,6 +251,8 @@ export interface NewAttachment {
   page_count?: number | null
   status: AttachmentStatus
   screen_capture_info?: ScreenShareContext | null
+  /** A screenshot from the screen-capture shortcut. */
+  capture?: AttachmentCapture | null
   /** A note image counted toward the 10-image limit. */
   counted: boolean
   /** Plaintext; the worker encrypts it with a fresh key. */

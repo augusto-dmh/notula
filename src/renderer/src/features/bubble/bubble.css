@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* The bubble pill and its side windows. Always dark. */
+/* The bubble pill, its cards, its side windows and the docked strip. Always dark. */
 
 .bubble-stage {
   width: 100%;
@@ -126,15 +126,6 @@
   place-items: center;
   color: var(--fg-2);
   font-size: var(--text-sm);
-}
-
-/* ---------- the inactivity window (336 wide) ---------- */
-
-.bubble-inactivity {
-  height: 100%;
-  display: flex;
-  align-items: center;
-  padding: 8px;
 }
 
 /* ---------- the snapshot button (130 px pill) ---------- */
@@ -358,4 +349,153 @@
 }
 .bubble-panel--compact {
   padding-bottom: 10px;
+}
+
+/* ---------- cards inside the bubble window ---------- */
+.bubble-frame {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+.bubble-card {
+  display: flex;
+  align-items: center;
+  padding: 8px;
+  box-sizing: border-box;
+}
+.bubble-card > * {
+  width: 100%;
+}
+.bubble-offrecord .nt-prompt__body {
+  margin-bottom: 0;
+}
+.bubble-offrecord__held {
+  margin: 4px 0 0;
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+.bubble-paused {
+  display: flex;
+  gap: 3px;
+  height: 12px;
+}
+.bubble-paused > span {
+  width: 3px;
+  border-radius: 1px;
+  background: #e6a948;
+}
+
+/* ---------- the docked strip ---------- */
+.bubble-dock {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+.bubble-dock-pill {
+  --dock-open: 0;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  /* A slim tab at rest, the full 36 px pill at the edge. */
+  width: calc(8px + 28px * var(--dock-open));
+  overflow: hidden;
+  background: rgba(17, 17, 16, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 2px 6px rgba(0, 0, 0, 0.25);
+  color: #f4f4f1;
+  cursor: pointer;
+  touch-action: none;
+  box-sizing: border-box;
+  transition:
+    width 120ms var(--ease),
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+.bubble-dock-pill.is-right {
+  right: 0;
+  border-right: 0;
+  border-radius: 14px 0 0 14px;
+}
+.bubble-dock-pill.is-left {
+  left: 0;
+  border-left: 0;
+  border-radius: 0 14px 14px 0;
+}
+.bubble-dock-pill.is-hovered {
+  background: rgba(30, 30, 28, 0.97);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+.bubble-dock-pill.is-pressed {
+  background: rgba(40, 40, 38, 0.97);
+}
+.bubble-dock-pill__face {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 36px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0 14px;
+  box-sizing: border-box;
+  opacity: var(--dock-open);
+  transition: opacity 120ms var(--ease);
+}
+.bubble-dock-pill.is-right .bubble-dock-pill__face {
+  left: 0;
+}
+.bubble-dock-pill.is-left .bubble-dock-pill__face {
+  right: 0;
+}
+.bubble-dock-pill .bubble-badge {
+  top: 4px;
+  right: 4px;
+}
+.bubble-dock-panel {
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  border-radius: 12px;
+}
+.bubble-dock-resize {
+  position: absolute;
+  z-index: 2;
+}
+.bubble-dock-resize.is-top,
+.bubble-dock-resize.is-bottom {
+  left: 12px;
+  right: 12px;
+  height: 6px;
+}
+.bubble-dock-resize.is-top {
+  top: -3px;
+}
+.bubble-dock-resize.is-bottom {
+  bottom: -3px;
+}
+.bubble-dock-resize.is-outer {
+  top: 12px;
+  bottom: 12px;
+  width: 6px;
+}
+.bubble-dock-resize.is-top-outer,
+.bubble-dock-resize.is-bottom-outer {
+  width: 14px;
+  height: 14px;
+}
+.bubble-dock-resize.is-top-outer {
+  top: -4px;
+}
+.bubble-dock-resize.is-bottom-outer {
+  bottom: -4px;
+}
+.bubble-dock-panel.is-right .bubble-dock-resize.is-outer,
+.bubble-dock-panel.is-right .bubble-dock-resize.is-top-outer,
+.bubble-dock-panel.is-right .bubble-dock-resize.is-bottom-outer {
+  left: -4px;
+}
+.bubble-dock-panel.is-left .bubble-dock-resize.is-outer,
+.bubble-dock-panel.is-left .bubble-dock-resize.is-top-outer,
+.bubble-dock-panel.is-left .bubble-dock-resize.is-bottom-outer {
+  right: -4px;
 }

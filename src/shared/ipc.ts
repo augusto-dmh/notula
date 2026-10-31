@@ -189,7 +189,22 @@ import type {
   TrashItem
 } from './types/notes'
 import type { LastTimeRecap, NotificationAction, NotificationPayload } from './types/notify'
-import type { BubbleDocument, BubbleState } from './types/bubble'
+import type {
+  BubbleDockExtent,
+  BubbleDocked,
+  BubbleDockRect,
+  BubbleDocument,
+  BubbleLayout,
+  BubbleOffRecord,
+  BubblePanelEdge,
+  BubbleState
+} from './types/bubble'
+import type {
+  ScreenCaptureMode,
+  ScreenCaptureSaveResult,
+  ScreenCaptureState,
+  ScreenCaptureTakeResult
+} from './types/screen-capture'
 import type { WhatsNewEntry } from './types/nux'
 import type { Panel, PanelPatch } from './types/panels'
 import type {
@@ -960,6 +975,18 @@ export interface InvokeChannels {
   /** Keeps the notes. */
   'notes-import:clear-history': [{ confirmed: true }, void]
   'notes-import:get-candidates': [{ noteIds: string[] }, ImportCandidates[]]
+
+  // ---------- screen capture, its overlay, and off the record ----------
+  /** The capture panel only. */
+  'screen-capture:get-state': [{ captureId: string }, ScreenCaptureState | null]
+  /** Hides Notula's windows, then grabs; `mode` is where the overlay starts. */
+  'screen-capture:take': [{ captureId: string; mode: ScreenCaptureMode }, ScreenCaptureTakeResult]
+  'screen-capture:remove-image': [{ captureId: string; index: number }, ScreenCaptureState]
+  'screen-capture:save': [{ captureId: string; note: string }, ScreenCaptureSaveResult]
+  'screen-capture:close': [{ captureId: string }, void]
+  'screen-capture:open-note': [{ captureId: string; noteId: string }, void]
+  /** The capture overlay only: windows to grab, Notula's own excluded. */
+  'snapshot-region:list-windows': [void, ScreenSource[]]
 }
 
 /** send channel → payload. */
@@ -1068,6 +1095,17 @@ export interface SendChannels {
   'licenses:open-folder': void
   'nux:dismiss': { id: string }
   'nux:increment': { id: string }
+
+  // ---------- the docked bubble and the capture overlay ----------
+  /** The bubble window only: where the docked strip takes the mouse. */
+  'bubble:dock-region': { rects: BubbleDockRect[] }
+  'bubble:dock-extent': BubbleDockExtent
+  /** `dy`: screen DIP since `start`. */
+  'bubble:dock-move': { phase: 'start' | 'move' | 'end'; dy: number }
+  /** `dx`, `dy`: screen DIP since `start`; `reset` (a double-click) goes back to the default size. */
+  'bubble:panel-resize': { phase: 'start' | 'move' | 'end' | 'reset'; edge: BubblePanelEdge; dx: number; dy: number }
+  /** The capture overlay only. */
+  'snapshot-region:pick-window': { sourceId: string }
 }
 
 /** push channel → payload. */
@@ -1226,6 +1264,18 @@ export interface PushChannels {
   'notes-import:scan-progress': ImportScanProgress
   'notes-import:progress': ImportProgress
   'notes-import:changed': ImportBatch
+
+  // ---------- the docked bubble, screen capture and off the record ----------
+  /** The bubble window: the docked layout, or null for the classic pill. */
+  'bubble:docked': BubbleDocked | null
+  /** The bubble window while docked: 1 at the docked edge, 0 from 20 px. */
+  'bubble:edge-closeness': number
+  /** The bubble window: the classic pill and its card. */
+  'bubble:layout': BubbleLayout | null
+  /** The bubble window: the hold behind the off-the-record card. */
+  'bubble:off-record': BubbleOffRecord | null
+  /** The capture panel: read the capture again. */
+  'screen-capture:open': { captureId: string }
 }
 
 export type InvokeChannel = keyof InvokeChannels
@@ -1289,6 +1339,14 @@ export interface NotulaApi {
     onHover: PushMember<'bubble:hovered'>
     onDocument: PushMember<'bubble:note'>
     takeSnapshot: InvokeMember<'bubble:take-snapshot'>
+    dockRegion: SendMember<'bubble:dock-region'>
+    dockExtent: SendMember<'bubble:dock-extent'>
+    dockMove: SendMember<'bubble:dock-move'>
+    panelResize: SendMember<'bubble:panel-resize'>
+    onDocked: PushMember<'bubble:docked'>
+    onEdgeCloseness: PushMember<'bubble:edge-closeness'>
+    onLayout: PushMember<'bubble:layout'>
+    onOffRecord: PushMember<'bubble:off-record'>
   }
   notify: {
     getPayload: InvokeMember<'notify:get-payload'>
@@ -1648,6 +1706,8 @@ export interface NotulaApi {
     done: SendMember<'snapshot-region:done'>
     cancel: SendMember<'snapshot-region:cancel'>
     onImage: PushMember<'snapshot-region:image'>
+    listWindows: InvokeMember<'snapshot-region:list-windows'>
+    pickWindow: SendMember<'snapshot-region:pick-window'>
   }
   screenGuide: {
     open: SendMember<'screen-guide:open'>
@@ -2049,5 +2109,16 @@ export interface NotulaApi {
     onScanProgress: PushMember<'notes-import:scan-progress'>
     onProgress: PushMember<'notes-import:progress'>
     onChanged: PushMember<'notes-import:changed'>
+  }
+
+  // ---------- screen capture and off the record ----------
+  screenCapture: {
+    getState: InvokeMember<'screen-capture:get-state'>
+    take: InvokeMember<'screen-capture:take'>
+    removeImage: InvokeMember<'screen-capture:remove-image'>
+    save: InvokeMember<'screen-capture:save'>
+    close: InvokeMember<'screen-capture:close'>
+    openNote: InvokeMember<'screen-capture:open-note'>
+    onOpen: PushMember<'screen-capture:open'>
   }
 }

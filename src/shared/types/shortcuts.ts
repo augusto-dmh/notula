@@ -12,7 +12,14 @@ import type { SettingKey } from './settings'
 
 export type ShortcutScope = 'global' | 'menu' | 'app'
 export type ShortcutGroup = 'global' | 'general' | 'notes' | 'lists' | 'search' | 'chat'
-export type CustomisableShortcutId = 'quickAsk' | 'dictation' | 'newNote' | 'dictationHold' | 'dictationHandsFree' | 'recordToggle'
+export type CustomisableShortcutId =
+  | 'quickAsk'
+  | 'dictation'
+  | 'newNote'
+  | 'dictationHold'
+  | 'dictationHandsFree'
+  | 'recordToggle'
+  | 'screenCapture'
 /** Rows matched by the keyboard helper (chords, empty = off) instead of `globalShortcut`. */
 export type HookShortcutId = 'dictationHold' | 'dictationHandsFree'
 export const HOOK_SHORTCUT_IDS: readonly HookShortcutId[] = ['dictationHold', 'dictationHandsFree']
@@ -86,6 +93,12 @@ export const SHORTCUTS: readonly ShortcutDef[] = [
     settingKey: 'shortcuts.recordToggle',
     featureKey: 'voiceTyping.enabled'
   }),
+  // Screen capture (Labs).
+  row('screenCapture', 'Capture a screenshot to a note', 'global', 'global', both(`${MOD}+Shift+2`), {
+    customisable: true,
+    settingKey: 'screenCapture.shortcut',
+    featureKey: 'screenCapture.enabled'
+  }),
   // General: the menu accelerators Notula ships, plus the sidebar toggle.
   row('newNote', 'New note', 'general', 'menu', both('CmdOrCtrl+Shift+N'), {
     customisable: true,
@@ -137,6 +150,7 @@ export const CUSTOMISABLE_SHORTCUTS: Record<
       | 'shortcuts.dictationHold'
       | 'shortcuts.dictationHandsFree'
       | 'shortcuts.recordToggle'
+      | 'screenCapture.shortcut'
     keys: { darwin: string; default: string }
   }
 > = {
@@ -145,7 +159,8 @@ export const CUSTOMISABLE_SHORTCUTS: Record<
   newNote: { settingKey: 'shortcuts.newNote', keys: both('CmdOrCtrl+Shift+N') },
   dictationHold: { settingKey: 'shortcuts.dictationHold', keys: { ...HOOK_SHORTCUT_DEFAULTS.dictationHold } },
   dictationHandsFree: { settingKey: 'shortcuts.dictationHandsFree', keys: { ...HOOK_SHORTCUT_DEFAULTS.dictationHandsFree } },
-  recordToggle: { settingKey: 'shortcuts.recordToggle', keys: { darwin: 'Command+Alt+M', default: 'Control+Alt+M' } }
+  recordToggle: { settingKey: 'shortcuts.recordToggle', keys: { darwin: 'Command+Alt+M', default: 'Control+Alt+M' } },
+  screenCapture: { settingKey: 'screenCapture.shortcut', keys: both(`${MOD}+Shift+2`) }
 }
 
 /** A customisable row's default on this platform. */

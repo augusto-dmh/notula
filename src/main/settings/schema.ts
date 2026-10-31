@@ -66,6 +66,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const isRect = (v: unknown): boolean =>
   isObject(v) && ['x', 'y', 'width', 'height'].every((k) => typeof v[k] === 'number' && Number.isFinite(v[k]))
 
+const finite = (v: unknown): boolean => typeof v === 'number' && Number.isFinite(v)
+
 const RECIPE_VIEWS = ['upcoming-meeting', 'live-meeting', 'meeting', 'multi-meeting'] as const
 
 const contextTokens = integer(4_096, 2_000_000)
@@ -428,7 +430,21 @@ const VALIDATORS: { [K in SettingKey]: Validator } = {
   'sources.extension.captions': bool,
   'sources.extension.coursePages': bool,
   'notesImport.folderMode': oneOf('mirror', 'single', 'none'),
-  'notesImport.findSourcesAfter': bool
+  'notesImport.findSourcesAfter': bool,
+  'bubble.dock': bool,
+  'bubble.dockAnchor': (v) =>
+    v === null ||
+    (isObject(v) && (v['side'] === 'left' || v['side'] === 'right') && finite(v['anchorY']) && isRect(v['display'])),
+  'bubble.panelSize': (v) =>
+    v === null ||
+    (isObject(v) &&
+      finite(v['width']) &&
+      finite(v['height']) &&
+      finite(v['offsetY']) &&
+      (v['width'] as number) > 0 &&
+      (v['height'] as number) > 0),
+  'screenCapture.enabled': bool,
+  'screenCapture.shortcut': nullOr(text(100, { nonEmpty: true }))
 }
 
 export function isSettingKey(key: unknown): key is SettingKey {

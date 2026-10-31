@@ -7,7 +7,7 @@ import { createRoot } from 'react-dom/client'
 import './styles.css'
 
 /**
- * `#/bubble`, `#/bubble-transcript`, `#/bubble-inactivity`, `#/notification`, then the
+ * `#/bubble`, `#/bubble-transcript`, `#/notification`, then the
  * feature windows below. Anything else is App.
  */
 function rootFor(hash: string): ComponentType {
@@ -17,8 +17,6 @@ function rootFor(hash: string): ComponentType {
       return lazy(() => import('./features/bubble').then((m) => ({ default: m.BubbleRoot })))
     case '/bubble-transcript':
       return lazy(() => import('./features/bubble').then((m) => ({ default: m.BubbleTranscriptRoot })))
-    case '/bubble-inactivity':
-      return lazy(() => import('./features/bubble').then((m) => ({ default: m.BubbleInactivityRoot })))
     case '/notification':
       return lazy(() => import('./features/notify').then((m) => ({ default: m.NotificationRoot })))
     // ---------- feature windows ----------
@@ -32,6 +30,10 @@ function rootFor(hash: string): ComponentType {
       return lazy(() => import('./features/snapshots').then((m) => ({ default: m.SnapshotPickerRoot })))
     case '/snapshot-region':
       return lazy(() => import('./features/snapshots').then((m) => ({ default: m.SnapshotRegionRoot })))
+    case '/screen-capture':
+      return lazy(() => import('./features/screen-capture').then((m) => ({ default: m.ScreenCaptureRoot })))
+    case '/screen-capture-region':
+      return lazy(() => import('./features/screen-capture').then((m) => ({ default: m.CaptureRegionRoot })))
     case '/screen-guide':
       return lazy(() => import('./features/screen-guide').then((m) => ({ default: m.ScreenGuideRoot })))
     case '/screen-guide-spotlight':

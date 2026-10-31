@@ -20,6 +20,8 @@ import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, rea
 import { join } from 'node:path'
 import {
   ATTACHMENT_LIMITS,
+  CAPTURE_NOTE_MAX,
+  type AttachmentCapture,
   type AttachmentInfo,
   type AttachmentKind,
   type AttachmentParentType,
@@ -48,7 +50,7 @@ const MAX_NAME = 500
 type Row = Record<string, unknown>
 
 const COLUMNS = `id, parent_type, parent_id, kind, file_name, mime_type, byte_size, width, height, page_count,
-  status, error, token_estimate, content_summary IS NOT NULL AS has_summary, screen_capture_info, created_at`
+  status, error, token_estimate, content_summary IS NOT NULL AS has_summary, screen_capture_info, capture, counted, created_at`
 
 function intOrNull(v: unknown): number | null {
   return typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'bigint' ? Number(v) : null
@@ -71,6 +73,8 @@ function toInfo(r: Row): AttachmentInfo {
     token_estimate: intOrNull(r['token_estimate']),
     has_summary: r['has_summary'] === 1,
     screen_capture_info: parseJson<ScreenShareContext | null>(r['screen_capture_info'], null),
+    capture: parseJson<AttachmentCapture | null>(r['capture'], null),
+    counted: r['counted'] === 1,
     created_at: r['created_at'] as string
   }
 }
@@ -141,6 +145,25 @@ function screenShareContext(v: unknown): ScreenShareContext | null {
   return { captured_at: c.captured_at, description: c.description, model: c.model }
 }
 
+const nullableText = (v: unknown, max: number): v is string | null => v === null || (typeof v === 'string' && v.length <= max)
+
+function capture(v: unknown): AttachmentCapture | null {
+  if (v === undefined || v === null) return null
+  const c = v as Partial<AttachmentCapture>
+  if (
+    typeof v !== 'object' ||
+    typeof c.captured_at !== 'string' ||
+    Number.isNaN(Date.parse(c.captured_at)) ||
+    (c.mode !== 'region' && c.mode !== 'window') ||
+    !nullableText(c.note, CAPTURE_NOTE_MAX) ||
+    !nullableText(c.source_app, 500) ||
+    !nullableText(c.source_title, 1_000)
+  ) {
+    throw invalid('capture is invalid')
+  }
+  return { captured_at: c.captured_at, mode: c.mode, note: c.note, source_app: c.source_app, source_title: c.source_title }
+}
+
 function noteRecord(info: AttachmentInfo): NoteAttachment {
   return {
     id: info.id,
@@ -150,7 +173,8 @@ function noteRecord(info: AttachmentInfo): NoteAttachment {
     height: info.height ?? 0,
     mime_type: info.mime_type,
     byte_size: info.byte_size,
-    ...(info.screen_capture_info ? { screen_capture_info: info.screen_capture_info } : {})
+    ...(info.screen_capture_info ? { screen_capture_info: info.screen_capture_info } : {}),
+    ...(info.capture ? { capture: info.capture } : {})
   }
 }
 
@@ -201,6 +225,8 @@ export function createAttachment(s: StoreCtx, a: NewAttachment): AttachmentInfo 
   const height = dimension(a.height, 'height')
   const pageCount = dimension(a.page_count, 'page_count')
   const ssc = screenShareContext(a.screen_capture_info)
+  const cap = capture(a.capture)
+  if (cap && a.kind !== 'image') throw invalid('capture is for images only')
   if (!(a.bytes instanceof Uint8Array) || a.bytes.byteLength === 0) throw invalid('bytes are required')
   if (a.bytes.byteLength > MAX_BYTES) throw invalid('the file is too large')
   const noteImage = a.parent_type === 'note'
@@ -240,9 +266,9 @@ export function createAttachment(s: StoreCtx, a: NewAttachment): AttachmentInfo 
       s.db
         .prepare(
           `INSERT INTO attachments (id, workspace_id, owner_id, parent_type, parent_id, kind, file_name, mime_type,
-             byte_size, width, height, page_count, sha256, wrapped_key, counted, status, screen_capture_info, created_at)
+             byte_size, width, height, page_count, sha256, wrapped_key, counted, status, screen_capture_info, capture, created_at)
            VALUES (@id, @workspace, @owner, @parentType, @parentId, @kind, @fileName, @mimeType,
-             @byteSize, @width, @height, @pageCount, @sha256, @wrapped, @counted, @status, @ssc, @now)`
+             @byteSize, @width, @height, @pageCount, @sha256, @wrapped, @counted, @status, @ssc, @capture, @now)`
         )
         .run({
           id,
@@ -262,6 +288,7 @@ export function createAttachment(s: StoreCtx, a: NewAttachment): AttachmentInfo 
           counted: a.counted ? 1 : 0,
           status: a.status,
           ssc: ssc ? JSON.stringify(ssc) : null,
+          capture: cap ? JSON.stringify(cap) : null,
           now: nowIso()
         })
       const created = getInfo(s, id) as AttachmentInfo

@@ -4,17 +4,46 @@
 // dragged rectangle is cropped at device pixels, put on the clipboard as PNG and added to the note
 // through `ctx.attachments` (outside the 10-image limit). One capture at a time; the
 // still never touches the disk.
+//
+// `grab()` is the overlay on its own: it returns the cropped image, or the window picked
+// in the overlay's window list (screen capture), without attaching anything.
 
-import { clipboard, ClipboardItem, desktopCapturer, screen, systemPreferences, type BrowserWindow, type Display, type NativeImage } from 'electron'
+import { BrowserWindow, clipboard, ClipboardItem, desktopCapturer, screen, systemPreferences, type Display, type NativeImage } from 'electron'
 import type { PushChannel } from '@shared/ipc'
 import type { Rect } from '@shared/types/common'
-import { BUBBLE_SNAPSHOT_LIMITS as L, type BubbleSnapshotResult } from '@shared/types/snapshots'
+import { BUBBLE_SNAPSHOT_LIMITS as L, type BubbleSnapshotResult, type ScreenSource } from '@shared/types/snapshots'
 import type { MainContext } from '../context'
 import { log } from '../log'
 import { openScreenGuide } from '../screen-guide/guide'
 import { fit } from './frames'
 
-type Outcome = { kind: 'done'; rect: Rect } | { kind: 'cancel' }
+type Outcome = { kind: 'done'; rect: Rect } | { kind: 'window'; sourceId: string } | { kind: 'cancel' }
+
+/** What the overlay gave: the image at device pixels, or nothing. */
+export type RegionGrab =
+  | { status: 'ok'; image: NativeImage; mode: 'region' | 'window'; sourceName: string | null }
+  | { status: 'cancelled' }
+  | { status: 'failed'; error: 'permission-denied' | 'capture-failed' | 'busy' }
+
+/** The one instance `registerSnapshots` makes; the overlay's IPC checks its window. */
+let shared: RegionSnapshots | null = null
+
+export function regionSnapshots(): RegionSnapshots | null {
+  return shared
+}
+
+/** Notula's own windows, by media source id. */
+function ownSourceIds(): Set<string> {
+  const out = new Set<string>()
+  for (const w of BrowserWindow.getAllWindows()) {
+    try {
+      if (!w.isDestroyed()) out.add(w.getMediaSourceId())
+    } catch {
+      // A window being torn down has no source id.
+    }
+  }
+  return out
+}
 
 export class RegionSnapshots {
   private busy = false
@@ -25,7 +54,9 @@ export class RegionSnapshots {
     settle(o: Outcome): void
   } | null = null
 
-  constructor(private readonly ctx: MainContext) {}
+  constructor(private readonly ctx: MainContext) {
+    shared = this
+  }
 
   isOverlay(wcId: number): boolean {
     return !!this.overlay && !this.overlay.isDestroyed() && this.overlay.webContents.id === wcId
@@ -47,7 +78,25 @@ export class RegionSnapshots {
     this.pending?.settle({ kind: 'cancel' })
   }
 
-  async take(noteId: string): Promise<BubbleSnapshotResult> {
+  /** The overlay's window list picked a window (screen capture only). */
+  pickWindow(sourceId: string): void {
+    this.pending?.settle({ kind: 'window', sourceId })
+  }
+
+  /** Windows for the overlay's window list, Notula's own excluded. */
+  async listWindows(): Promise<ScreenSource[]> {
+    const own = ownSourceIds()
+    const sources = await desktopCapturer.getSources({ types: ['window'], thumbnailSize: { width: 320, height: 200 }, fetchWindowIcons: false })
+    return sources
+      .filter((src) => !own.has(src.id) && !src.thumbnail.isEmpty())
+      .map((src) => ({ id: src.id, name: src.name || 'Window', appName: null, kind: 'window' as const, thumbnail: src.thumbnail.toDataURL() }))
+  }
+
+  /**
+   * The display under the cursor, frozen in the overlay at `route`; the dragged region at
+   * device pixels, or (when the overlay offers its window list) the picked window at full size.
+   */
+  async grab(route = '/snapshot-region'): Promise<RegionGrab> {
     if (this.busy) return { status: 'failed', error: 'busy' }
     this.busy = true
     try {
@@ -59,10 +108,25 @@ export class RegionSnapshots {
       const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
       const image = await this.still(display)
       if (!image || image.isEmpty()) return { status: 'failed', error: 'capture-failed' }
-      const outcome = await this.select(image, display)
+      const outcome = await this.select(image, display, route)
       if (outcome.kind === 'cancel') return { status: 'cancelled' }
+      if (outcome.kind === 'window') return await this.windowImage(outcome.sourceId)
       const cropped = this.crop(image, display, outcome.rect)
-      if (!cropped) return { status: 'cancelled' }
+      return cropped ? { status: 'ok', image: cropped, mode: 'region', sourceName: null } : { status: 'cancelled' }
+    } catch (err) {
+      log('warn', 'snapshot-region:grab-failed', { err })
+      return { status: 'failed', error: 'capture-failed' }
+    } finally {
+      this.busy = false
+    }
+  }
+
+  async take(noteId: string): Promise<BubbleSnapshotResult> {
+    try {
+      const grabbed = await this.grab()
+      if (grabbed.status === 'cancelled') return { status: 'cancelled' }
+      if (grabbed.status === 'failed') return { status: 'failed', error: grabbed.error }
+      const cropped = grabbed.image
       const png = cropped.toPNG()
       await clipboard
         .write([new ClipboardItem({ 'image/png': new Blob([new Uint8Array(png)], { type: 'image/png' }) })])
@@ -82,9 +146,19 @@ export class RegionSnapshots {
     } catch (err) {
       log('warn', 'bubble:snapshot-failed', { err })
       return { status: 'failed', error: 'capture-failed' }
-    } finally {
-      this.busy = false
     }
+  }
+
+  /** The window at full size: its thumbnail at the largest display's device size. */
+  private async windowImage(sourceId: string): Promise<RegionGrab> {
+    const largest = screen.getAllDisplays().reduce(
+      (m, d) => ({ width: Math.max(m.width, Math.round(d.size.width * d.scaleFactor)), height: Math.max(m.height, Math.round(d.size.height * d.scaleFactor)) }),
+      { width: 0, height: 0 }
+    )
+    const sources = await desktopCapturer.getSources({ types: ['window'], thumbnailSize: largest, fetchWindowIcons: false })
+    const match = sources.find((s) => s.id === sourceId)
+    if (!match || match.thumbnail.isEmpty()) return { status: 'failed', error: 'capture-failed' }
+    return { status: 'ok', image: match.thumbnail, mode: 'window', sourceName: match.name || null }
   }
 
   private async still(display: Display): Promise<NativeImage | null> {
@@ -94,7 +168,7 @@ export class RegionSnapshots {
     return match?.thumbnail ?? null
   }
 
-  private select(image: NativeImage, display: Display): Promise<Outcome> {
+  private select(image: NativeImage, display: Display, route: string): Promise<Outcome> {
     return new Promise<Outcome>((resolve) => {
       let settled = false
       const timer = setTimeout(() => settle({ kind: 'cancel' }), L.regionTimeoutMs)
@@ -111,7 +185,7 @@ export class RegionSnapshots {
       this.pending = { image, display, settle }
       const w = this.ctx.windows.createSecondary({
         kind: 'snapshot-region',
-        route: '/snapshot-region',
+        route,
         title: 'Snapshot',
         ...display.bounds,
         frame: false,

@@ -1,35 +1,54 @@
 // SPDX-License-Identifier: Apache-2.0
-// registerBubble(): the floating live-meeting pill and its panels, and the `bubble:*` IPC;
-// every window comes from `ctx.windows.createSecondary`.
+// registerBubble(): the floating live-meeting pill, its cards and its panels, and the
+// `bubble:*` IPC; every window comes from `ctx.windows.createSecondary`.
 //
 // - Shows (inactive, never focused) while transcribing and the main window is not in
 //   front, unless "Live meeting indicator" is off (`bubble.blocked`); hides when the
-//   main window gains focus or the meeting ends.
-// - Hover: main polls the cursor every 100 ms while the bubble is visible; the
-//   transcript panel opens after 150 ms and closes 100 ms after the hover ends.
-// - Drag: main moves the window with the cursor every 16 ms between drag-start and
-//   drag-end; the renderer applies the 3 px click threshold.
-// - The position lives in the main-only setting `bubble.position` (per device).
+//   main window gains focus or the meeting ends. The off-the-record card shows it even
+//   over a focused main window, unless that window shows the very note.
+// - Cards (the inactivity warning, the screen-snapshot notices, off the record) render
+//   inside the bubble window. The classic pill window grows to hold the card beside the
+//   pill, the pill keeping its place on screen; it ignores the mouse outside the two.
+//   No hover panel opens while a card shows.
+// - Classic hover: main polls the cursor every 100 ms while the bubble is visible; the
+//   transcript panel window opens after 150 ms and closes 100 ms after the hover ends.
+// - Classic drag: main moves the window with the cursor every 16 ms between drag-start
+//   and drag-end; the renderer applies the 3 px click threshold.
+// - The pill's position lives in the main-only setting `bubble.position` (per device):
+//   always the pill's bounds, never the grown window's.
+// - Labs `bubble.dock` turns the window into a strip on a display edge (dock.ts);
+//   switching it while the bubble shows rebuilds the bubble in the new mode.
 
 import { app, ipcMain, screen, type BrowserWindow, type Point, type Rectangle, type WebContents } from 'electron'
 import type { InvokeChannel, InvokeRes, PushChannel, SendChannel, SendPayload } from '@shared/ipc'
-import type { BubbleDocument, BubblePosition } from '@shared/types/bubble'
-import { BUBBLE_SIZE } from '@shared/types/bubble'
+import type {
+  BubbleDockAnchor,
+  BubbleDockRect,
+  BubbleDocument,
+  BubbleLayout,
+  BubblePanelEdge,
+  BubblePanelSize,
+  BubblePosition
+} from '@shared/types/bubble'
+import { BUBBLE_DOCK, BUBBLE_SIZE } from '@shared/types/bubble'
 import { BUBBLE_SNAPSHOT_LIMITS } from '@shared/types/snapshots'
 import type { MainContext } from '../context'
 import { log } from '../log'
+import { BubbleDock } from './dock'
 import { bubbleHub } from './hub'
 import { keepTransparent, reapplyTransparent, watchMainWindow } from './main-window'
 import {
+  cardBounds,
   clampToDisplay,
   contains,
   currentPillHeight,
   defaultBounds,
   displayOf,
-  inactivityBounds,
   panelBounds,
+  relative,
   restoredBounds,
-  setPillHeight
+  setPillHeight,
+  union
 } from './position'
 
 const HOVER_POLL_MS = 100
@@ -37,6 +56,8 @@ const PANEL_OPEN_DELAY_MS = 150
 const PANEL_CLOSE_DELAY_MS = 100
 const DRAG_FOLLOW_MS = 16
 const SAVE_THROTTLE_MS = 250
+const MAX_DOCK_RECTS = 16
+const PANEL_EDGES: readonly BubblePanelEdge[] = ['top', 'bottom', 'outer', 'top-outer', 'bottom-outer']
 
 /** A light shape check: the main window's renderer is trusted, but its payload is still rebuilt. */
 function parseDocument(raw: unknown): BubbleDocument | null | undefined {
@@ -62,11 +83,28 @@ function parseDocument(raw: unknown): BubbleDocument | null | undefined {
 }
 
 /**
- * The bubble's bounds at its fixed size. On fractional display scales Windows reports a
+ * The pill's bounds at its fixed size. On fractional display scales Windows reports a
  * pixel more than was set, and feeding that back in would grow the pill on every move.
  */
 function sized(r: Rectangle): Rectangle {
   return { x: r.x, y: r.y, width: BUBBLE_SIZE.width, height: currentPillHeight() }
+}
+
+const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
+
+/** The renderer's rectangles, rebuilt; anything malformed drops the report. */
+function parseRects(raw: unknown): BubbleDockRect[] | null {
+  const list = (raw as { rects?: unknown } | null)?.rects
+  if (!Array.isArray(list) || list.length > MAX_DOCK_RECTS) return null
+  const out: BubbleDockRect[] = []
+  for (const r of list) {
+    const o = r as Record<string, unknown> | null
+    if (!o || !finite(o['x']) || !finite(o['y']) || !finite(o['width']) || !finite(o['height'])) return null
+    const part = o['part']
+    if (part !== 'pill' && part !== 'panel' && part !== 'card') return null
+    out.push({ x: o['x'], y: o['y'], width: Math.max(0, o['width']), height: Math.max(0, o['height']), part })
+  }
+  return out
 }
 
 const SIDE_WINDOW = {
@@ -86,12 +124,18 @@ const SIDE_WINDOW = {
 export function registerBubble(ctx: MainContext): void {
   let doc: BubbleDocument | null = null
   let blocked = false
+  let docked = false
   let visible = false
   let hovered = false
   let bubble: BrowserWindow | null = null
   let panel: BrowserWindow | null = null
-  let inactivity: BrowserWindow | null = null
   let mainWin: BrowserWindow | null = null
+  /** The classic pill's on-screen bounds; the window is these, or these and a card. */
+  let pill: Rectangle | null = null
+  /** The card's on-screen bounds while one shows in the classic window. */
+  let card: Rectangle | null = null
+  /** The classic window takes the mouse only over the pill and the card; null = unknown. */
+  let ignoring: boolean | null = null
   /** The saved position is used once per session. */
   let restoreTried = false
   /** The bubble has been placed at least once this session. */
@@ -101,32 +145,54 @@ export function registerBubble(ctx: MainContext): void {
   let panelOpenTimer: ReturnType<typeof setTimeout> | null = null
   let panelCloseTimer: ReturnType<typeof setTimeout> | null = null
   let drag: { timer: ReturnType<typeof setInterval>; dx: number; dy: number } | null = null
-  let saveTimer: ReturnType<typeof setTimeout> | null = null
-  let pendingSave: BubblePosition | null = null
-
-  void ctx.settings
-    .getAll()
-    .then((s) => {
-      blocked = s['bubble.blocked']
-      savedPosition = s['bubble.position']
-      applyPillHeight(s['bubbleSnapshots.enabled'])
-    })
-    .catch((err: unknown) => log('warn', 'bubble:settings-read-failed', { err }))
+  const saves = new Map<'bubble.position' | 'bubble.dockAnchor' | 'bubble.panelSize', { value: unknown; timer: ReturnType<typeof setTimeout> }>()
 
   const alive = (w: BrowserWindow | null): w is BrowserWindow => w !== null && !w.isDestroyed()
 
   const mainFocused = (): boolean =>
     alive(mainWin) && mainWin.isVisible() && !mainWin.isMinimized() && mainWin.isFocused()
 
-  /** The snapshot button makes the pill 130 px tall. */
+  /** Any card: the inactivity warning, a snapshot notice, or the off-the-record prompt. */
+  const cardWanted = (): boolean => doc?.inactivity != null || bubbleHub.snapshotNotice || bubbleHub.offRecord !== null
+
+  /** The off-the-record card shows the bubble over everything but its own note. */
+  const offRecordForced = (): boolean => {
+    const o = bubbleHub.offRecord
+    return o !== null && ctx.ui.viewingNoteId() !== o.noteId
+  }
+
+  const dock = new BubbleDock({
+    window: () => (alive(bubble) ? bubble : null),
+    visible: () => visible && docked,
+    cardUp: () => visible && cardWanted(),
+    hovered: (h) => {
+      hovered = h
+      pushHover()
+    },
+    saveAnchor: (a) => scheduleSave('bubble.dockAnchor', a),
+    savePanel: (p) => scheduleSave('bubble.panelSize', p)
+  })
+
+  void ctx.settings
+    .getAll()
+    .then((s) => {
+      blocked = s['bubble.blocked']
+      savedPosition = s['bubble.position']
+      dock.restore(s['bubble.dockAnchor'], s['bubble.panelSize'])
+      applyPillHeight(s['bubbleSnapshots.enabled'])
+      if (s['bubble.dock'] !== docked) rebuild(s['bubble.dock'])
+    })
+    .catch((err: unknown) => log('warn', 'bubble:settings-read-failed', { err }))
+
+  /** The snapshot button makes the classic pill 130 px tall. */
   function applyPillHeight(snapshots: boolean): void {
     const h = snapshots ? BUBBLE_SNAPSHOT_LIMITS.pillHeight : BUBBLE_SIZE.height
     if (h === currentPillHeight()) return
     setPillHeight(h)
-    if (alive(bubble)) {
-      bubble.setBounds(clampToDisplay(sized(bubble.getBounds())))
-      if (alive(panel) && panel.isVisible()) panel.setBounds(panelBounds(bubble.getBounds()))
-      if (alive(inactivity) && inactivity.isVisible()) inactivity.setBounds(inactivityBounds(bubble.getBounds()))
+    if (pill && !docked) {
+      pill = clampToDisplay(sized(pill))
+      applyClassicBounds()
+      if (alive(panel) && panel.isVisible()) panel.setBounds(panelBounds(pill))
     }
   }
 
@@ -147,7 +213,7 @@ export function registerBubble(ctx: MainContext): void {
   }
 
   function pushDocument(): void {
-    for (const w of [bubble, panel, inactivity]) {
+    for (const w of [bubble, panel]) {
       sendTo(w, () => w?.webContents.send('bubble:note' satisfies PushChannel, doc))
     }
     // The captions window follows the same document (its status line and title).
@@ -158,19 +224,24 @@ export function registerBubble(ctx: MainContext): void {
     bubbleHub.emit('document', doc)
   }
 
+  function pushOffRecord(): void {
+    sendTo(bubble, () => bubble?.webContents.send('bubble:off-record' satisfies PushChannel, bubbleHub.offRecord))
+  }
+
   // ---------- windows ----------
 
   function ensureBubble(): BrowserWindow {
     if (alive(bubble)) return bubble
+    const size = docked ? BUBBLE_DOCK.canvas : { width: BUBBLE_SIZE.width, height: currentPillHeight() }
     const win = ctx.windows.createSecondary({
       kind: 'bubble',
       route: '/bubble',
       title: 'Meeting bubble',
-      width: BUBBLE_SIZE.width,
-      height: currentPillHeight(),
+      width: size.width,
+      height: size.height,
       ...SIDE_WINDOW,
       roundedCorners: false,
-      movable: true,
+      movable: !docked,
       focusable: false
     })
     keepTransparent(win)
@@ -178,15 +249,19 @@ export function registerBubble(ctx: MainContext): void {
     win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
     if (process.platform === 'darwin') win.setHiddenInMissionControl(true)
     win.on('closed', () => {
-      flushSave()
-      if (bubble === win) bubble = null
+      flushSaves()
+      if (bubble === win) {
+        bubble = null
+        visible = false
+        stopHover()
+        stopDrag()
+        dock.hide()
+      }
       if (bubbleHub.bubble === win) bubbleHub.bubble = null
-      visible = false
-      stopHover()
-      stopDrag()
     })
     bubble = win
     bubbleHub.bubble = win
+    ignoring = null
     return win
   }
 
@@ -212,38 +287,36 @@ export function registerBubble(ctx: MainContext): void {
     return win
   }
 
-  function ensureInactivity(): BrowserWindow {
-    if (alive(inactivity)) return inactivity
-    const win = ctx.windows.createSecondary({
-      kind: 'bubble-inactivity',
-      route: '/bubble-inactivity',
-      title: 'Are you still there?',
-      width: 336,
-      height: 196,
-      ...SIDE_WINDOW,
-      movable: false
-    })
-    keepTransparent(win)
-    win.setAlwaysOnTop(true, 'screen-saver')
-    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
-    if (process.platform === 'darwin') win.setHiddenInMissionControl(true)
-    win.on('closed', () => {
-      if (inactivity === win) inactivity = null
-    })
-    inactivity = win
-    return win
+  // ---------- the classic window and its card ----------
+
+  /** The window holds the pill, and the card beside it while one shows. */
+  function applyClassicBounds(): void {
+    if (!alive(bubble) || !pill || docked) return
+    card = visible && cardWanted() ? cardBounds(pill) : null
+    const frame = card ? union(pill, card) : pill
+    const layout: BubbleLayout = { pill: relative(pill, frame), card: card ? relative(card, frame) : null }
+    sendTo(bubble, () => bubble?.webContents.send('bubble:layout' satisfies PushChannel, layout))
+    bubble.setBounds(frame)
+    if (!card) setIgnore(false)
+  }
+
+  function setIgnore(ignore: boolean): void {
+    if (!alive(bubble) || ignore === ignoring) return
+    ignoring = ignore
+    bubble.setIgnoreMouseEvents(ignore)
   }
 
   // ---------- show and hide ----------
 
   /**
-   * Transcribing is the only reason to show. An inactivity warning overrides
-   * "Live meeting indicator" off: it is the only surface the warning has while
-   * Notula is in the background.
+   * Transcribing is the reason to show. An inactivity warning overrides "Live meeting
+   * indicator" off: it is the only surface the warning has while Notula is in the
+   * background. The off-the-record card shows the bubble on its own.
    */
-  const shouldShow = (): boolean => ctx.capture.isCapturing() && (!blocked || doc?.inactivity != null)
+  const shouldShow = (): boolean =>
+    offRecordForced() || (ctx.capture.isCapturing() && (!blocked || doc?.inactivity != null))
 
-  function targetBounds(win: BrowserWindow): Rectangle {
+  function targetPill(): Rectangle {
     if (!restoreTried) {
       restoreTried = true
       const restored = restoredBounds(savedPosition)
@@ -251,24 +324,30 @@ export function registerBubble(ctx: MainContext): void {
     }
     // The display nearest the main window, else the primary one.
     const display = alive(mainWin) ? displayOf(mainWin.getBounds()) : screen.getPrimaryDisplay()
-    const current = sized(win.getBounds())
-    if (current.width > 0 && displayOf(current).id === display.id && visibleOnce) return clampToDisplay(current)
+    if (pill && displayOf(pill).id === display.id && visibleOnce) return clampToDisplay(sized(pill))
     return defaultBounds(display)
   }
 
   function show(why: string): void {
     if (!shouldShow() || visible) return
     const win = ensureBubble()
-    win.setBounds(targetBounds(win))
-    visibleOnce = true
-    reapplyTransparent(win)
-    win.setIgnoreMouseEvents(false)
-    win.showInactive()
     visible = true
-    log('debug', 'bubble:show', { why })
+    reapplyTransparent(win)
+    if (docked) {
+      dock.show()
+    } else {
+      pill = targetPill()
+      ignoring = null
+      applyClassicBounds()
+      setIgnore(false)
+    }
+    visibleOnce = true
+    win.showInactive()
+    log('debug', 'bubble:show', { why, docked })
     pushVisible()
-    startHover()
-    syncInactivityWindow()
+    pushOffRecord()
+    if (!docked) startHover()
+    syncCards()
   }
 
   function hide(why: string): void {
@@ -276,29 +355,49 @@ export function registerBubble(ctx: MainContext): void {
     visible = false
     stopDrag()
     stopHover()
+    dock.hide()
     if (hovered) {
       hovered = false
       pushHover()
     }
     closePanel()
-    if (alive(inactivity)) inactivity.hide()
     if (alive(bubble)) {
       bubble.setIgnoreMouseEvents(true)
+      ignoring = true
       bubble.hide()
     }
+    card = null
     log('debug', 'bubble:hide', { why })
     pushVisible()
   }
 
+  /** Shows or hides for the current state: the main window's focus, capture, cards. */
+  function reconsider(why: string): void {
+    if (!shouldShow()) hide(why)
+    else if (offRecordForced() || !mainFocused()) show(why)
+    else hide(why)
+  }
+
   function destroyAll(): void {
     hide('teardown')
-    for (const w of [panel, inactivity, bubble]) if (alive(w)) w.destroy()
+    for (const w of [panel, bubble]) if (alive(w)) w.destroy()
     panel = null
-    inactivity = null
     bubble = null
   }
 
-  // ---------- hover and the transcript panel ----------
+  /** `bubble.dock` changed: the bubble comes back in the new mode. */
+  function rebuild(next: boolean): void {
+    const was = visible
+    hide('mode-change')
+    for (const w of [panel, bubble]) if (alive(w)) w.destroy()
+    panel = null
+    bubble = null
+    docked = next
+    log('info', 'bubble:mode', { docked })
+    if (was) show('mode-change')
+  }
+
+  // ---------- classic hover and the transcript panel ----------
 
   function startHover(): void {
     if (hoverTimer) return
@@ -312,7 +411,7 @@ export function registerBubble(ctx: MainContext): void {
   }
 
   function pollHover(): void {
-    if (!visible || !alive(bubble)) return
+    if (!visible || !alive(bubble) || !pill || docked) return
     let p: Point
     try {
       p = screen.getCursorScreenPoint()
@@ -320,8 +419,10 @@ export function registerBubble(ctx: MainContext): void {
       log('warn', 'bubble:hovered-read-failed', { err })
       return
     }
+    // With a card up, the transparent rest of the grown window lets the mouse through.
+    if (card && !drag) setIgnore(!contains(pill, p) && !contains(card, p))
     // The open panel counts as part of the hover, so the cursor can move into it.
-    const over = contains(bubble.getBounds(), p) || (alive(panel) && panel.isVisible() && contains(panel.getBounds(), p))
+    const over = contains(pill, p) || (alive(panel) && panel.isVisible() && contains(panel.getBounds(), p))
     if (over === hovered) return
     hovered = over
     pushHover()
@@ -342,10 +443,10 @@ export function registerBubble(ctx: MainContext): void {
 
   function openPanel(): void {
     panelOpenTimer = null
-    // Never during a drag or an inactivity warning.
-    if (!visible || !hovered || drag || doc?.inactivity || bubbleHub.snapshotNotice || !alive(bubble)) return
+    // Never during a drag or while a card shows.
+    if (!visible || !hovered || drag || cardWanted() || !pill || docked) return
     const win = ensurePanel()
-    win.setBounds(panelBounds(bubble.getBounds()))
+    win.setBounds(panelBounds(pill))
     reapplyTransparent(win)
     if (!win.isVisible()) win.showInactive()
   }
@@ -355,39 +456,36 @@ export function registerBubble(ctx: MainContext): void {
     if (alive(panel) && panel.isVisible()) panel.hide()
   }
 
-  // ---------- inactivity window ----------
+  // ---------- cards ----------
 
-  function syncInactivityWindow(): void {
-    // The same side card carries the screen-snapshot notices when there is no warning.
-    const want = visible && (doc?.inactivity != null || bubbleHub.snapshotNotice) && alive(bubble)
-    if (!want) {
-      if (alive(inactivity) && inactivity.isVisible()) inactivity.hide()
-      return
+  function syncCards(): void {
+    if (!visible) return
+    if (cardWanted()) {
+      clearPanelTimers()
+      closePanel()
     }
-    closePanel()
-    const win = ensureInactivity()
-    if (alive(bubble)) win.setBounds(inactivityBounds(bubble.getBounds()))
-    reapplyTransparent(win)
-    if (!win.isVisible()) win.showInactive()
+    if (docked) dock.syncCard()
+    else applyClassicBounds()
   }
 
-  // ---------- drag ----------
+  // ---------- classic drag ----------
 
   function startDrag(): void {
-    if (!alive(bubble) || drag) return
+    if (!alive(bubble) || !pill || drag || docked) return
     const c = screen.getCursorScreenPoint()
-    const b = bubble.getBounds()
+    const from = pill
     clearPanelTimers()
     closePanel()
+    setIgnore(false)
     drag = {
-      dx: c.x - b.x,
-      dy: c.y - b.y,
+      dx: c.x - from.x,
+      dy: c.y - from.y,
       timer: setInterval(() => {
         if (!alive(bubble) || !drag) return
         const p = screen.getCursorScreenPoint()
         // setBounds at the fixed size: setPosition grows the window on fractional scales.
-        bubble.setBounds(sized({ x: p.x - drag.dx, y: p.y - drag.dy, width: 0, height: 0 }))
-        if (alive(inactivity) && inactivity.isVisible()) inactivity.setBounds(inactivityBounds(bubble.getBounds()))
+        pill = sized({ x: p.x - drag.dx, y: p.y - drag.dy, width: 0, height: 0 })
+        applyClassicBounds()
       }, DRAG_FOLLOW_MS)
     }
   }
@@ -400,30 +498,41 @@ export function registerBubble(ctx: MainContext): void {
   }
 
   function endDrag(): void {
-    if (!stopDrag() || !alive(bubble)) return
-    const b = clampToDisplay(sized(bubble.getBounds()))
-    bubble.setBounds(b)
-    if (alive(inactivity) && inactivity.isVisible()) inactivity.setBounds(inactivityBounds(b))
-    scheduleSave({ bounds: { x: b.x, y: b.y, width: b.width, height: b.height }, display: displayOf(b).bounds })
+    if (!stopDrag() || !alive(bubble) || !pill) return
+    const b = clampToDisplay(sized(pill))
+    pill = b
+    applyClassicBounds()
+    scheduleSave('bubble.position', { bounds: { x: b.x, y: b.y, width: b.width, height: b.height }, display: displayOf(b).bounds })
     // Re-send the hover state after the drag.
     pollHover()
     pushHover()
   }
 
-  function scheduleSave(p: BubblePosition): void {
-    pendingSave = p
-    savedPosition = p
-    if (saveTimer) return
-    saveTimer = setTimeout(flushSave, SAVE_THROTTLE_MS)
+  // ---------- saves (250 ms, per key) ----------
+
+  function scheduleSave(key: 'bubble.position' | 'bubble.dockAnchor' | 'bubble.panelSize', value: BubblePosition | BubbleDockAnchor | BubblePanelSize | null): void {
+    if (key === 'bubble.position') savedPosition = value as BubblePosition
+    const pending = saves.get(key)
+    if (pending) {
+      pending.value = value
+      return
+    }
+    saves.set(key, { value, timer: setTimeout(() => flushSave(key), SAVE_THROTTLE_MS) })
   }
 
-  function flushSave(): void {
-    if (saveTimer) clearTimeout(saveTimer)
-    saveTimer = null
-    const p = pendingSave
-    pendingSave = null
-    if (!p) return
-    void ctx.settings.set('bubble.position', p).catch((err: unknown) => log('warn', 'bubble:position-save-failed', { err }))
+  function flushSave(key: 'bubble.position' | 'bubble.dockAnchor' | 'bubble.panelSize'): void {
+    const pending = saves.get(key)
+    if (!pending) return
+    clearTimeout(pending.timer)
+    saves.delete(key)
+    const done = (err: unknown): void => log('warn', 'bubble:save-failed', { key, err })
+    if (key === 'bubble.position') void ctx.settings.set(key, pending.value as BubblePosition).catch(done)
+    else if (key === 'bubble.dockAnchor') void ctx.settings.set(key, pending.value as BubbleDockAnchor).catch(done)
+    else void ctx.settings.set(key, pending.value as BubblePanelSize | null).catch(done)
+  }
+
+  function flushSaves(): void {
+    for (const key of [...saves.keys()]) flushSave(key)
   }
 
   // ---------- triggers ----------
@@ -431,13 +540,10 @@ export function registerBubble(ctx: MainContext): void {
   watchMainWindow(ctx, {
     attached: (win) => {
       mainWin = win
-      const onAway = (why: string) => (): void => {
-        if (!mainFocused()) show(why)
-      }
-      win.on('blur', onAway('main-blur'))
-      win.on('hide', onAway('main-hide'))
-      win.on('minimize', onAway('main-minimize'))
-      win.on('focus', () => hide('main-focus'))
+      win.on('blur', () => reconsider('main-blur'))
+      win.on('hide', () => reconsider('main-hide'))
+      win.on('minimize', () => reconsider('main-minimize'))
+      win.on('focus', () => reconsider('main-focus'))
     },
     closed: () => {
       mainWin = null
@@ -446,26 +552,33 @@ export function registerBubble(ctx: MainContext): void {
   })
 
   // Capture starting while the main window is not in front shows the bubble.
-  ctx.bus.on('capture:started', () => {
-    if (!mainFocused()) show('capture-started')
+  ctx.bus.on('capture:started', () => reconsider('capture-started'))
+  ctx.bus.on('capture:stopped', () => reconsider('capture-stopped'))
+  ctx.bus.on('ui:viewing-note', () => {
+    if (bubbleHub.offRecord) reconsider('viewing-note')
   })
-  ctx.bus.on('capture:stopped', () => {
-    if (!ctx.capture.isCapturing()) hide('capture-stopped')
+  bubbleHub.on('side-card', () => {
+    pushOffRecord()
+    reconsider('side-card')
+    syncCards()
   })
-  bubbleHub.on('side-card', () => syncInactivityWindow())
   ctx.bus.on('settings:changed', ({ keys, settings }) => {
     if (keys.includes('bubbleSnapshots.enabled')) applyPillHeight(settings['bubbleSnapshots.enabled'])
+    if (keys.includes('bubble.dock') && settings['bubble.dock'] !== docked) rebuild(settings['bubble.dock'])
     if (!keys.includes('bubble.blocked')) return
     blocked = settings['bubble.blocked']
-    if (blocked && !doc?.inactivity) hide('blocked')
-    else if (!mainFocused()) show('unblocked')
+    reconsider(blocked ? 'blocked' : 'unblocked')
   })
 
   const reclamp = (): void => {
-    if (!alive(bubble)) return
-    bubble.setBounds(clampToDisplay(sized(bubble.getBounds())))
-    if (alive(panel) && panel.isVisible()) panel.setBounds(panelBounds(bubble.getBounds()))
-    if (alive(inactivity) && inactivity.isVisible()) inactivity.setBounds(inactivityBounds(bubble.getBounds()))
+    if (docked) {
+      dock.reclamp()
+      return
+    }
+    if (!alive(bubble) || !pill) return
+    pill = clampToDisplay(sized(pill))
+    applyClassicBounds()
+    if (alive(panel) && panel.isVisible()) panel.setBounds(panelBounds(pill))
   }
   screen.on('display-added', reclamp)
   screen.on('display-removed', reclamp)
@@ -476,11 +589,17 @@ export function registerBubble(ctx: MainContext): void {
 
   const fromBubble = (wc: WebContents): boolean => alive(bubble) && bubble.webContents.id === wc.id
 
-  ipcMain.handle('bubble:get-state' satisfies InvokeChannel, (): InvokeRes<'bubble:get-state'> => ({
-    visible,
-    hovered,
-    document: doc
-  }))
+  ipcMain.handle('bubble:get-state' satisfies InvokeChannel, (): InvokeRes<'bubble:get-state'> => {
+    const frame = card && pill ? union(pill, card) : pill
+    return {
+      visible,
+      hovered,
+      document: doc,
+      layout: !docked && pill && frame ? { pill: relative(pill, frame), card: card ? relative(card, frame) : null } : null,
+      docked: docked ? dock.layout() : null,
+      offRecord: bubbleHub.offRecord
+    }
+  })
 
   ipcMain.on('bubble:set-document' satisfies SendChannel, (event, raw: SendPayload<'bubble:set-document'>) => {
     // Only the main window computes the document.
@@ -492,15 +611,8 @@ export function registerBubble(ctx: MainContext): void {
     }
     doc = next
     pushDocument()
-    if (!doc) {
-      if (!ctx.capture.isCapturing()) hide('document-cleared')
-    } else if (blocked && !doc.inactivity) {
-      // Shown only for an inactivity warning, which has ended.
-      hide('blocked')
-    } else if (!mainFocused()) {
-      show('document')
-    }
-    syncInactivityWindow()
+    reconsider('document')
+    syncCards()
   })
 
   ipcMain.on('bubble:drag-start' satisfies SendChannel, (event) => {
@@ -509,6 +621,34 @@ export function registerBubble(ctx: MainContext): void {
 
   ipcMain.on('bubble:drag-end' satisfies SendChannel, (event) => {
     if (fromBubble(event.sender)) endDrag()
+  })
+
+  ipcMain.on('bubble:dock-region' satisfies SendChannel, (event, raw: SendPayload<'bubble:dock-region'>) => {
+    if (!fromBubble(event.sender) || !docked) return
+    const rects = parseRects(raw)
+    if (rects) dock.setRegion(rects)
+  })
+
+  ipcMain.on('bubble:dock-extent' satisfies SendChannel, (event, raw: SendPayload<'bubble:dock-extent'>) => {
+    if (!fromBubble(event.sender) || !docked) return
+    const mode = raw?.mode
+    if ((mode !== 'collapsed' && mode !== 'panel' && mode !== 'held') || !finite(raw.width) || !finite(raw.below)) return
+    dock.setExtent({ mode, width: Math.max(0, raw.width), below: Math.max(0, raw.below) })
+  })
+
+  ipcMain.on('bubble:dock-move' satisfies SendChannel, (event, raw: SendPayload<'bubble:dock-move'>) => {
+    if (!fromBubble(event.sender) || !docked) return
+    const phase = raw?.phase
+    if ((phase !== 'start' && phase !== 'move' && phase !== 'end') || !finite(raw.dy)) return
+    dock.moveEvent(phase, raw.dy)
+  })
+
+  ipcMain.on('bubble:panel-resize' satisfies SendChannel, (event, raw: SendPayload<'bubble:panel-resize'>) => {
+    if (!fromBubble(event.sender) || !docked) return
+    const phase = raw?.phase
+    if (phase !== 'start' && phase !== 'move' && phase !== 'end' && phase !== 'reset') return
+    if (!PANEL_EDGES.includes(raw.edge) || !finite(raw.dx) || !finite(raw.dy)) return
+    dock.resizeEvent(phase, raw.edge, raw.dx, raw.dy)
   })
 
   ipcMain.on('bubble:open-note' satisfies SendChannel, (event, raw: SendPayload<'bubble:open-note'>) => {

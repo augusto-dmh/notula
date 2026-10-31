@@ -7,7 +7,7 @@
 import { useEffect } from 'react'
 import './secondary.css'
 
-export function useSecondaryWindow(kind: 'bubble' | 'bubble-transcript' | 'bubble-inactivity' | 'notification'): void {
+export function useSecondaryWindow(kind: 'bubble' | 'bubble-transcript' | 'notification'): void {
   useEffect(() => {
     const html = document.documentElement
     html.classList.add('nt-secondary', `nt-secondary--${kind}`)

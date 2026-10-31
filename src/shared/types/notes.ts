@@ -2,6 +2,7 @@
 // Notes (the `documents` table) and the requests around them.
 // Stored records use the SQL column names as they are (snake_case).
 
+import type { AttachmentCapture } from './attachments'
 import type { IsoTime } from './common'
 import type { SourceNoteRequest } from './sources'
 
@@ -335,6 +336,8 @@ export interface NoteAttachment {
   mime_type: string
   byte_size: number
   screen_capture_info?: ScreenShareContext
+  /** A screenshot from the screen-capture shortcut. */
+  capture?: AttachmentCapture
 }
 
 /** A link from the meeting invite. */

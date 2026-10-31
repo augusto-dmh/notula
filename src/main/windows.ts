@@ -25,7 +25,8 @@ export const CONTENT_SECONDARY_KINDS: readonly SecondaryKind[] = [
   'snapshot-picker',
   'meeting-dock',
   'live-context',
-  'reminder-cards'
+  'reminder-cards',
+  'screen-capture'
 ]
 
 export interface Windows extends WindowsApi {

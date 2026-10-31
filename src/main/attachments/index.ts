@@ -115,7 +115,8 @@ function noteRecord(info: AttachmentInfo): NoteAttachment {
     height: info.height ?? 0,
     mime_type: info.mime_type,
     byte_size: info.byte_size,
-    ...(info.screen_capture_info ? { screen_capture_info: info.screen_capture_info } : {})
+    ...(info.screen_capture_info ? { screen_capture_info: info.screen_capture_info } : {}),
+    ...(info.capture ? { capture: info.capture } : {})
   }
 }
 
@@ -147,7 +148,13 @@ export function registerAttachments(ctx: MainContext): AttachmentsApi {
   async function storeNoteImage(
     noteId: string,
     image: { bytes: Buffer; mimeType: 'image/png' | 'image/jpeg'; fileName: string },
-    opts: { id?: string; screenShareContext?: NoteAttachment['screen_capture_info'] | null; counted: boolean; maxSide: number }
+    opts: {
+      id?: string
+      screenShareContext?: NoteAttachment['screen_capture_info'] | null
+      capture?: NoteAttachment['capture'] | null
+      counted: boolean
+      maxSide: number
+    }
   ): Promise<AttachmentInfo> {
     const prepared = prepareImage(image.bytes, image.mimeType, opts.maxSide)
     return storage.createAttachment({
@@ -161,6 +168,7 @@ export function registerAttachments(ctx: MainContext): AttachmentsApi {
       height: prepared.height,
       status: 'ready',
       screen_capture_info: opts.screenShareContext ?? null,
+      capture: opts.capture ?? null,
       counted: opts.counted,
       bytes: prepared.bytes
     })
@@ -556,6 +564,7 @@ export function registerAttachments(ctx: MainContext): AttachmentsApi {
         {
           ...(opts?.id ? { id: opts.id } : {}),
           screenShareContext: opts?.screenShareContext ?? null,
+          capture: opts?.capture ?? null,
           counted: opts?.countTowardLimit ?? true,
           maxSide: opts?.maxSide ?? ATTACHMENT_LIMITS.noteImageMaxSide
         }

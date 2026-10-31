@@ -30,8 +30,27 @@ export interface AttachmentInfo {
   token_estimate: number | null
   has_summary: boolean
   screen_capture_info: ScreenShareContext | null
+  capture: AttachmentCapture | null
+  /** A note image that counts toward the 10-image limit. */
+  counted: boolean
   created_at: IsoTime
 }
+
+/**
+ * A screenshot taken with the screen-capture shortcut. The images of one capture share
+ * `captured_at` and `note`. `source_app` and `source_title` name the app in front when the
+ * shortcut was pressed (or the window picked); no text is read from it.
+ */
+export interface AttachmentCapture {
+  captured_at: IsoTime
+  mode: 'region' | 'window'
+  /** The note typed in the capture panel; null without one. */
+  note: string | null
+  source_app: string | null
+  source_title: string | null
+}
+
+export const CAPTURE_NOTE_MAX = 2_000
 
 /** A refused file, with the copy to show, e.g. `Maximum of 10 attachments reached`. */
 export interface AttachmentRejection {

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // The note's image strip and viewer. Images load
 // through `attachments:read` and are shown from memory. The strip is hidden without
-// images; uploads in flight show their local preview and a spinner.
+// images; uploads in flight show their local preview and a spinner. A screenshot from the
+// screen-capture shortcut shows its time and its note as a caption.
 
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react'
 import { parseError } from '@shared/errors'
@@ -32,7 +33,19 @@ function IconTrashSmall({ size = 16 }: { size?: number }): JSX.Element {
 }
 
 function altFor(a: NoteAttachment): string {
+  if (a.capture) return a.capture.note?.trim() || 'Screenshot'
   return a.screen_capture_info?.description?.trim() || 'Uploaded image'
+}
+
+const CAPTURE_TIME = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+
+/** "<time> · <note>", or the time alone; null for an image without capture details. */
+function captureCaption(a: NoteAttachment): string | null {
+  if (!a.capture) return null
+  const at = Date.parse(a.capture.captured_at)
+  const when = Number.isNaN(at) ? null : CAPTURE_TIME.format(at)
+  const note = a.capture.note?.trim() || null
+  return [when, note].filter(Boolean).join(' · ') || null
 }
 
 async function copyImage(id: string): Promise<void> {
@@ -96,6 +109,11 @@ export function NoteImages({ noteId, attachments, editable }: { noteId: string; 
             <AttachmentImage attachmentId={a.id} alt={altFor(a)} className="att-thumb__img" />
           </button>
           {a.screen_capture_info ? <span className="att-thumb__badge">Snapshot</span> : null}
+          {captureCaption(a) ? (
+            <span className="att-thumb__caption" title={captureCaption(a) ?? undefined}>
+              {captureCaption(a)}
+            </span>
+          ) : null}
           {editable ? (
             <button type="button" className="att-thumb__remove" aria-label="Remove image" onClick={() => remove(a.id)}>
               <IconClose size={12} />
@@ -207,6 +225,8 @@ function ImageViewer({
         </div>
         {image.screen_capture_info?.description && image.screen_capture_info.model !== 'none' ? (
           <p className="att-viewer__caption">{image.screen_capture_info.description}</p>
+        ) : captureCaption(image) ? (
+          <p className="att-viewer__caption">{captureCaption(image)}</p>
         ) : null}
       </div>
     </div>

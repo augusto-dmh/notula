@@ -60,6 +60,7 @@ import type { DictationAttemptRow } from '../storage/api'
 import { RecognizerError, type SpeechRecognizer } from '../transcription/api'
 import { buildContextBlock, buildKeyterms } from './context'
 import { deliver } from './delivery'
+import { setDictationBusy } from './activity'
 import { Desk, type DeskContext } from './desk'
 import type { ChordEffect } from './chord-machine'
 import { DictationBar } from './dictation-bar'
@@ -233,6 +234,7 @@ export function registerDictation(ctx: MainContext): void {
     if (dismissTimer) clearTimeout(dismissTimer)
     dismissTimer = null
     state = { ready: false, handsFree: false, reason: null, type: null, ...next }
+    setDictationBusy(state.kind === 'recording' || state.kind === 'processing')
     pushState()
     const w = livePill()
     if (bar.enabled()) bar.refresh()

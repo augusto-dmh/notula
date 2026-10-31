@@ -1570,6 +1570,14 @@ CREATE INDEX mcp_token_usage_day_idx ON mcp_token_usage (day);
 ALTER TABLE mcp_server_tokens ADD install_target TEXT CHECK (install_target IN ('cursor', 'vscode'));
 `
 
+/**
+ * Version 18: screenshots from the screen-capture shortcut carry their capture details
+ * (time, mode, the typed note and the source app). Older rows stay null; nothing is backfilled.
+ */
+const ATTACHMENT_CAPTURE = `
+ALTER TABLE attachments ADD capture TEXT;
+`
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: BASELINE_VERSION, name: 'baseline', sql: BASELINE },
   { version: 9, name: 'sources-and-imports', sql: SOURCES_AND_IMPORTS },
@@ -1577,7 +1585,8 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 11, name: 'action-item-drafts', sql: ACTION_ITEM_DRAFTS },
   { version: 12, name: 'speaker-profiles', sql: SPEAKER_PROFILES },
   { version: 15, name: 'user-context-entries', sql: USER_CONTEXT_ENTRIES },
-  { version: 16, name: 'mcp-usage', sql: MCP_USAGE }
+  { version: 16, name: 'mcp-usage', sql: MCP_USAGE },
+  { version: 18, name: 'attachment-capture', sql: ATTACHMENT_CAPTURE }
 ]
 
 /**

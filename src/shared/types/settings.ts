@@ -18,7 +18,7 @@ import type {
 import type { LlmProviderId } from './enhance'
 import type { SalesforceOptions } from './integrations'
 import type { LabsSettingKey } from './labs'
-import type { BubblePosition } from './bubble'
+import type { BubbleDockAnchor, BubblePanelSize, BubblePosition } from './bubble'
 import type { CompanyFavorite } from './people'
 import type { PermissionRecord } from './permissions'
 import type { RecipeView } from './recipes'
@@ -389,6 +389,17 @@ export interface Settings {
   'notesImport.folderMode': ImportFolderMode
   /** Shown only with `sources.enabled`. */
   'notesImport.findSourcesAfter': boolean
+  // The meeting bubble's docked mode and screen capture (Labs)
+  /** Labs: the bubble as a tab on a display edge. */
+  'bubble.dock': boolean
+  /** Main-only, per device. */
+  'bubble.dockAnchor': BubbleDockAnchor | null
+  /** Main-only. null = the default size. */
+  'bubble.panelSize': BubblePanelSize | null
+  /** Labs (Windows and macOS). */
+  'screenCapture.enabled': boolean
+  /** null = `CommandOrControl+Shift+2` (see the shortcut registry). */
+  'screenCapture.shortcut': string | null
 }
 
 export type SettingKey = keyof Settings
@@ -615,7 +626,12 @@ export const DEFAULT_SETTINGS: Settings = {
   'sources.extension.captions': true,
   'sources.extension.coursePages': true,
   'notesImport.folderMode': 'mirror',
-  'notesImport.findSourcesAfter': true
+  'notesImport.findSourcesAfter': true,
+  'bubble.dock': false,
+  'bubble.dockAnchor': null,
+  'bubble.panelSize': null,
+  'screenCapture.enabled': false,
+  'screenCapture.shortcut': null
 }
 
 /** Every Labs row is a settings key (a compile-time check). */
@@ -669,7 +685,10 @@ export const MAIN_ONLY_SETTING_KEYS = [
   'sources.grantAsked',
   'sources.videosFolder',
   'sources.dismissedHints',
-  'sources.extension.enabled'
+  'sources.extension.enabled',
+  // The docked bubble's place and panel size
+  'bubble.dockAnchor',
+  'bubble.panelSize'
 ] as const satisfies readonly SettingKey[]
 
 export const PREFS_VERSION = 1

@@ -10,7 +10,7 @@
 
 import type { BrowserWindow, BrowserWindowConstructorOptions, NativeImage, WebContents } from 'electron'
 import type { SpeakerTurn } from '@shared/lib/speakers'
-import type { AttachmentInfo, AttachmentParentType } from '@shared/types/attachments'
+import type { AttachmentCapture, AttachmentInfo, AttachmentParentType } from '@shared/types/attachments'
 import type { CalendarGrant, CalendarSource } from '@shared/types/calendar'
 import type { AudioSource, IsoTime, StopReason } from '@shared/types/common'
 import type { ProtectedTarget } from '@shared/types/device-lock'
@@ -56,12 +56,12 @@ export interface SettingsApi {
  * The windows Notula draws besides the main window. Each loads the shared bundle
  * at its route: the meeting bubble and notifications; captions, demo, snapshot picker and
  * region, and screen-guide windows; the never-shown media worker; quick ask; the dictation
- * pill; the screen corner and window preview; and the assistant windows.
+ * pill; the screen corner and window preview; the assistant windows; and the
+ * screen-capture panel.
  */
 export type SecondaryKind =
   | 'bubble'
   | 'bubble-transcript'
-  | 'bubble-inactivity'
   | 'notification'
   | 'captions'
   | 'media-worker'
@@ -79,6 +79,8 @@ export type SecondaryKind =
   | 'meeting-dock'
   | 'live-context'
   | 'reminder-cards'
+  // The screen-capture panel (a content window)
+  | 'screen-capture'
 
 /**
  * `windows.createSecondary` options. `webPreferences` and `show` are the factory's:
@@ -313,6 +315,8 @@ export interface AttachmentsApi {
     opts?: {
       id?: string
       screenShareContext?: ScreenShareContext | null
+      /** A screenshot from the screen-capture shortcut. */
+      capture?: AttachmentCapture | null
       /** Default true. */
       countTowardLimit?: boolean
       /** Default 2,000. */

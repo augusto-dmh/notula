@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-// Bubble geometry: the default spot, the clamp, and where
-// the transcript panel and the inactivity window sit beside the pill. Pure functions
-// over Electron's `screen`, in DIPs.
+// Bubble geometry: the default spot, the clamp, where the transcript panel and a card sit
+// beside the pill, and the pill window grown to hold a card. Pure functions over Electron's
+// `screen`, in DIPs.
 
 import { screen, type Display, type Point, type Rectangle } from 'electron'
 import type { BubblePosition } from '@shared/types/bubble'
-import { BUBBLE_INACTIVITY_WIDTH, BUBBLE_PANEL_SIZE, BUBBLE_SIZE } from '@shared/types/bubble'
+import { BUBBLE_CARD_SIZE, BUBBLE_PANEL_SIZE, BUBBLE_SIZE } from '@shared/types/bubble'
 
 /** 130 px with the bubble snapshot button, else BUBBLE_SIZE.height. */
 let pillHeight: number = BUBBLE_SIZE.height
@@ -25,10 +25,9 @@ const DEFAULT_TOP_INSET = 37
 const PANEL_OVERLAP = 4
 const PANEL_SIDE_ROOM = 308
 const PANEL_RISE = 200
-/** The inactivity window keeps 24 px inside the screen. */
-const INACTIVITY_MARGIN = 24
-const INACTIVITY_GAP = 8
-export const INACTIVITY_HEIGHT = 196
+/** A card keeps 24 px inside the screen. */
+const CARD_MARGIN = 24
+const CARD_GAP = 8
 
 const clamp = (v: number, lo: number, hi: number): number => Math.min(Math.max(v, lo), Math.max(lo, hi))
 
@@ -36,7 +35,7 @@ export function contains(r: Rectangle, p: Point): boolean {
   return p.x >= r.x && p.x < r.x + r.width && p.y >= r.y && p.y < r.y + r.height
 }
 
-const sameRect = (a: Rectangle, b: Rectangle): boolean =>
+export const sameRect = (a: Rectangle, b: Rectangle): boolean =>
   a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
 
 function centre(r: Rectangle): Point {
@@ -91,18 +90,29 @@ export function panelBounds(bubble: Rectangle): Rectangle {
   }
 }
 
-/** Beside the bubble (left when it fits with the 24 px margin), centred on it, 24 px inside. */
-export function inactivityBounds(bubble: Rectangle): Rectangle {
-  const area = displayOf(bubble).workArea
-  const width = BUBBLE_INACTIVITY_WIDTH
-  const height = INACTIVITY_HEIGHT
-  const left = bubble.x - area.x >= width + INACTIVITY_MARGIN + INACTIVITY_GAP
-  const x = left ? bubble.x - width - INACTIVITY_GAP : bubble.x + bubble.width + INACTIVITY_GAP
-  const y = Math.round(bubble.y + bubble.height / 2 - height / 2)
+/** A card beside the pill (left when it fits with the 24 px margin), centred on it, 24 px inside. */
+export function cardBounds(pill: Rectangle): Rectangle {
+  const area = displayOf(pill).workArea
+  const { width, height } = BUBBLE_CARD_SIZE
+  const left = pill.x - area.x >= width + CARD_MARGIN + CARD_GAP
+  const x = left ? pill.x - width - CARD_GAP : pill.x + pill.width + CARD_GAP
+  const y = Math.round(pill.y + pill.height / 2 - height / 2)
   return {
-    x: clamp(x, area.x + INACTIVITY_MARGIN, area.x + area.width - width - INACTIVITY_MARGIN),
-    y: clamp(y, area.y + INACTIVITY_MARGIN, area.y + area.height - height - INACTIVITY_MARGIN),
+    x: clamp(x, area.x + CARD_MARGIN, area.x + area.width - width - CARD_MARGIN),
+    y: clamp(y, area.y + CARD_MARGIN, area.y + area.height - height - CARD_MARGIN),
     width,
     height
   }
+}
+
+/** The smallest rectangle holding both. */
+export function union(a: Rectangle, b: Rectangle): Rectangle {
+  const x = Math.min(a.x, b.x)
+  const y = Math.min(a.y, b.y)
+  return { x, y, width: Math.max(a.x + a.width, b.x + b.width) - x, height: Math.max(a.y + a.height, b.y + b.height) - y }
+}
+
+/** `r` relative to `origin`'s top-left. */
+export function relative(r: Rectangle, origin: Rectangle): Rectangle {
+  return { x: r.x - origin.x, y: r.y - origin.y, width: r.width, height: r.height }
 }

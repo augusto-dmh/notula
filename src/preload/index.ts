@@ -84,7 +84,39 @@ const api: NotulaApi = {
         ipcRenderer.removeListener('bubble:note' satisfies PushChannel, listener)
       }
     },
-    takeSnapshot: (req) => ipcRenderer.invoke('bubble:take-snapshot' satisfies InvokeChannel, req)
+    takeSnapshot: (req) => ipcRenderer.invoke('bubble:take-snapshot' satisfies InvokeChannel, req),
+    dockRegion: (p) => ipcRenderer.send('bubble:dock-region' satisfies SendChannel, p),
+    dockExtent: (p) => ipcRenderer.send('bubble:dock-extent' satisfies SendChannel, p),
+    dockMove: (p) => ipcRenderer.send('bubble:dock-move' satisfies SendChannel, p),
+    panelResize: (p) => ipcRenderer.send('bubble:panel-resize' satisfies SendChannel, p),
+    onDocked: (cb) => {
+      const listener = (_e: IpcRendererEvent, p: PushPayload<'bubble:docked'>): void => cb(p)
+      ipcRenderer.on('bubble:docked' satisfies PushChannel, listener)
+      return () => {
+        ipcRenderer.removeListener('bubble:docked' satisfies PushChannel, listener)
+      }
+    },
+    onEdgeCloseness: (cb) => {
+      const listener = (_e: IpcRendererEvent, p: PushPayload<'bubble:edge-closeness'>): void => cb(p)
+      ipcRenderer.on('bubble:edge-closeness' satisfies PushChannel, listener)
+      return () => {
+        ipcRenderer.removeListener('bubble:edge-closeness' satisfies PushChannel, listener)
+      }
+    },
+    onLayout: (cb) => {
+      const listener = (_e: IpcRendererEvent, p: PushPayload<'bubble:layout'>): void => cb(p)
+      ipcRenderer.on('bubble:layout' satisfies PushChannel, listener)
+      return () => {
+        ipcRenderer.removeListener('bubble:layout' satisfies PushChannel, listener)
+      }
+    },
+    onOffRecord: (cb) => {
+      const listener = (_e: IpcRendererEvent, p: PushPayload<'bubble:off-record'>): void => cb(p)
+      ipcRenderer.on('bubble:off-record' satisfies PushChannel, listener)
+      return () => {
+        ipcRenderer.removeListener('bubble:off-record' satisfies PushChannel, listener)
+      }
+    }
   },
   notify: {
     getPayload: () => ipcRenderer.invoke('notify:get-payload' satisfies InvokeChannel),
@@ -772,7 +804,9 @@ const api: NotulaApi = {
       return () => {
         ipcRenderer.removeListener('snapshot-region:image' satisfies PushChannel, listener)
       }
-    }
+    },
+    listWindows: () => ipcRenderer.invoke('snapshot-region:list-windows' satisfies InvokeChannel),
+    pickWindow: (p) => ipcRenderer.send('snapshot-region:pick-window' satisfies SendChannel, p)
   },
   screenGuide: {
     open: () => ipcRenderer.send('screen-guide:open' satisfies SendChannel),
@@ -1477,6 +1511,23 @@ const api: NotulaApi = {
       ipcRenderer.on('notes-import:changed' satisfies PushChannel, listener)
       return () => {
         ipcRenderer.removeListener('notes-import:changed' satisfies PushChannel, listener)
+      }
+    }
+  },
+
+  // ---------- screen capture and off the record ----------
+  screenCapture: {
+    getState: (req) => ipcRenderer.invoke('screen-capture:get-state' satisfies InvokeChannel, req),
+    take: (req) => ipcRenderer.invoke('screen-capture:take' satisfies InvokeChannel, req),
+    removeImage: (req) => ipcRenderer.invoke('screen-capture:remove-image' satisfies InvokeChannel, req),
+    save: (req) => ipcRenderer.invoke('screen-capture:save' satisfies InvokeChannel, req),
+    close: (req) => ipcRenderer.invoke('screen-capture:close' satisfies InvokeChannel, req),
+    openNote: (req) => ipcRenderer.invoke('screen-capture:open-note' satisfies InvokeChannel, req),
+    onOpen: (cb) => {
+      const listener = (_e: IpcRendererEvent, p: PushPayload<'screen-capture:open'>): void => cb(p)
+      ipcRenderer.on('screen-capture:open' satisfies PushChannel, listener)
+      return () => {
+        ipcRenderer.removeListener('screen-capture:open' satisfies PushChannel, listener)
       }
     }
   }

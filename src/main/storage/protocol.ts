@@ -8,8 +8,8 @@ import type { ErrorCode } from '@shared/errors'
 import type { StorageState } from '@shared/types/storage'
 import type { StorageApi } from './api'
 
-/** Schema version this build migrates to (PRAGMA user_version); 8 is the baseline, 9 adds sources and imports, 10 dictation usage, 11 action item drafts, 12 speaker profiles, 15 the About me tables, 16 MCP usage. */
-export const SCHEMA_VERSION = 16
+/** Schema version this build migrates to (PRAGMA user_version); 8 is the baseline, 9 adds sources and imports, 10 dictation usage, 11 action item drafts, 12 speaker profiles, 15 the About me tables, 16 MCP usage, 18 the attachment capture column. */
+export const SCHEMA_VERSION = 18
 
 export const DB_FILE = 'notula.db'
 export const KEY_FILE = 'notula.key'

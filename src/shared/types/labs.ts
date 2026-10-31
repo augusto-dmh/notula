@@ -76,6 +76,9 @@ export type LabsSettingKey =
   | 'sources.enabled'
   | 'capture.restartOnStillHere'
   | 'capture.offRecordPrompt'
+  // The docked bubble and screen capture
+  | 'bubble.dock'
+  | 'screenCapture.enabled'
 
 export interface LabsFeature {
   key: LabsSettingKey
@@ -386,6 +389,21 @@ export const LABS_FEATURES: readonly LabsFeature[] = [
     description: 'Gives coding agents on this computer a notula command to search and read your Notula notes and transcripts.',
     section: 'developers',
     kind: 'custom'
+  },
+  {
+    key: 'bubble.dock',
+    label: 'Dock the meeting bubble',
+    description: 'Keep the meeting bubble as a slim tab on the edge of your screen. Point at it to see the live transcript.',
+    section: 'meetings',
+    kind: 'switch'
+  },
+  {
+    key: 'screenCapture.enabled',
+    label: 'Screenshots to notes',
+    description: 'Capture part of your screen or a window with a keyboard shortcut, then save it to a note with a comment.',
+    platforms: ['win32', 'darwin'],
+    section: 'notes',
+    kind: 'switch'
   },
   {
     key: 'updates.channel',

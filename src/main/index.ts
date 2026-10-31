@@ -100,6 +100,7 @@ import { registerReleaseChannel } from './release-channel'
 import { registerReminderCards } from './reminder-cards'
 import { registerRetention } from './retention'
 import { registerScratchpad } from './scratchpad'
+import { registerScreenCapture } from './screen-capture'
 import { registerScreenGuide } from './screen-guide'
 import { registerSearch } from './search'
 import { createSecrets } from './secrets'
@@ -627,6 +628,7 @@ async function start(windows: Windows): Promise<void> {
   wire('demo', () => registerDemo(ctx))
   wire('snapshots', () => registerSnapshots(ctx))
   wire('screen-guide', () => registerScreenGuide(ctx))
+  wire('screen-capture', () => registerScreenCapture(ctx))
   //    5.12 integrations
   wire('integrations', () => {
     ctx.integrations = registerIntegrations(ctx)
