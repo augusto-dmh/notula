@@ -10,12 +10,19 @@
 
 import { useEffect, useState } from 'react'
 import { parseError } from '@shared/errors'
-import { currentPassId, identityPassId, sameSpeakerName, type SpeakerIdentity } from '@shared/lib/speakers'
-import { SPEAKER_JOB_BUSY, SPEAKER_PROFILE_LIMITS, type SpeakerJobState, type SpeakerRosterRow, type SpeakersStatus } from '@shared/types/speakers'
+import { currentPassId, identityPassId, type SpeakerIdentity } from '@shared/lib/speakers'
+import {
+  SPEAKER_JOB_BUSY,
+  SPEAKER_PROFILE_LIMITS,
+  type SpeakerJobState,
+  type SpeakerPendingSpeaker,
+  type SpeakerRosterRow,
+  type SpeakersStatus
+} from '@shared/types/speakers'
 import type { SpeakerNameAccept, SpeakerNameAcceptResult, SpeakerNameSuggestion, TranscriptChunk } from '@shared/types/transcript'
 import { showToast } from '../../app/toast'
 import { openAgreementSheet } from '../speaker-profiles'
-import { toastNamed, toastNot, toastSkipped, toastUndo } from '../speaker-profiles/strings'
+import { couldntName, toastNamed, toastNot, toastSkipped, toastUndo } from '../speaker-profiles/strings'
 
 const UNDO_MS = SPEAKER_PROFILE_LIMITS.undoWindowMs
 const ROSTER_DEBOUNCE_MS = 120
@@ -39,9 +46,12 @@ export function useSpeakerRows(noteId: string): SpeakerNameSuggestion[] {
     const off = window.notula.speakerNames.onChanged((p) => {
       if (p.noteId === noteId) load()
     })
+    // A request cancelled or a person forgotten on the person page clears a row's pending flag.
+    const offPeople = window.notula.speakerPeople.onChanged(load)
     return () => {
       alive = false
       off()
+      offPeople()
     }
   }, [noteId])
   return rows
@@ -171,35 +181,42 @@ export function unnamedSpeakers(identities: readonly SpeakerIdentity[], rows: re
   return out.sort((a, b) => b.identity.speechMs - a.identity.speechMs)
 }
 
-/** The pending row's person: the request lives on the person, so it is looked up there. */
-export interface PendingPerson {
-  personId: string
-  name: string
-  canName: boolean
+/** A request waiting in the note, with the speaker main resolves its span to now. */
+export type PendingPerson = SpeakerPendingSpeaker
+
+/** The note's requests (`speaker-names:pending`). */
+export function pendingPeople(noteId: string): Promise<PendingPerson[]> {
+  return window.notula.speakerNames.pending({ noteId })
 }
 
-/** People with a request waiting in this note: attendees first, then the rest of the roster. */
-export async function pendingPeople(noteId: string): Promise<PendingPerson[]> {
-  const roster = await window.notula.speakerPeople.list({ noteId })
-  const out: PendingPerson[] = []
-  for (const r of roster) {
-    if (!r.personId || r.isSelf) continue
-    try {
-      const view = await window.notula.speakerPeople.get({ personId: r.personId })
-      const hit = view.pending.find((p) => p.noteId === noteId)
-      if (hit) out.push({ personId: r.personId, name: view.person.name, canName: hit.canName })
-    } catch {
-      // A person gone meanwhile has no request.
-    }
-  }
-  return out
-}
-
-/** The person a pending row waits for: its guess's person when one waits, else null (another row's request isn't guessed). */
+/**
+ * The person a pending row waits for: the request whose span picks this speaker, whatever its
+ * guess was (an Ask first on a speaker with no guess has no candidates).
+ */
 export function pendingPersonFor(row: SpeakerNameSuggestion | undefined, people: readonly PendingPerson[]): PendingPerson | null {
   if (!row?.pending || !people.length) return null
-  const guess = row.candidates.find((c) => people.some((p) => p.personId === c.personId))
-  return people.find((p) => p.personId === guess?.personId) ?? null
+  return people.find((p) => p.identityKey === row.identityKey) ?? null
+}
+
+/** Whether a clip can play for the note's speakers: without audio, the two longest lines show instead of Play. */
+export function useClipAvailable(noteId: string): boolean | null {
+  const [available, setAvailable] = useState<boolean | null>(null)
+  useEffect(() => {
+    let alive = true
+    setAvailable(null)
+    void window.notula.speakerNames
+      .hasClip({ noteId })
+      .then((r) => {
+        if (alive) setAvailable(r.available)
+      })
+      .catch(() => {
+        if (alive) setAvailable(false)
+      })
+    return () => {
+      alive = false
+    }
+  }, [noteId])
+  return available
 }
 
 // ---------- actions ----------
@@ -223,7 +240,7 @@ export interface NameTarget {
 
 function errorToast(id: string, err: unknown): void {
   const message = parseError(err).message.trim()
-  showToast({ id, kind: 'error', title: message || 'Notula couldn’t name this speaker. Try again.' })
+  showToast({ id, kind: 'error', title: message || couldntName() })
 }
 
 /** `accept`, retried once on `stale` with the note's current pass. */
@@ -255,22 +272,76 @@ function undoToast(id: string, title: string, tokens: string[]): void {
   })
 }
 
-/** The person an accept created or found, for the consent sheet that follows `needsAgreement`. */
-async function personIdFor(noteId: string, pick: NamePick): Promise<string | null> {
+/**
+ * The person a pick names, created when Notula doesn't know it yet (an attendee by email, a
+ * meeting-app or typed name), so a sheet or a Not <name> has a person. Null for Me.
+ */
+export async function ensurePersonFor(pick: Pick<NamePick, 'name' | 'personId' | 'email' | 'self' | 'newName'>): Promise<string | null> {
   if (pick.personId) return pick.personId
-  const rows = await window.notula.speakerPeople.list({ noteId, query: pick.email ?? pick.name })
-  const hit = rows.find((r) => !r.isSelf && r.personId && (pick.email ? r.email?.toLowerCase() === pick.email.toLowerCase() : sameSpeakerName(r.name, pick.name)))
-  return hit?.personId ?? null
+  if (pick.self) return null
+  const r = await window.notula.speakerPeople.ensure({ name: (pick.newName ?? pick.name).trim(), ...(pick.email ? { email: pick.email } : {}) })
+  return r.personId
+}
+
+async function hasActiveAgreement(personId: string): Promise<boolean> {
+  const v = await window.notula.speakerPeople.get({ personId }).catch(() => null)
+  return !!v?.agreement && !v.agreement.revokedAt
 }
 
 /**
- * Names a speaker (or Only this turn) and shows "Named <n> passages as <name>" with Undo.
- * When main answers `needsAgreement` (Remember voice on for a person without a record), the
- * consent sheet follows; once it records, the same naming is sent again with Remember voice on
- * so the first sample is added, and the toast's Undo covers both. Resolves false on failure.
+ * Consent before naming: Remember voice for anyone without an active agreement opens the sheet
+ * while nothing is named yet. Recorded names with Remember voice on, Name without remembering
+ * (or Esc on an untouched sheet) names with it off, and Ask first names nothing. Resolves the
+ * pick to send, by person id, or null when nothing is to be named.
  */
-export async function nameSpeaker(t: NameTarget, pick: NamePick, opts: { remember: boolean; turnChunkIds?: string[] }): Promise<boolean> {
+async function agreementFirst(t: NameTarget, pick: NamePick, hasVoiceSample: boolean | undefined): Promise<{ pick: NamePick; remember: boolean } | null> {
+  const personId = await ensurePersonFor(pick)
+  if (!personId) return { pick, remember: true }
+  const byId: NamePick = { name: pick.name, personId, fromList: pick.fromList, ...(pick.edited ? { edited: true } : {}) }
+  if (await hasActiveAgreement(personId)) return { pick: byId, remember: true }
+  const r = await openAgreementSheet({
+    personId,
+    name: pick.name,
+    noteId: t.noteId,
+    identityKey: t.identityKey,
+    // Ask first keeps the speaker's voice sample for later: not offered when it's known to have none.
+    canAskFirst: hasVoiceSample !== false,
+    naming: true
+  })
+  if (r.outcome === 'ask-first') return null
+  return { pick: byId, remember: r.outcome === 'recorded' }
+}
+
+export interface NameOptions {
+  remember: boolean
+  /** Only this turn: never remembers. */
+  turnChunkIds?: string[]
+  /** `speaker-names:list`'s flag for the speaker; false hides Ask first on the sheet. */
+  hasVoiceSample?: boolean
+}
+
+/**
+ * Names a speaker (or Only this turn) and shows "Named <n> passages as <name>" with Undo. With
+ * Remember voice on for a person without an agreement, the consent sheet comes first and the
+ * naming waits for it, so the Undo window starts only once the sheet has closed. Resolves false
+ * when nothing was named (a failure, or Ask first).
+ */
+export async function nameSpeaker(t: NameTarget, given: NamePick, opts: NameOptions): Promise<boolean> {
   const toastId = `speaker-name:${t.identityKey}`
+  let pick = given
+  let remember = opts.remember && !opts.turnChunkIds
+  if (remember && !pick.self) {
+    let gate: Awaited<ReturnType<typeof agreementFirst>>
+    try {
+      gate = await agreementFirst(t, pick, opts.hasVoiceSample)
+    } catch (err) {
+      errorToast(toastId, err)
+      return false
+    }
+    if (!gate) return false
+    pick = gate.pick
+    remember = gate.remember
+  }
   const req: SpeakerNameAccept = {
     noteId: t.noteId,
     identityKey: t.identityKey,
@@ -278,7 +349,7 @@ export async function nameSpeaker(t: NameTarget, pick: NamePick, opts: { remembe
     edited: pick.edited ?? false,
     chosenFromList: pick.fromList,
     ...(pick.personId ? { personId: pick.personId } : pick.email ? { email: pick.email } : pick.self ? { self: true } : pick.newName ? { newName: pick.newName.trim() } : {}),
-    remember: opts.turnChunkIds ? false : opts.remember,
+    remember,
     scope: opts.turnChunkIds ? 'turn' : 'speaker',
     ...(opts.turnChunkIds ? { turnChunkIds: opts.turnChunkIds } : {}),
     passId: t.passId
@@ -291,32 +362,37 @@ export async function nameSpeaker(t: NameTarget, pick: NamePick, opts: { remembe
     return false
   }
   const tokens = r.undoToken ? [r.undoToken] : []
-  undoToast(toastId, toastNamed(r.chunksNamed, req.name), tokens)
-  if (!r.needsAgreement) return true
-  const personId = await personIdFor(t.noteId, pick).catch(() => null)
-  // The speaker is already named, so asking first no longer applies here.
-  const sheet = personId ? await openAgreementSheet({ personId, name: req.name, noteId: t.noteId, identityKey: t.identityKey, canAskFirst: false }) : null
-  const recorded = sheet?.outcome === 'recorded'
-  // Without a record, the same naming goes again with Remember voice off, so main deletes the
-  // named cluster's vector instead of keeping it for a sheet that never recorded. A
-  // person the first naming created is sent by id, never created twice.
-  const ident: Partial<SpeakerNameAccept> = personId ? { personId, email: undefined, newName: undefined } : { newName: undefined }
-  try {
-    const again = await acceptOnce({ ...req, ...ident, remember: recorded } as SpeakerNameAccept)
-    if (again.undoToken) tokens.push(again.undoToken)
-    undoToast(toastId, toastNamed(r.chunksNamed, req.name), tokens)
-  } catch (err) {
-    errorToast(toastId, err)
+  if (r.needsAgreement) {
+    // The agreement ended between the sheet and the naming. Main keeps the vector for a sheet;
+    // the same naming again with Remember voice off lets it go. Sent by id, so nobody is created twice.
+    const personId = pick.personId ?? (await ensurePersonFor(pick).catch(() => null))
+    const ident: Partial<SpeakerNameAccept> = personId ? { personId, email: undefined, newName: undefined } : { newName: undefined }
+    try {
+      const again = await acceptOnce({ ...req, ...ident, remember: false } as SpeakerNameAccept)
+      if (again.undoToken) tokens.push(again.undoToken)
+    } catch (err) {
+      errorToast(toastId, err)
+    }
   }
+  undoToast(toastId, toastNamed(r.chunksNamed, req.name), tokens)
   return true
 }
 
+/** Who a Not <name> is about: a person, or a meeting-app or attendee name that gets its person first. */
+export interface NotTarget {
+  personId?: string
+  name: string
+  email?: string
+}
+
 /** Not <name>: a negative, the machine name or the guess cleared, and an Undo toast. */
-export async function notPerson(noteId: string, identityKey: string, personId: string, name: string): Promise<boolean> {
+export async function notPerson(noteId: string, identityKey: string, who: NotTarget): Promise<boolean> {
   const toastId = `speaker-not:${identityKey}`
   try {
+    // A negative needs a person; a name from a meeting app gets one, so a re-run keeps it out.
+    const personId = (await ensurePersonFor(who)) as string
     const r = await window.notula.speakerNames.notPerson({ noteId, identityKey, personId })
-    undoToast(toastId, toastNot(name), r.undoToken ? [r.undoToken] : [])
+    undoToast(toastId, toastNot(who.name), r.undoToken ? [r.undoToken] : [])
     return true
   } catch (err) {
     errorToast(toastId, err)

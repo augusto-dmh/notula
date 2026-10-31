@@ -523,8 +523,8 @@ function NoteView({ note, reveal: revealQuery }: { note: Note; reveal: string | 
               {trashed ? <TrashedBanner note={note} /> : null}
               {/* The consent banner while capture waits on the notice, top of the page. */}
               {trashed ? null : <ConsentPendingBanner noteId={note.id} />}
-              {/* The speaker-name suggestion banner, top of the page. */}
-              {trashed ? null : <SpeakerNameBanner noteId={note.id} />}
+              {/* The speaker-name suggestion banner, top of the page; the transcript panel carries it while open. */}
+              {trashed || transcriptOpen ? null : <SpeakerNameBanner noteId={note.id} />}
               <header className="note-header" onKeyDown={onHeaderKeyDown}>
                 {/* The prep brief card, top of the header. */}
                 {trashed ? null : <PrepBriefCard noteId={note.id} eventId={note.event_id} />}

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // The speaker-name suggestion card, the one entry point of who's who,
-// in two places: the banner at the top of the note page and the top of the transcript panel.
+// in one place at a time: the top of the transcript panel while it is open, else the banner at
+// the top of the note page.
 //
 // - It covers every unnamed speaker (neither confirmed nor auto; live `att` doesn't hide one).
 //   The first one with the conversation's verdict becomes "<label> seems to be <name>" with
@@ -27,7 +28,7 @@ import { useCaptureSnapshot } from '../capture/store'
 import { useSpeechPrefs } from './speech-state'
 import { useLiveTranscript } from './live-transcript'
 import { useSpeakerNote } from './speaker-note'
-import { nameSpeaker, notPerson, useRoster, useSpeakersStatus, type NamePick } from './speaker-state'
+import { nameSpeaker, notPerson, useRoster, useSpeakersStatus, type NamePick, type NotTarget } from './speaker-state'
 import * as S from '../speaker-profiles/strings'
 import { WhosWhoSheet } from './WhosWhoSheet'
 import './speaker-names.css'
@@ -185,24 +186,25 @@ export function SpeakerNameCard({ noteId, variant }: { noteId: string; variant: 
     if (!pick.name.trim() || busy) return
     setBusy(true)
     try {
-      // A record withdrawn since makes main answer `needsAgreement`, and nameSpeaker opens the consent sheet.
+      // Remember voice is on only with a voice or an active agreement; one withdrawn since opens the consent sheet first.
       await nameSpeaker(target, pick, { remember: await rememberFor(pick) })
     } finally {
       setBusy(false)
     }
   }
 
-  // × is "Not <name>" for the name shown: it needs that name's person.
+  // × is "Not <name>" for the name shown; a name without a person yet gets one first.
   const shownName = row.name ?? ''
-  const notId = (() => {
+  const notWho = ((): NotTarget | null => {
+    if (!shownName.trim()) return null
     const p = pickFor(shownName, row, roster, false)
-    return p.personId ?? null
+    return p.personId ? { personId: p.personId, name: shownName } : p.email ? { name: shownName, email: p.email } : { name: shownName }
   })()
   const notThem = async (): Promise<void> => {
-    if (!notId || busy) return
+    if (!notWho || busy) return
     setBusy(true)
     try {
-      await notPerson(noteId, row.identityKey, notId, shownName)
+      await notPerson(noteId, row.identityKey, notWho)
     } finally {
       setBusy(false)
     }
@@ -278,7 +280,7 @@ export function SpeakerNameCard({ noteId, variant }: { noteId: string; variant: 
       <div className={`nt-sn nt-sn--${variant} nt-sn--edit`} role="region" aria-label="Name this speaker">
         <div className="nt-sn__head">
           <span className="nt-sn__line">Who was {label}?</span>
-          {notId && (
+          {notWho && (
             <button type="button" className="n-icon-btn n-icon-btn--sm" aria-label={S.popoverNot(shownName)} title={S.popoverNot(shownName)} disabled={busy} onClick={() => void notThem()}>
               ×
             </button>

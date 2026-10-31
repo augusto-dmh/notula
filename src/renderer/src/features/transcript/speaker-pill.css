@@ -100,6 +100,58 @@ button.nt-spk-pill[aria-disabled='true'] {
   background: color-mix(in srgb, var(--spk) 12%, transparent);
 }
 
+.nt-spk-pill__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* A turn with no known speaker: quieter than a speaker's name. */
+.nt-spk-pill.is-unknown {
+  color: var(--fg-3);
+  font-weight: 500;
+}
+
+/* While the post-meeting step runs: a disabled button with the quiet line's shimmer. */
+button.nt-spk-pill.is-busy {
+  background: linear-gradient(
+      90deg,
+      transparent 0%,
+      color-mix(in srgb, var(--spk) 16%, transparent) 50%,
+      transparent 100%
+    )
+    0 0 / 200% 100%;
+  opacity: 0.75;
+  animation: nt-spk-shimmer 1.6s linear infinite;
+}
+
+@keyframes nt-spk-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+/* When the step writes, the labels fade into their final state instead of jumping. */
+.nt-tr--settling .nt-spk-pill__text {
+  animation: nt-spk-settle 600ms var(--ease);
+}
+
+@keyframes nt-spk-settle {
+  from {
+    opacity: 0;
+    filter: blur(2px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button.nt-spk-pill.is-busy,
+  .nt-tr--settling .nt-spk-pill__text {
+    animation: none;
+  }
+}
+
 /* ---------- the quiet line ("Naming speakers…", "2 speakers to name") ---------- */
 
 .nt-spk-quiet {
@@ -276,7 +328,9 @@ button.nt-spk-quiet:hover {
 
 .nt-spk-lines li {
   display: -webkit-box;
-  padding: 6px 8px;
+  /* Vertical space as transparent borders: overflow clips at the padding edge, so no clamped line peeks out. */
+  padding: 0 8px;
+  border-block: 6px solid transparent;
   border-radius: var(--radius);
   background: var(--surface-2);
   color: var(--fg-2);
@@ -322,8 +376,13 @@ button.nt-spk-quiet:hover {
   font-weight: 600;
 }
 
-.nt-spk-opt__name {
+.nt-spk-opt__text {
+  display: grid;
   flex: 1;
+  min-width: 0;
+}
+
+.nt-spk-opt__name {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -331,8 +390,7 @@ button.nt-spk-quiet:hover {
 }
 
 .nt-spk-opt__detail {
-  flex: none;
-  max-width: 45%;
+  min-width: 0;
   overflow: hidden;
   color: var(--fg-3);
   font-size: var(--text-xs);
@@ -342,6 +400,16 @@ button.nt-spk-quiet:hover {
 
 .nt-spk-opt__detail.is-suggested {
   color: var(--accent);
+}
+
+/* The guess leads the list, set apart from the attendees under it. */
+.nt-spk-opt.is-guess .nt-spk-opt__name {
+  font-weight: 600;
+}
+
+.nt-spk-opt.is-last-guess {
+  margin-bottom: 4px;
+  box-shadow: 0 5px 0 -4px var(--border);
 }
 
 .nt-spk-search {
@@ -523,6 +591,10 @@ button.nt-spk-quiet:hover {
   margin: 0;
 }
 
+.nt-spk-row .nt-spk-lines li {
+  -webkit-line-clamp: 2;
+}
+
 .nt-spk-chips {
   display: flex;
   flex-wrap: wrap;
@@ -576,7 +648,100 @@ button.nt-spk-quiet:hover {
 }
 
 .nt-spk-remember--row {
-  justify-self: start;
+  margin-left: auto;
+}
+
+.nt-spk-chips {
+  align-items: center;
+}
+
+/* The compact menu of attendees on a row. */
+.nt-spk-menu {
+  position: relative;
+  display: inline-flex;
+}
+
+.nt-spk-chip.is-other {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.nt-spk-menu__chev {
+  opacity: 0.7;
+}
+
+.nt-spk-menu__list {
+  position: fixed;
+  z-index: 1002;
+  display: grid;
+  min-width: 180px;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.nt-spk-menu__list button {
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nt-spk-menu__list button.is-other {
+  margin-top: 2px;
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  color: var(--fg-2);
+}
+
+.nt-spk-menu__list button:hover,
+.nt-spk-menu__list button:focus-visible {
+  background: var(--surface-2);
+  outline: none;
+}
+
+/* Short speakers and echo, folded under "N more". */
+.nt-spk-more {
+  padding: 8px 8px 4px;
+  border-top: 1px solid var(--border);
+}
+
+.nt-spk-more__toggle {
+  padding: 2px 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-2);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.nt-spk-more__toggle:hover {
+  background: var(--surface-2);
+  color: var(--fg);
+}
+
+.nt-spk-more__toggle:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.nt-spk-row.is-folded {
+  opacity: 0.85;
 }
 
 /* ---------- pick mode (Pick the moment) ---------- */

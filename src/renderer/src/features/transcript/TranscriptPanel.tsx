@@ -130,6 +130,27 @@ function wordTurns(turns: IdentityTurn[]): PanelTurn[] {
 }
 
 /** A note with a diarization pass shows word-level turns, so its speakers keep their letters. */
+/** How long the pills fade into the labels the post-meeting step wrote. */
+const SETTLE_MS = 600
+
+/** True for a moment after `busy` ends, so the written labels cross-fade in instead of jumping. */
+function useSettle(busy: boolean): boolean {
+  const [settling, setSettling] = useState(false)
+  const wasBusy = useRef(busy)
+  useEffect(() => {
+    if (busy) {
+      wasBusy.current = true
+      return
+    }
+    if (!wasBusy.current) return
+    wasBusy.current = false
+    setSettling(true)
+    const t = setTimeout(() => setSettling(false), SETTLE_MS)
+    return () => clearTimeout(t)
+  }, [busy])
+  return settling
+}
+
 function hasPass(chunks: TranscriptChunk[]): boolean {
   return chunks.some((c) => !!c.providerDetails?.mergeScopeId)
 }
@@ -146,6 +167,8 @@ export function TranscriptPanel({ noteId, reveal, onClose, variant = 'note' }: T
   const picking = pickMode.active && pickMode.noteId === noteId && variant !== 'bubble'
   // In pick mode a click picks a turn, so the pills don't open.
   const pillView = useMemo(() => (picking ? { ...speakers.view, viewing: false } : speakers.view), [picking, speakers.view])
+  // When the post-meeting step writes, the pills fade into their final labels for a moment.
+  const settling = useSettle(speakers.view.busy)
   // A source note: its plan, which transcript is shown, and video-time turns.
   const sourceView = useNoteSource(noteId)
   const source = sourceView?.source ?? null
@@ -359,7 +382,7 @@ export function TranscriptPanel({ noteId, reveal, onClose, variant = 'note' }: T
   const items = virtualizer.getVirtualItems()
 
   return (
-    <aside className={['nt-tr', bubble ? 'nt-tr--bubble' : '', picking ? 'nt-tr--picking' : ''].join(' ').trim()} aria-label="Transcript" tabIndex={-1} onKeyDown={onPanelKey}>
+    <aside className={['nt-tr', bubble ? 'nt-tr--bubble' : '', picking ? 'nt-tr--picking' : '', settling ? 'nt-tr--settling' : ''].join(' ').trim()} aria-label="Transcript" tabIndex={-1} onKeyDown={onPanelKey}>
       {bubble ? (
         !findOpen && (
           <button type="button" className="nt-tr-icon nt-tr-bubble-find" title="Find" aria-label="Find" onClick={openFind}>
