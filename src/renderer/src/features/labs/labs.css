@@ -66,3 +66,71 @@
   font-size: var(--text-xs);
   line-height: 1.5;
 }
+
+/* The filter and the jump list. */
+.labs-find {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 24px;
+}
+
+.labs-find__input {
+  width: 100%;
+}
+
+.labs-jump {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.labs-jump__item {
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: none;
+  color: var(--fg-2);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.labs-jump__item:hover {
+  border-color: var(--border-strong);
+  color: var(--fg);
+}
+
+.labs-jump__item:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* A jumped-to section clears the window's top edge. */
+.labs-group {
+  scroll-margin-top: 16px;
+}
+
+.labs-empty {
+  margin: 0 4px 24px;
+  color: var(--fg-3);
+}
+
+/* A deep-linked row: a tint that fades out. */
+.labs-item--focus {
+  animation: labs-focus 2400ms ease-out;
+}
+
+@keyframes labs-focus {
+  0%,
+  40% {
+    background: var(--accent-soft);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .labs-item--focus {
+    animation: none;
+    background: var(--accent-soft);
+  }
+}
