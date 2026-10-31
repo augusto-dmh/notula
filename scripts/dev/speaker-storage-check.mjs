@@ -53,9 +53,11 @@ const args = process.argv.slice(2)
 const PREV_REV = args.includes('--prev') ? args[args.indexOf('--prev') + 1] : mergeBase()
 const KEEP = args.includes('--keep')
 const OUT = join(tmpdir(), 'notula-speaker-storage-check')
-/** The schema version this tree migrates to, and the one before it. */
-const TARGET = 12
+/** The schema version this tree migrates to (read from the source, so later migrations don't break the check), and the one before speaker profiles. */
+const TARGET = Number(/export const SCHEMA_VERSION = (\d+)/.exec(readFileSync(join(ROOT, 'src/main/storage/protocol.ts'), 'utf8'))[1])
 const PREV = 11
+/** Tables that migrations after 12 add; a schema-11 file gains them empty. */
+const LATER_TABLES = ['dictation_terms', 'dictation_term_usage', 'user_context_entries', 'mcp_token_usage']
 
 /** Where this branch left main, so the default needs no commit id; main when git can't tell. */
 function mergeBase() {
@@ -677,7 +679,7 @@ try {
     const rename = { '"voiceprint.enabled"': '"speakers.selfVoice"', '"voiceprint.passive"': '"speakers.selfPassive"' }
     out.settings = tables.settings.map((r) => r.replace(/"key":("voiceprint\.(?:enabled|passive)")/, (_, k) => `"key":${rename[k]}`)).sort()
     out.meta = [...tables.meta, JSON.stringify({ key: 'speakers_moved_from_labs', value: JSON.stringify({ enabled: true, profile: true }) })].sort()
-    for (const t of SPEAKER_TABLES) out[t] ??= []
+    for (const t of [...SPEAKER_TABLES, ...LATER_TABLES]) out[t] ??= []
     return out
   }
   /** What a backup holds: every row, the biometric table empty. */
