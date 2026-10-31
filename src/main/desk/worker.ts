@@ -8,7 +8,7 @@
 // - macOS: each op is one `osascript` call to System Events (foreground app and window,
 //   Cmd+V). Focused-field context is not available (`unsupported`); the modifier state is not
 //   readable, so main waits a fixed 300 ms.
-// - Protocol with main: {type:'start', scriptPath} → {type:'ready'}; {type:'req', id, op} →
+// - Protocol with main: {type:'start', scriptPath} → {type:'ready'}; {type:'req', id, op, args?} →
 //   {type:'reply', id, ok, …}; {type:'stop'}. A reply that does not come is main's timeout.
 // - The key hook: {type:'hook-start', scriptPath} spawns
 //   `resources/desk/keyhook.ps1` (Windows) or `keyhook-mac.js` under osascript (macOS) and
@@ -20,7 +20,7 @@ import { createInterface } from 'node:readline'
 
 type MainToDesk =
   | { type: 'start'; scriptPath: string }
-  | { type: 'req'; id: number; op: string }
+  | { type: 'req'; id: number; op: string; args?: Record<string, unknown> }
   | { type: 'stop' }
   | { type: 'hook-start'; scriptPath: string }
   | { type: 'hook-send'; msg: Record<string, unknown> }

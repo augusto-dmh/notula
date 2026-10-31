@@ -18,10 +18,11 @@
 //   recognize → format (`dictation-format`) → deliver (./delivery.ts). A recording stops
 //   itself at 1,195 s and finishes normally.
 // - While a session is active: the power-save blocker while recording, and bus
-//   `update:delay` (`dictationActive`) every second. With `dictation.muteOtherAudio`, system
-//   output is muted from the start of recording until processing begins (never during a
-//   meeting capture); only what Notula muted is restored, on every exit path, and a marker
-//   file left by a crash is cleared at the next start.
+//   `update:delay` (`dictationActive`) every second. With `dictation.muteOtherAudio`, other
+//   apps' audio is lowered (./desk.ts `duck`, on every output device) from the start of
+//   recording until Notula starts typing, or the dictation ends; never during a meeting
+//   capture. Only what Notula lowered is raised, on every exit path; the marker file
+//   (`dictation-ducked`) lets the next start restore after a crash or a quit.
 // - Retention (`dictation.localRetention`): `keep` keeps the text, with retry audio for 24 h;
 //   `24h` forgets text and audio after 24 h; `never` writes only the text-free usage fields.
 //   Sweeps run 5 min after start, hourly, and at once on a change.
@@ -57,7 +58,7 @@
 //   once per cause per app session, never for code or a terminal.
 
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { app, globalShortcut, ipcMain, net, powerSaveBlocker, screen, systemPreferences, type BrowserWindow } from 'electron'
 import type { InvokeChannel, InvokeRes, PushChannel, SendChannel } from '@shared/ipc'
@@ -103,7 +104,7 @@ import { RecognizerError, type SpeechRecognizer } from '../transcription/api'
 import { buildContextBlock, buildKeyterms, rankTerms, termsUsedIn } from './context'
 import { deliver } from './delivery'
 import { setDictationBusy } from './activity'
-import { Desk, type DeskContext } from './desk'
+import { Desk, isDuckEntry, type DeskContext, type DuckEntry, type DuckResult } from './desk'
 import type { ChordEffect } from './chord-machine'
 import { DictationBar } from './dictation-bar'
 import { forgetRejectedProvider, formatDictation, midSentence, toneFor, type FormatFailure } from './format'
@@ -147,8 +148,10 @@ interface Session {
   handsFree: boolean
   /** The shortcut row that started it (the conflict note's row); null for a click. */
   trigger: Trigger
-  /** Notula muted system output for this session. */
-  muted: boolean
+  /** What the duck lowered, once the helper answered: null when nothing was, empty entries when it failed. */
+  duck: DuckResult | null
+  /** Set when the audio should come back; a duck that answers later is undone at once. */
+  unducked: boolean
   /** Audio that arrived before the recognizer existed. */
   pending: Buffer[]
   /** Settles when the start sequence ends (ready, failed or abandoned). */
@@ -239,6 +242,8 @@ export function registerDictation(ctx: MainContext): void {
   let warmTimer: ReturnType<typeof setTimeout> | null = null
   const sessionStartedAt = new Date().toISOString()
   const audioDir = join(ctx.userDataPath, 'dictation-audio')
+  const duckMarker = join(ctx.userDataPath, 'dictation-ducked')
+  /** An older build's marker: it muted the default output instead. */
   const muteMarker = join(ctx.userDataPath, 'dictation-muted')
   const chats = new Map<string, { recognizer: SpeechRecognizer; timer: ReturnType<typeof setTimeout> }>()
 
@@ -371,53 +376,79 @@ export function registerDictation(ctx: MainContext): void {
     }
   }
 
-  // ---------- muting other audio ----------
+  // ---------- lowering other audio ----------
 
-  /** A marker left by a crash or a quit mid-recording: Notula muted the output and never restored it. */
-  const clearStaleMute = (): void => {
-    if (!existsSync(muteMarker)) return
-    void desk.unmute().then((ok) => {
-      log('info', 'dictation:mute-restored', { stale: true, ok })
-      try {
-        unlinkSync(muteMarker)
-      } catch {
-        /* the next start tries again */
-      }
-    })
+  const dropMarker = (path: string): void => {
+    try {
+      unlinkSync(path)
+    } catch {
+      /* already gone */
+    }
   }
 
-  const muteFor = (sess: Session): void => {
-    if (!s('dictation.muteOtherAudio', true) || process.platform !== 'win32') return
-    // A meeting being captured is never muted.
-    if (ctx.capture.isCapturing()) return void log('debug', 'dictation:mute', { skipped: 'capturing' })
+  /** A marker left by a crash or a quit mid-recording: levels Notula lowered and never raised. */
+  const clearStaleDuck = (): void => {
+    if (existsSync(muteMarker)) {
+      void desk.unmuteOutput().then((ok) => {
+        log('info', 'dictation:mute-restored', { stale: true, ok })
+        if (ok) dropMarker(muteMarker)
+      })
+    }
+    if (!existsSync(duckMarker)) return
+    let entries: DuckEntry[] = []
+    try {
+      const v: unknown = JSON.parse(readFileSync(duckMarker, 'utf8'))
+      if (Array.isArray(v)) entries = v.filter(isDuckEntry)
+    } catch {
+      /* unreadable: nothing to restore */
+    }
     const t0 = Date.now()
-    void desk.mute().then((changed) => {
-      // false covers both "already muted" and a helper failure or timeout.
-      log('debug', 'dictation:mute', { changed, ms: Date.now() - t0 })
-      if (!changed) return
-      try {
-        writeFileSync(muteMarker, sess.id)
-      } catch {
-        /* the restore below still runs */
-      }
-      // The session may have ended while the helper answered.
-      if (session !== sess || sess.finishing || sess.cancelled) return void restoreMute(sess, true)
-      sess.muted = true
+    void desk.unduck(entries).then((r) => {
+      log('info', 'dictation:duck-restored', { stale: true, ok: !!r, sessions: r?.sessions ?? 0, devices: r?.devices ?? 0, ms: Date.now() - t0 })
+      if (r) dropMarker(duckMarker)
     })
   }
 
-  const restoreMute = (sess: Session, force = false): void => {
-    if (!sess.muted && !force) return
-    sess.muted = false
-    void desk.unmute().then((ok) => {
-      if (ok) {
+  const raise = (d: DuckResult): void => {
+    const t0 = Date.now()
+    void desk.unduck(d.entries).then((r) => {
+      log('info', 'dictation:duck-restored', { ok: !!r, sessions: r?.sessions ?? 0, devices: r?.devices ?? 0, ms: Date.now() - t0 })
+      // A failed raise keeps the marker for the next start.
+      if (r && d.entries.length) dropMarker(duckMarker)
+    })
+  }
+
+  const duckFor = (sess: Session): void => {
+    if (!s('dictation.muteOtherAudio', true) || process.platform !== 'win32') return
+    // A meeting being captured is never lowered.
+    if (ctx.capture.isCapturing()) return void log('debug', 'dictation:duck', { skipped: 'capturing' })
+    const t0 = Date.now()
+    void desk.duck().then((d) => {
+      const ms = Date.now() - t0
+      log('info', 'dictation:duck', { ok: !!d, sessions: d?.entries.length ?? 0, devices: d?.devices ?? 0, ms })
+      if (d?.processes.length) log('debug', 'dictation:duck-apps', { processes: d.processes })
+      if (d?.entries.length) {
         try {
-          unlinkSync(muteMarker)
+          writeFileSync(duckMarker, JSON.stringify(d.entries))
         } catch {
-          /* already gone */
+          /* the raise below still runs */
         }
       }
+      // A failed reply still asks for a raise: the helper may have lowered after the timeout.
+      // A duck that lowered nothing needs none.
+      sess.duck = d ? (d.entries.length ? d : null) : { entries: [], devices: 0, processes: [] }
+      // The session may have ended, or reached typing, while the helper answered.
+      if (sess.duck && (sess.unducked || session !== sess || sess.cancelled)) {
+        sess.unducked = true
+        raise(sess.duck)
+      }
     })
+  }
+
+  const restoreDuck = (sess: Session): void => {
+    if (sess.unducked) return
+    sess.unducked = true
+    if (sess.duck) raise(sess.duck)
   }
 
   // ---------- Escape while recording ----------
@@ -481,7 +512,7 @@ export function registerDictation(ctx: MainContext): void {
 
   const endSession = (): void => {
     const sess = session
-    if (sess) restoreMute(sess)
+    if (sess) restoreDuck(sess)
     session = null
     hook.setActive(false)
     hook.sessionEnded()
@@ -521,7 +552,7 @@ export function registerDictation(ctx: MainContext): void {
     sess.failed = reason
     sess.recognizer?.cancel()
     capture('cancel', sess.id)
-    restoreMute(sess)
+    restoreDuck(sess)
     const saved = await keepAudio(sess, 'failed', reason)
     if (saved) lastSaved = sess.id
     else await discardAttempt(sess)
@@ -573,7 +604,8 @@ export function registerDictation(ctx: MainContext): void {
       failed: null,
       handsFree,
       trigger,
-      muted: false,
+      duck: null,
+      unducked: false,
       pending: [],
       setup: Promise.resolve()
     }
@@ -586,8 +618,8 @@ export function registerDictation(ctx: MainContext): void {
     log('info', 'dictation:started', { type, handsFree })
     // The mic starts at once; its audio waits in `pending` until the recognizer exists.
     capture('start', id)
-    clearStaleMute()
-    muteFor(sess)
+    clearStaleDuck()
+    duckFor(sess)
     sess.setup = setupSession(sess, type).catch((err: unknown) =>
       log('warn', 'dictation:setup-failed', { err: err instanceof Error ? err.message : String(err) })
     )
@@ -665,7 +697,6 @@ export function registerDictation(ctx: MainContext): void {
     if (!sess || sess.finishing || sess.cancelled) return
     sess.finishing = true
     escapeOn(false)
-    restoreMute(sess)
     setState({ kind: 'processing' }, 'finish')
     capture('stop', sess.id)
     setBlocker(false)
@@ -724,6 +755,8 @@ export function registerDictation(ctx: MainContext): void {
         .map((t) => t.term)
     })
     if (session !== sess || sess.cancelled) return
+    // Other audio comes back up as Notula starts typing.
+    restoreDuck(sess)
     const d = await deliver(desk, formatted.text, field, () => session === sess)
     if (sess.writer) await sess.writer.abort().catch(() => undefined)
     sess.writer = null
@@ -785,7 +818,7 @@ export function registerDictation(ctx: MainContext): void {
     sess.cancelled = true
     sess.recognizer?.cancel()
     capture('cancel', sess.id)
-    restoreMute(sess)
+    restoreDuck(sess)
     // A canceled attempt with real speech keeps its audio, so it can be retried.
     const kept = why !== 'tap' && why !== 'disarmed' ? await keepAudio(sess, 'cancelled', null) : false
     if (!kept) await discardAttempt(sess)
@@ -1094,7 +1127,7 @@ export function registerDictation(ctx: MainContext): void {
         registerArmed()
         registerRecord(effectiveOf('recordToggle'))
       }
-      void desk.start().then(() => clearStaleMute())
+      void desk.start().then(() => clearStaleDuck())
       configureHook()
       bar.setArmed(true)
       warmSoon(app.isReady() && settingsSeen ? WARM_CHANGE_MS : WARM_START_MS)
@@ -1111,7 +1144,7 @@ export function registerDictation(ctx: MainContext): void {
       const w = livePill()
       pill = null
       if (w) w.destroy()
-      // Give a pending unmute a moment before the helper stops.
+      // Give a pending raise a moment before the helper stops; the helper raises what it holds as it exits.
       setTimeout(() => {
         if (!armed) desk.stop()
       }, 500).unref()
@@ -1279,11 +1312,11 @@ export function registerDictation(ctx: MainContext): void {
     if (e.keys.includes('dictation.localRetention') && prev?.['dictation.localRetention'] !== e.settings['dictation.localRetention']) {
       void sweep()
     }
-    if (e.keys.includes('dictation.muteOtherAudio') && !e.settings['dictation.muteOtherAudio'] && session) restoreMute(session)
+    if (e.keys.includes('dictation.muteOtherAudio') && !e.settings['dictation.muteOtherAudio'] && session) restoreDuck(session)
   })
   app.on('before-quit', () => {
-    // The helper may be gone before an unmute lands; the marker covers that at the next start.
-    if (session) restoreMute(session)
+    // The helper may be gone before the raise lands; the marker covers that at the next start.
+    if (session) restoreDuck(session)
   })
   app.on('will-quit', () => {
     arm(false)

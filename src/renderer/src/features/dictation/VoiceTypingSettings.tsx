@@ -377,12 +377,12 @@ export function VoiceTypingSettingsView(): JSX.Element | null {
         />
         {!isMac ? (
           <SettingsRow
-            title="Mute other audio while dictating"
-            description="Mutes your speakers while you speak and turns them back on when Notula starts typing. A meeting Notula is recording is never muted."
+            title="Lower other audio while dictating"
+            description="Other apps get quieter while you speak, on every speaker or headset, and come back up when Notula starts typing. A meeting Notula is recording is never lowered."
             control={
               <Switch
                 checked={prefs['dictation.muteOtherAudio']}
-                label="Mute other audio while dictating"
+                label="Lower other audio while dictating"
                 disabled={off}
                 onChange={(on) => setPrefs({ 'dictation.muteOtherAudio': on })}
               />

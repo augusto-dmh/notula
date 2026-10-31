@@ -2,8 +2,8 @@
 // Main's side of the notula-desk helper: forks out/main/desk.js while dictation is
 // armed, keeps it warm, and answers `ask(op)` with a timeout. A failed or missing helper
 // degrades each caller (no context, the clipboard instead of a paste); it never throws.
-// Windows adds `dblclick` (the OS double-click interval) and `mute` / `unmute` (system output,
-// for "Mute other audio while dictating").
+// Windows adds `dblclick` (the OS double-click interval) and `duck` / `unduck` (other apps'
+// audio sessions on every output device, for "Lower other audio while dictating").
 // It also hosts the dictation bar's key hook: `startHook` /
 // `sendHook` / `stopHook`, with its events and its exit on `onHook`.
 // The paste watcher reads with `field` (Windows): a light read near the caret.
@@ -41,6 +41,28 @@ export interface DeskField {
   /** The helper's window cut the text before or after the caret. */
   cutBefore: boolean
   cutAfter: boolean
+}
+
+/** One app session the helper lowered: `key` is a hash, never the app; levels are 0–1. */
+export interface DuckEntry {
+  key: string
+  saved: number
+  set: number
+}
+
+export interface DuckResult {
+  entries: DuckEntry[]
+  devices: number
+  /** Process names, for the debug log only. */
+  processes: string[]
+}
+
+/** About 20 % of each app's level, faded down over 150 ms and back up over 250 ms. */
+const DUCK = { factor: 0.2, downMs: 150, upMs: 250 }
+
+export function isDuckEntry(v: unknown): v is DuckEntry {
+  const e = v as Partial<DuckEntry> | null
+  return !!e && typeof e.key === 'string' && typeof e.saved === 'number' && typeof e.set === 'number'
 }
 
 type Reply = Record<string, unknown> & { ok: boolean; error?: string }
@@ -140,8 +162,9 @@ export class Desk {
 
   /** null on any failure or timeout. */
   async ask(
-    op: 'foreground' | 'context' | 'modifiers' | 'paste' | 'fullscreen' | 'dblclick' | 'mute' | 'unmute',
-    timeoutMs: number
+    op: 'foreground' | 'context' | 'modifiers' | 'paste' | 'fullscreen' | 'dblclick' | 'duck' | 'unduck' | 'unmute',
+    timeoutMs: number,
+    args?: Record<string, unknown>
   ): Promise<Reply | null> {
     if (!(await this.start().catch(() => false)) || !this.proc) return null
     const id = this.nextId++
@@ -155,7 +178,7 @@ export class Desk {
         clearTimeout(timer)
         resolve(r && r.ok ? r : null)
       })
-      proc.postMessage({ type: 'req', id, op })
+      proc.postMessage({ type: 'req', id, op, args })
     })
   }
 
@@ -234,17 +257,31 @@ export class Desk {
     return r && r['fullscreen'] === true ? { x: Number(r['x']), y: Number(r['y']) } : null
   }
 
-  /** Mutes system output unless it already is; true only when this call muted it. */
-  async mute(): Promise<boolean> {
-    if (process.platform !== 'win32') return false
-    const r = await this.ask('mute', 1_500)
-    return r?.['changed'] === true
+  /** Lowers every other app's audio on every output device (Notula's own processes are skipped); null on failure. */
+  async duck(): Promise<DuckResult | null> {
+    if (process.platform !== 'win32') return null
+    const r = await this.ask('duck', 2_000, { root: process.pid, factor: DUCK.factor, ms: DUCK.downMs })
+    if (!r || !Array.isArray(r['entries'])) return null
+    const raw = r['entries'] as Array<Record<string, unknown>>
+    const entries = (raw as unknown[]).filter(isDuckEntry).map((e) => ({ key: e.key, saved: e.saved, set: e.set }))
+    return {
+      entries,
+      devices: new Set(raw.map((e) => e['device'])).size,
+      processes: [...new Set(raw.map((e) => String(e['process'] ?? '')).filter(Boolean))]
+    }
   }
 
-  async unmute(): Promise<boolean> {
+  /** Raises what the helper lowered, plus `entries` it no longer holds (a crash marker); null on failure. */
+  async unduck(entries: DuckEntry[]): Promise<{ sessions: number; devices: number } | null> {
+    if (process.platform !== 'win32') return null
+    const r = await this.ask('unduck', 2_000, { entries, ms: DUCK.upMs })
+    return r ? { sessions: Number(r['sessions'] ?? 0), devices: Number(r['devices'] ?? 0) } : null
+  }
+
+  /** Unmutes the default output: only for a marker an older build left after muting it. */
+  async unmuteOutput(): Promise<boolean> {
     if (process.platform !== 'win32') return false
-    const r = await this.ask('unmute', 1_500)
-    return r !== null
+    return (await this.ask('unmute', 1_500)) !== null
   }
 
   async paste(): Promise<boolean> {
