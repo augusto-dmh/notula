@@ -40,6 +40,8 @@ export type MainToAsr =
   | { type: 'audio'; pcm: Uint8Array }
   /** A capture gap: closes any open segment and moves the clock. */
   | { type: 'skip'; ms: number }
+  /** A dictation starts on this worker: the gate, the pre-roll and the language lock start over. */
+  | { type: 'session' }
   | { type: 'keywords'; terms: string[] }
   | { type: 'ping'; id: number }
   | { type: 'finalize' }

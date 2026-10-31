@@ -35,6 +35,12 @@
 //   the 25 s cap, which the hysteresis now reaches more often, rarely cuts a word.
 // Anything else gates on the noise-floor threshold alone (loud audio, steady noise, the
 // first second).
+//
+// A dictation starts a session on the same worker (`startSession`): a fresh noise floor, no
+// pre-roll from the last one, and until the session's first segment opens, the pre-roll keeps
+// every hop since the start (up to 3 s). Before the floor is known the gate is the old 0.01, so
+// a soft first phrase said right at the press (a heading at -45 dBFS) never opened a segment;
+// it now joins the first segment that does.
 
 export const SAMPLE_RATE = 16_000
 export const HOP_SAMPLES = 512
@@ -79,6 +85,8 @@ const DIGITAL_SILENCE_RMS = 1e-5
 const FLOOR_MIN_DB = -100
 const FLOOR_BINS = 101
 export const PRE_ROLL_HOPS = 8
+/** A session's head: until its first segment opens, the pre-roll reaches back to its start, this far at most. */
+export const HEAD_PRE_ROLL_SAMPLES = 3 * SAMPLE_RATE
 export const CLOSE_SILENT_HOPS = 25
 export const MAX_SEGMENT_SAMPLES = 25 * SAMPLE_RATE
 /** Quiet speech only: past this length a segment closes at the next pause. */
@@ -232,7 +240,9 @@ export class Segmenter {
   /** End of the last closed segment: pre-roll never reaches back before it. */
   private lastEnd = 0
   private nextId = 0
-  private readonly noise = new NoiseFloor()
+  private noise = new NoiseFloor()
+  /** The session start while its head is kept in the pre-roll, else null. */
+  private headFrom: number | null = null
   private readonly on: SegmenterEvents
 
   // A plain field rather than a parameter property, so scripts/dev/vad-check.ts runs under Node's type stripping.
@@ -264,6 +274,21 @@ export class Segmenter {
     this.carry = new Float32Array(0)
     this.preRoll = []
     this.received += Math.max(0, Math.round(samples))
+    // The gap before a session's first audio is not part of its head.
+    if (this.headFrom !== null) this.headFrom = this.lastEnd = this.received
+  }
+
+  /**
+   * A new session on this clock (a dictation on a reused worker): nothing from the last one
+   * carries over, and the head is kept until the first segment opens. Segment ids go on.
+   */
+  startSession(): void {
+    this.open = null
+    this.carry = new Float32Array(0)
+    this.preRoll = []
+    this.noise = new NoiseFloor()
+    this.lastEnd = this.received
+    this.headFrom = this.received
   }
 
   /** End of audio: the open segment closes with what it has. */
@@ -274,6 +299,7 @@ export class Segmenter {
   /** Audio before this index is closed: decoded, decoding, or silence. */
   committedSample(): number {
     if (this.open) return this.open.start
+    if (this.headFrom !== null) return Math.max(this.lastEnd, this.headFrom)
     const hopsEnd = this.received - this.carry.length
     return Math.max(this.lastEnd, hopsEnd - PRE_ROLL_HOPS * HOP_SAMPLES, 0)
   }
@@ -290,13 +316,16 @@ export class Segmenter {
     const pause = !!open && level < threshold && open.length >= SOFT_MAX_SEGMENT_SAMPLES && this.noise.quietSpeech() !== null
     this.noise.add(level)
     if (!open) {
+      if (this.headFrom !== null && h.start - this.headFrom >= HEAD_PRE_ROLL_SAMPLES) this.headFrom = null
       if (!speech) {
         this.preRoll.push(h)
-        if (this.preRoll.length > PRE_ROLL_HOPS) this.preRoll.shift()
+        if (this.headFrom === null) while (this.preRoll.length > PRE_ROLL_HOPS) this.preRoll.shift()
         return
       }
+      if (this.headFrom === null) this.preRoll = this.preRoll.slice(-PRE_ROLL_HOPS)
       const pre = this.preRoll.filter((p) => p.start >= this.lastEnd)
       this.preRoll = []
+      this.headFrom = null
       const hops = [...pre.map((p) => p.samples), h.samples]
       this.open = {
         id: this.nextId++,
@@ -339,6 +368,7 @@ export class Segmenter {
     }
     this.lastEnd = open.start + open.length
     this.preRoll = []
+    this.headFrom = null
     if (open.speechHops < MIN_SPEECH_HOPS) return
     this.on.final({ id: open.id, startSample: open.start, samples: concat(open.hops, open.length) })
   }

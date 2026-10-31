@@ -132,6 +132,8 @@ export class LocalConnection extends EventEmitter<AsrConnectionEvents> implement
   private preReady: Queued[] = []
   private preReadyMs = 0
   private overflowLogged = false
+  /** A session start waiting for the worker to be ready; it goes before the queued audio. */
+  private sessionPending = false
   private readyTimer: NodeJS.Timeout | null = null
   private pingTimer: NodeJS.Timeout | null = null
   private restartTimer: NodeJS.Timeout | null = null
@@ -184,6 +186,15 @@ export class LocalConnection extends EventEmitter<AsrConnectionEvents> implement
     }
     this.post(pcm, captureTimeMs)
     return true
+  }
+
+  /**
+   * For ctx.speech: a dictation starts, so the worker's gate and language lock start over and
+   * its first words are kept (asr/vad.ts). Sent before any of the dictation's audio.
+   */
+  startSession(): void {
+    if (this.ready) this.postMsg({ type: 'session' })
+    else this.sessionPending = true
   }
 
   updateKeywords(terms: string[]): void {
@@ -358,6 +369,8 @@ export class LocalConnection extends EventEmitter<AsrConnectionEvents> implement
     this.ready = true
     log('info', 'asr:local-ready', { source: this.source, gen: this.gen, loadMs })
     if (this.keywords.length) this.postMsg({ type: 'keywords', terms: this.keywords })
+    if (this.sessionPending) this.postMsg({ type: 'session' })
+    this.sessionPending = false
     this.startPing()
     // The queue is flushed in order, with the original capture times.
     const queued = this.preReady

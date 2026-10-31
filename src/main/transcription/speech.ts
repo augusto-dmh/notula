@@ -23,6 +23,8 @@
 //   same model and language is loading, so one dictation never spawns two (`speech:warm-skipped`).
 //   After 15 min unused, the warm worker is freed only when memory is short (under 2 GB or
 //   15% free); otherwise it stays loaded. Its own VAD segments the audio; finish drains it.
+//   Each recognizer starts a session on its worker, so a reused warm worker cuts a dictation as
+//   a new one would and keeps the words said right at the press (asr/vad.ts).
 
 import { EventEmitter } from 'node:events'
 import { freemem, totalmem } from 'node:os'
@@ -467,6 +469,7 @@ class LocalRecognizer implements SpeechRecognizer {
     private readonly language: string | null = 'en'
   ) {
     conn.on('result', this.onResult)
+    conn.startSession()
     this.ready = this.waitReady(warmReady ? READY_MS : COLD_READY_MS)
     this.ready.catch(() => undefined)
   }

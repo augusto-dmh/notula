@@ -154,6 +154,10 @@ interface Session {
   unducked: boolean
   /** Audio that arrived before the recognizer existed. */
   pending: Buffer[]
+  /** Debug timings, ms from the start: the mic's first chunk and its ready report. */
+  startedAt: number
+  firstChunkMs: number | null
+  micReadyMs: number | null
   /** Settles when the start sequence ends (ready, failed or abandoned). */
   setup: Promise<void>
 }
@@ -607,6 +611,9 @@ export function registerDictation(ctx: MainContext): void {
       duck: null,
       unducked: false,
       pending: [],
+      startedAt: Date.now(),
+      firstChunkMs: null,
+      micReadyMs: null,
       setup: Promise.resolve()
     }
     session = sess
@@ -675,10 +682,23 @@ export function registerDictation(ctx: MainContext): void {
       return fail(sess, recognizerReason(err))
     }
     sess.recognizer = recognizer
-    for (const pcm of sess.pending.splice(0)) {
+    const replayed = sess.pending.splice(0)
+    let replayedBytes = 0
+    for (const pcm of replayed) {
       recognizer.feed(pcm)
       sess.writer?.append(pcm)
+      replayedBytes += pcm.length
     }
+    // Every sample since the press reaches the recognizer: what waited is replayed first, in order.
+    log('debug', 'dictation:audio-start', {
+      provider: recognizer.provider,
+      firstChunkMs: sess.firstChunkMs,
+      micReadyMs: sess.micReadyMs,
+      attachMs: Date.now() - sess.startedAt,
+      replayedChunks: replayed.length,
+      replayedMs: Math.round(replayedBytes / 32),
+      receivedMs: Math.round(sess.audioBytes / 32)
+    })
     if (recognizer.provider !== 'local' && !net.isOnline()) return fail(sess, 'offline')
     if (recognizer.provider === 'local') ctx.speech.setLocalWarm(true, lang)
     const cold = recognizer.provider === 'local' ? L.coldLocalReadyMs : L.readyMs
@@ -790,6 +810,9 @@ export function registerDictation(ctx: MainContext): void {
       destination: where.destination,
       singleLine: where.singleLine,
       tone,
+      // Raw against formatted length tells words the recognizer missed from words the formatter dropped.
+      rawChars: raw.length,
+      audioMs,
       chars: formatted.text.length,
       failure: formatted.failure,
       hinted: hint
@@ -1412,6 +1435,7 @@ export function registerDictation(ctx: MainContext): void {
     }
     const sess = session
     if (!sess || sess.id !== p.sessionId || sess.cancelled || ctx.windows.kindOf(e.sender) !== 'dictation-pill') return
+    sess.firstChunkMs ??= Date.now() - sess.startedAt
     if (!sess.recognizer) {
       // Before the recognizer exists; at most ~60 s.
       if (sess.pending.length < 3_000) sess.pending.push(pcm)
@@ -1441,6 +1465,7 @@ export function registerDictation(ctx: MainContext): void {
         void fail(sess, err)
         return
       }
+      if (p.type === 'ready') sess.micReadyMs ??= Date.now() - sess.startedAt
       if (p.type === 'ready' && p.device && typeof p.device.deviceId === 'string' && typeof p.device.label === 'string') {
         const device = { deviceId: p.device.deviceId.slice(0, 500), label: p.device.label.slice(0, 500) }
         const last = s('dictation.lastMicrophone', null)

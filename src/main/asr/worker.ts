@@ -24,6 +24,9 @@
 // reload, so no audio waits. Once locked, text mostly in another script is dropped, and
 // so is each remaining word in another script. An explicit language and
 // Parakeet are unchanged.
+//
+// A kept-warm worker serves one dictation after another: `session` starts the segmenter's
+// session (vad.ts) and a fresh language lock, so each dictation decodes as a new worker would.
 
 import type { OfflineRecognizer, OfflineRecognizerConfig, OfflineRecognizerResult } from 'sherpa-onnx-node'
 import { normalizeGain } from './gain'
@@ -212,6 +215,8 @@ class Engine {
   private idleWaiters: (() => void)[] = []
   private lastPartialAt = 0
   private gainLogged = false
+  /** The current session's start sample while its first final is not yet logged. */
+  private sessionFrom: number | null = null
   private readonly stats: AsrFinalizeStats = {
     segments: 0,
     partials: 0,
@@ -225,8 +230,10 @@ class Engine {
     private readonly rec: OfflineRecognizer,
     private readonly whisper: boolean,
     /** Whisper under `multi` only; `setLanguage` points the recognizer at the lock. */
-    private readonly lock: LanguageLock | null = null,
-    private readonly setLanguage: (language: string) => void = () => undefined
+    private lock: LanguageLock | null = null,
+    private readonly setLanguage: (language: string) => void = () => undefined,
+    /** The language the worker was started with ('' = detect). */
+    private readonly startLanguage = ''
   ) {
     this.segmenter = new Segmenter({
       final: (seg) => {
@@ -248,8 +255,23 @@ class Engine {
 
   skip(ms: number): void {
     this.segmenter.skip((ms * SAMPLE_RATE) / 1000)
+    // The gap before a session's first audio is not part of it.
+    if (this.sessionFrom !== null) this.sessionFrom = this.segmenter.position
     this.progress()
     void this.pump()
+  }
+
+  /** A new dictation: nothing from the last one shapes how this one is cut or decoded. */
+  session(): void {
+    this.segmenter.startSession()
+    this.partial = null
+    this.lastPartialAt = 0
+    this.gainLogged = false
+    this.sessionFrom = this.segmenter.position
+    if (this.lock) {
+      if (this.lock.language) this.setLanguage(this.startLanguage)
+      this.lock = new LanguageLock()
+    }
   }
 
   /** Flushes the open segment and waits for every final. */
@@ -308,6 +330,14 @@ class Engine {
     }
     const ms = Date.now() - t
     const audioMs = (seg.samples.length * 1000) / SAMPLE_RATE
+    if (final && this.sessionFrom !== null) {
+      // Where the session's first speech starts, for "the first words went missing" reports.
+      log('debug', 'asr-worker:first-segment', {
+        startMs: Math.round(((seg.startSample - this.sessionFrom) * 1000) / SAMPLE_RATE),
+        audioMs: Math.round(audioMs)
+      })
+      this.sessionFrom = null
+    }
     if (final) {
       this.stats.segments++
       this.stats.decodedAudioMs += audioMs
@@ -406,6 +436,9 @@ function handle(m: MainToAsr): void {
     case 'skip':
       engine.skip(m.ms)
       return
+    case 'session':
+      engine.session()
+      return
     case 'keywords':
       // Hotwords stay off until a BPE vocabulary is pinned.
       if (!keywordsLogged && m.terms.length) log('info', 'asr-worker:hotwords-off', { terms: m.terms.length })
@@ -482,7 +515,7 @@ function start(): void {
         const w = config.modelConfig.whisper
         if (w) rec.setConfig({ ...config, modelConfig: { ...config.modelConfig, whisper: { ...w, language } } })
       }
-      engine = new Engine(rec, whisper, lock, setLanguage)
+      engine = new Engine(rec, whisper, lock, setLanguage, args.engine === 'whisper' ? args.language : '')
       log('info', 'asr-worker:loaded', { modelId: args.modelId, engine: args.engine, numThreads: args.numThreads })
       send({ type: 'ready', loadMs: Date.now() - t0 })
       for (const m of early.splice(0)) handle(m)
