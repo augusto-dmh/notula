@@ -254,15 +254,104 @@
   }
 }
 
-/* ---------- wide: the recording bar ---------- */
+/* ---------- wide: dictation and the recording bar ---------- */
 
+/* The dictation surface grows out of the resting capsule (or the hovered bubble: the bar view
+   measures it into --dict-from-w and -h) in 180 ms, width and height together, and its content fades in
+   from 60 ms. Ending, the content fades first and the surface shrinks back in 140 ms. The ring
+   shadow stands in for the capsule's 1 px border, so the box tweens to 2 px under its size.
+   BarFrame measures --dict-w and -h, because a keyframe can't tween to `auto`. */
+.dict-pill--bar {
+  animation: none;
+}
+
+.dict-pill--bar.is-entering {
+  animation: dbar-grow 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.dict-pill--bar.is-entering > * {
+  animation: dbar-fade-in 120ms linear 60ms backwards;
+}
+
+.dict-pill--bar.is-leaving {
+  animation: dbar-shrink 140ms cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+  pointer-events: none;
+}
+
+.dict-pill--bar.is-leaving > * {
+  animation: dbar-fade-out 60ms linear forwards;
+}
+
+@keyframes dbar-grow {
+  from {
+    width: calc(var(--dict-from-w, 40px) - 2px);
+    min-width: 0;
+    height: calc(var(--dict-from-h, 8px) - 2px);
+    padding: 0;
+    overflow: hidden;
+    border-radius: calc(var(--dict-from-h, 8px) / 2 - 1px);
+    background: rgba(0, 0, 0, 0.5);
+    box-shadow:
+      0 0 0 1px rgba(255, 255, 255, 0.5),
+      0 0 0 rgba(0, 0, 0, 0);
+  }
+  to {
+    width: var(--dict-w);
+    min-width: 0;
+    height: var(--dict-h);
+    overflow: hidden;
+  }
+}
+
+@keyframes dbar-shrink {
+  from {
+    width: var(--dict-w);
+    min-width: 0;
+    height: var(--dict-h);
+    overflow: hidden;
+  }
+  to {
+    width: 38px;
+    min-width: 0;
+    height: 6px;
+    padding: 0;
+    overflow: hidden;
+    border-radius: 3px;
+    background: rgba(0, 0, 0, 0.5);
+    box-shadow:
+      0 0 0 1px rgba(255, 255, 255, 0.5),
+      0 0 0 rgba(0, 0, 0, 0);
+  }
+}
+
+@keyframes dbar-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+/* Reduced motion (BarFrame's `is-still`): no size tween, a 120 ms cross-fade. */
+.dict-pill--bar.is-still.is-entering {
+  animation: dbar-fade-in 120ms linear;
+}
+
+.dict-pill--bar.is-still.is-leaving {
+  animation: dbar-fade-out 120ms linear forwards;
+}
+
+.dict-pill--bar.is-still > * {
+  animation: none;
+}
+
+/* The recording bar: the same 32 px footprint. It replaces the capsule in place, so it opens
+   from the capsule with a clip on the same curve, no measuring needed. */
 .dbar-pill {
   display: flex;
   align-items: center;
   gap: 2px;
-  height: 40px;
-  padding: 0 4px;
-  border-radius: 20px;
+  height: 32px;
+  padding: 0 2px;
+  border-radius: 16px;
   background: rgba(24, 24, 22, 0.94);
   color: #f4f4f2;
   font: 500 13px/1.2 var(--font-sans);
@@ -271,20 +360,28 @@
     0 6px 20px rgba(0, 0, 0, 0.28);
   box-sizing: border-box;
   cursor: default;
-  animation: dict-pill-in 160ms var(--ease) both;
+  animation: dbar-open 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .dbar-pill--wide {
   gap: 6px;
-  padding: 0 4px 0 4px;
+}
+
+@keyframes dbar-open {
+  from {
+    clip-path: inset(calc(100% - 8px) calc(50% - 20px) 0 round 4px);
+  }
+  to {
+    clip-path: inset(0 round 16px);
+  }
 }
 
 .dbar-btn {
   position: relative;
   display: grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   flex: none;
   padding: 0;
   border: 0;
@@ -295,8 +392,8 @@
 }
 
 .dbar-btn svg {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
 }
 
 .dbar-btn:hover {
@@ -377,12 +474,15 @@
   font-weight: 700;
 }
 
-/* Reduced motion: the record button and the tooltip slide stop; the bubble
-   morph, the notes button and the tooltip fade stay. */
+/* Reduced motion: the record button and the tooltip slide stop and the recording bar fades in
+   instead of opening; the bubble morph, the notes button and the tooltip fade stay. */
 @media (prefers-reduced-motion: reduce) {
-  .dbar-pill,
   .dbar-live {
     animation: none;
+  }
+
+  .dbar-pill {
+    animation: dbar-fade-in 120ms linear;
   }
 
   .dbar-rec,

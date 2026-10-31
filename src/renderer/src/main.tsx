@@ -12,6 +12,10 @@ import './styles.css'
  */
 function rootFor(hash: string): ComponentType {
   const path = hash.replace(/^#/, '').split('?')[0]
+  // Dev only; the whole branch and its chunk drop out of production builds.
+  if (import.meta.env.DEV && path === '/dictation-bar-preview') {
+    return lazy(() => import('./features/dictation/DictationBarPreview').then((m) => ({ default: m.DictationBarPreview })))
+  }
   switch (path) {
     case '/bubble':
       return lazy(() => import('./features/bubble').then((m) => ({ default: m.BubbleRoot })))

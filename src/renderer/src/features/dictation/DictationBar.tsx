@@ -117,6 +117,12 @@ export function DictationBarView({ bar, dictation }: { bar: DictationBarState; d
   // again whenever a transition ends.
   const reportRects = (): void => {
     const el = root.current
+    // The dictation surface grows out of the bubble's last size (./dictation-bar.css, dbar-grow).
+    const bubble = el?.querySelector<HTMLElement>('.dbar-bubble')
+    if (el && bubble) {
+      el.style.setProperty('--dict-from-w', `${bubble.offsetWidth}px`)
+      el.style.setProperty('--dict-from-h', `${bubble.offsetHeight}px`)
+    }
     const rects: DictationBarRect[] = el
       ? [...el.querySelectorAll<HTMLElement>('[data-hit]')].map((n) => {
           const r = n.getBoundingClientRect()
@@ -365,7 +371,7 @@ export function DictationBarView({ bar, dictation }: { bar: DictationBarState; d
   }
 
   return (
-    <div className="dict-pill-root dict-pill-root--bar" ref={root} onTransitionEnd={onTransitionEnd}>
+    <div className="dict-pill-root dict-pill-root--bar" ref={root} onTransitionEnd={onTransitionEnd} onAnimationEnd={onTransitionEnd}>
       {tip ? (
         <div className={`dbar-tip${TIP_SLIDES ? ' dbar-tip--slide' : ''}`} role="tooltip" ref={tipEl}>
           <span>{tip.text}</span>

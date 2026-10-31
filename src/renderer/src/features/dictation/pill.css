@@ -40,9 +40,20 @@ html.dict-pill-doc body {
   animation: dict-pill-in 160ms var(--ease) both;
 }
 
+/* Recording and processing stay compact: 32 px tall and only as wide as the controls plus the
+   level display. 78 px is the dot and the bars with their padding, so processing keeps the width. */
 .dict-pill--recording,
 .dict-pill--processing {
   justify-content: center;
+  gap: 8px;
+  min-width: 78px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 16px;
+}
+
+.dict-pill--recording:has(.dict-pill__btn) {
+  padding: 0 3px;
 }
 
 .dict-pill--pasted,
@@ -170,20 +181,20 @@ html.dict-pill-doc body {
   box-shadow: 0 0 0 3px rgba(229, 72, 77, 0.22);
 }
 
+/* The level display: 7 bars, 3 px wide and apart. Heights and opacity come from Waveform's rAF loop. */
 .dict-wave {
   display: flex;
   align-items: center;
-  gap: 2px;
-  height: 22px;
+  gap: 3px;
+  height: 20px;
 }
 
 .dict-wave span {
   width: 3px;
-  height: 22px;
-  border-radius: 2px;
+  height: 4px;
+  border-radius: 1.5px;
   background: #f4f4f2;
-  transform-origin: center;
-  transition: transform 80ms linear;
+  opacity: 0.85;
 }
 
 .dict-pill__btn {
@@ -217,39 +228,6 @@ html.dict-pill-doc body {
 .dict-proc {
   display: flex;
   align-items: center;
-  gap: 4px;
-  height: 22px;
-  padding: 0 18px;
-}
-
-.dict-proc span {
-  width: 4px;
-  height: 16px;
-  border-radius: 2px;
-  background: #f4f4f2;
-  animation: dict-proc 900ms ease-in-out infinite;
-}
-
-.dict-proc span:nth-child(2) {
-  animation-delay: 120ms;
-}
-.dict-proc span:nth-child(3) {
-  animation-delay: 240ms;
-}
-.dict-proc span:nth-child(4) {
-  animation-delay: 360ms;
-}
-
-@keyframes dict-proc {
-  0%,
-  100% {
-    transform: scaleY(0.35);
-    opacity: 0.55;
-  }
-  50% {
-    transform: scaleY(1);
-    opacity: 1;
-  }
 }
 
 .dict-pill__text {
@@ -289,13 +267,12 @@ html.dict-pill-doc body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .dict-pill,
-  .dict-proc span {
+  .dict-pill {
     animation: none;
   }
 }
 
-/* Check-your-mic while recording: one line in place of the waveform. */
+/* Check-your-mic while recording: one line in place of the level display. */
 .dict-pill__hint {
   overflow: hidden;
   color: #ffd9a8;

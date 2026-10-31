@@ -1,0 +1,55 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* The dev-only dictation bar preview: each cell is one 320 × 180 bar window over a desktop-like
+   backdrop. */
+
+.dbp {
+  min-height: 100vh;
+  padding: 24px 32px;
+  background: #5d6670;
+  color: #f4f4f2;
+  font: 400 13px/1.4 var(--font-sans);
+  box-sizing: border-box;
+}
+
+.dbp h1 {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+
+.dbp h2 {
+  margin: 28px 0 0;
+  font-size: 15px;
+}
+
+.dbp p {
+  margin: 0;
+  opacity: 0.8;
+}
+
+.dbp section {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.dbp-cell {
+  margin: 0;
+}
+
+.dbp-window.dict-pill-root {
+  width: 320px;
+  height: 180px;
+  border-radius: 8px;
+  background: linear-gradient(160deg, #8a96a3, #48505a);
+}
+
+.dbp-cell figcaption {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.dbp-cell figcaption span {
+  opacity: 0.75;
+}
