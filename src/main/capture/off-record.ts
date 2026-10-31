@@ -46,7 +46,7 @@ const FRESH_LAG_MS = 20_000
 /** More audio than this waiting to be sent: the source is replaying a backlog. */
 const BACKLOG_ENTRIES = 2
 
-const INTENTS = ['stop_now', 'private_from_here', 'retract', 'discussing_notes', 'none'] as const
+const INTENTS = ['stop_now', 'private_from_here', 'undo_earlier', 'about_notes', 'none'] as const
 type Intent = (typeof INTENTS)[number]
 const OFFERED: readonly Intent[] = ['stop_now', 'private_from_here']
 
@@ -63,8 +63,8 @@ Reply with JSON only, no other text:
 The intent is one of:
 - "stop_now": they want the notes or the transcription stopped now.
 - "private_from_here": they want what they say next kept out of the notes.
-- "retract": they want something already said taken out.
-- "discussing_notes": they talk about the notes or the recording without asking for anything.
+- "undo_earlier": they want to take back something said earlier.
+- "about_notes": they are only talking about note-taking or the recording, with no request.
 - "none": anything else.`
 
 type Resolution = OffRecordAnswer | 'expired' | 'session_ended'

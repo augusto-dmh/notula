@@ -71,7 +71,7 @@ export function OffRecordCard({ prompt }: { prompt: OffRecordPrompt }): JSX.Elem
           <LockIcon />
         </span>
         <h2 className="nt-prompt__title" id="nt-offrecord-title">
-          Keep this out of the notes?
+          Leave what comes next out of the notes?
         </h2>
         {countdown ? (
           <span className="nt-prompt__badge nt-offrecord__badge" aria-label={`Keeps going in ${countdown}`}>
@@ -86,7 +86,7 @@ export function OffRecordCard({ prompt }: { prompt: OffRecordPrompt }): JSX.Elem
       {held ? <p className="nt-offrecord__held">{held}</p> : null}
       <div className="nt-prompt__actions">
         <button type="button" className="n-btn n-btn--sm" disabled={busy} onClick={() => answer('keep')}>
-          Keep going
+          Transcribe as usual
         </button>
         <button type="button" className="n-btn n-btn--sm n-btn--primary" disabled={busy} onClick={() => answer('pause')}>
           Erase and pause

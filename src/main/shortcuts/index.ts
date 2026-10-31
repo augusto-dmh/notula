@@ -55,7 +55,7 @@ export const SHORTCUT_COPY = {
   escape: 'Escape can’t be part of a shortcut.',
   reserved: 'That combination is reserved for editing. Try another.',
   usedByOtherApp: 'This shortcut is used by another app.',
-  usedBy: (label: string) => `Already used by ${label}.`,
+  usedBy: (label: string) => `${label} uses this shortcut. Pick another one.`,
   chord: 'Use two to four keys with at least one of Ctrl, Alt, Shift or the Windows key, plus at most one other key.',
   chordMac: 'Use two to four keys with at least one of ⌃, ⌥, ⇧ or ⌘, plus at most one other key.',
   inList: 'That shortcut is already in this list.',

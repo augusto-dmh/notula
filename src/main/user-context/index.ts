@@ -228,7 +228,7 @@ Draft the sections whose ids the request names. What belongs in each:
 
 When the request asks for the tables, also fill them:
 - terms: product names, internal names, acronyms and jargon the user relies on, each with a short meaning. Term at most 60 characters, meaning at most 300. At most 200 rows.
-- projects: the projects the user is involved in, each with a short summary and the user's part in it. Name at most 80 characters, summary at most 400, part at most 200. At most 30 rows.
+- projects: the projects the user is involved in, each with a short summary and the role the user plays on it. Name at most 80 characters, summary at most 400, role at most 200. At most 30 rows.
 
 The people they meet most are listed with their meeting counts. Use that list to judge who matters, mostly for relationships, but describe a person only from what the notes show.
 
@@ -612,7 +612,7 @@ export function registerUserContext(ctx: MainContext): PromptExtrasApi {
       if (!name) throw bad(kind === 'term' ? 'Enter a term.' : 'Enter a project name.')
       if (name.length > nameMax) throw bad(kind === 'term' ? `Use up to ${nameMax} characters for a term.` : `Use up to ${nameMax} characters for a project name.`)
       if (body.length > bodyMax) throw bad(kind === 'term' ? `Use up to ${bodyMax} characters for a meaning.` : `Use up to ${bodyMax} characters for a summary.`)
-      if (role.length > L.projectRoleMax) throw bad(`Use up to ${L.projectRoleMax} characters for your part.`)
+      if (role.length > L.projectRoleMax) throw bad(`Use up to ${L.projectRoleMax} characters for your role.`)
       // An edit makes a drafted row the user's own.
       const entry = await ctx.storage.setUserContextEntry({ ...(id ? { id } : {}), kind, name, body, role: role || null, origin: 'user', drafted_at: null })
       log('info', 'user-context:entry-saved', { kind, created: !id })

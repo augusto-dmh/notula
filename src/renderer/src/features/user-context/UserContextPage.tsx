@@ -515,7 +515,7 @@ function Sharing(): JSX.Element {
   )
 }
 
-const PROJECTS_LEAD = 'What you’re involved in, in a sentence or two, and your part in it. Up to 30 projects.'
+const PROJECTS_LEAD = 'The projects you work on, each summed up in a sentence or two, with the role you play. Up to 30 projects.'
 const TERMS_LEAD = 'Names, acronyms and jargon you use, with what they mean, so summaries and chat get them right. Up to 200 terms.'
 const FOLD_NOTE = 'Your edits here, and notes you take outside meetings, are folded in at the next refresh.'
 
@@ -549,7 +549,7 @@ function EntryTable(p: { kind: UserContextEntryKind; rows: UserContextEntry[]; b
           <tr>
             <th scope="col">{project ? 'Project' : 'Term'}</th>
             <th scope="col">{project ? 'Summary' : 'Meaning'}</th>
-            {project ? <th scope="col">Your part</th> : null}
+            {project ? <th scope="col">Your role</th> : null}
             <th scope="col">
               <span className="uc-sr">Actions</span>
             </th>
@@ -646,7 +646,7 @@ function EntryRow(p: { kind: UserContextEntryKind; entry: UserContextEntry | nul
     >
       {field('name', L.name, project ? 'Project name' : 'Term', p.entry ? undefined : project ? 'Add a project' : 'Add a term')}
       {field('body', L.body, project ? 'Summary' : 'Meaning')}
-      {project ? field('role', USER_CONTEXT_LIMITS.projectRoleMax, 'Your part') : null}
+      {project ? field('role', USER_CONTEXT_LIMITS.projectRoleMax, 'Your role') : null}
       <td className="uc-table__actions">
         {p.entry?.origin === 'drafted' ? <span className="uc-badge">Drafted</span> : null}
         {p.entry ? (

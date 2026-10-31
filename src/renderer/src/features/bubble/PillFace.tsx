@@ -46,7 +46,7 @@ export function PillFace({ snapshotButton }: { snapshotButton: boolean }): JSX.E
       </span>
       <span className="bubble-center" aria-hidden="true">
         {offRecord ? (
-          <span className="bubble-paused" title="Transcription paused, off the record">
+          <span className="bubble-paused" title="Notes on hold for privacy">
             <span />
             <span />
           </span>
@@ -69,7 +69,7 @@ export function PillFace({ snapshotButton }: { snapshotButton: boolean }): JSX.E
           !
         </span>
       ) : null}
-      {offRecord ? <span className="bubble-sr">Transcription paused, off the record</span> : null}
+      {offRecord ? <span className="bubble-sr">Notes on hold for privacy</span> : null}
     </>
   )
 }

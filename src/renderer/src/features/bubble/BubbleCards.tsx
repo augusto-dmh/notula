@@ -13,23 +13,23 @@ import { useBubbleState } from './state'
 
 const NOTICE: Record<ScreenSnapshotsNotice, { title: string; body: string | null; action: 'choose' | 'off' | null }> = {
   'capture-offer': {
-    title: 'Take snapshots',
-    body: 'Notula can capture slides or a shared screen during the meeting and add the images to your notes.',
+    title: 'Add screen snapshots?',
+    body: 'Pick a window or screen, and Notula adds images of only that source to this note.',
     action: 'choose'
   },
   'permission-checking': {
-    title: 'Did you allow screen recording?',
-    body: 'Notula is checking the permission now…',
+    title: 'Checking screen access',
+    body: 'Notula is looking for screen recording access…',
     action: null
   },
   'capture-enabled': {
-    title: 'All set up',
-    body: 'Notula will take snapshots of what you picked and add them to your notes.',
+    title: 'Snapshots are on',
+    body: 'Only the source you picked goes into this note.',
     action: null
   },
-  paused: { title: 'Paused snapshots', body: 'No new snapshots until you resume them.', action: null },
-  'capture-failed': { title: 'Notula couldn’t take the snapshot', body: 'Pick the window or screen again to retry.', action: 'choose' },
-  'too-large': { title: 'Notula couldn’t take the snapshot', body: 'That window is too large to snapshot.', action: null }
+  paused: { title: 'Snapshots on hold', body: 'Resume them to add more images to this note.', action: null },
+  'capture-failed': { title: 'Couldn’t take a snapshot', body: 'To try again, pick a source again.', action: 'choose' },
+  'too-large': { title: 'Couldn’t take a snapshot', body: 'The source you picked is too large for a snapshot.', action: null }
 }
 
 /** Informational notices hide on their own after 5 s; closing one only hides it here. */
@@ -111,7 +111,7 @@ function OffRecordCard({
     <div className="nt-prompt nt-prompt--compact bubble-offrecord" role="alertdialog" aria-labelledby="bubble-offrecord-title" aria-describedby="bubble-offrecord-body">
       <div className="nt-prompt__head">
         <h2 className="nt-prompt__title" id="bubble-offrecord-title">
-          Go off the record?
+          Leave what comes next out of the notes?
         </h2>
         {countdown ? (
           <span className="nt-prompt__badge" aria-label={`${countdown} left to answer`}>
@@ -125,7 +125,7 @@ function OffRecordCard({
       {held && !failed ? <p className="bubble-offrecord__held">{held}</p> : null}
       <div className="nt-prompt__actions">
         <button type="button" className="n-btn n-btn--sm" disabled={busy} onClick={() => void answer('keep')}>
-          Keep transcribing
+          Transcribe as usual
         </button>
         <button type="button" className="n-btn n-btn--sm n-btn--primary" disabled={busy} onClick={() => void answer('pause')}>
           Pause

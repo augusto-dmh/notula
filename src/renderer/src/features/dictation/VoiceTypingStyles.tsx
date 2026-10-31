@@ -60,8 +60,8 @@ export function VoiceTypingStylesView(): JSX.Element | null {
     <div className="vt-page">
       <section className="settings-group">
         <p className="settings-group__description">
-          Notula picks the style from the app you’re typing in. A style changes capitals and punctuation, never your words. Code editors and terminals
-          always get your words exactly.
+          Your words stay as you said them. A style only adjusts capitals and punctuation, and Notula picks it from the app you’re typing in. Code
+          editors and terminals get your words with no changes at all.
         </p>
         <div className="settings-card">
           {DICTATION_STYLE_KEYS.map((key) => {
