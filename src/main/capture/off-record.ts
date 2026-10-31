@@ -27,6 +27,7 @@ import {
   type OffRecordSurface
 } from '@shared/types/off-record'
 import { DELETED_CHUNK_MARKER, type TranscriptChunk } from '@shared/types/transcript'
+import { bubbleHub } from '../bubble/hub'
 import type { MainContext } from '../context'
 import { currentProvider } from '../llm/registry'
 import { MAX_TOKENS } from '../llm/types'
@@ -374,6 +375,9 @@ class Detector implements OffRecordDetector {
         : null
     for (const wc of this.ctx.windows.targets()) wc.send('off-record:prompt' satisfies PushChannel, p)
     this.ctx.bus.emit('off-record:prompt', p)
+    // The bubble shows its card from the hub, even over a focused main window.
+    bubbleHub.offRecord = p ? { noteId: p.noteId, promptId: p.promptId, expiresAt: p.expiresAt } : null
+    bubbleHub.emit('side-card')
   }
 
   answer(noteId: string, promptId: string, answer: OffRecordAnswer, surface: OffRecordSurface): boolean {
