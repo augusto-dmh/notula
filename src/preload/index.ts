@@ -382,7 +382,8 @@ const api: NotulaApi = {
     hasKey: (req) => ipcRenderer.invoke('llm:has-key' satisfies InvokeChannel, req),
     clearKey: (req) => ipcRenderer.invoke('llm:clear-key' satisfies InvokeChannel, req),
     test: (req) => ipcRenderer.invoke('llm:test' satisfies InvokeChannel, req),
-    listModels: (req) => ipcRenderer.invoke('llm:list-models' satisfies InvokeChannel, req)
+    listModels: (req) => ipcRenderer.invoke('llm:list-models' satisfies InvokeChannel, req),
+    retiredModel: (req) => ipcRenderer.invoke('llm:retired-model' satisfies InvokeChannel, req)
   },
   permissions: {
     getState: () => ipcRenderer.invoke('permissions:get-state' satisfies InvokeChannel),

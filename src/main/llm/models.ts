@@ -4,8 +4,16 @@
 // (`MODEL_ALIASES`), then a model the provider no longer lists falls back to Auto
 // (the provider's settings model), and the stored selection is rewritten to `auto`.
 // Summaries, titles and meeting-end-check never use this: they keep the settings model.
+// Also the Gemini preset's model pick when its key is saved (`pickGeminiModel`).
 
-import { CHAT_MODEL_AUTO, MODEL_ALIASES, type LlmProviderId } from '@shared/types/enhance'
+import {
+  CHAT_MODEL_AUTO,
+  GEMINI_PRESET,
+  isGeminiBaseUrl,
+  MODEL_ALIASES,
+  newestFlashModel,
+  type LlmProviderId
+} from '@shared/types/enhance'
 import type { Settings } from '@shared/types/settings'
 import type { MainContext } from '../context'
 import { log } from '../log'
@@ -99,6 +107,30 @@ export async function resolveChatModel(
       .catch((err: unknown) => log('warn', 'chat:model-reset-failed', { key, err }))
   }
   return { provider, model: auto, auto: true }
+}
+
+/**
+ * After a Gemini key is saved: the newest Flash the key lists, unless the user chose a
+ * model that is still listed. The preset's model doesn't count as a choice, since setup
+ * writes it before any list can be read; it stays only when the list can't be read.
+ */
+export async function pickGeminiModel(ctx: Pick<MainContext, 'settings' | 'secrets'>): Promise<void> {
+  const s = await ctx.settings.getAll()
+  if (!isGeminiBaseUrl(s['llm.openai.baseUrl'])) return
+  const current = s['llm.openai.model'].trim()
+  let listed: string[]
+  try {
+    listed = await buildProvider('openai', s, ctx.secrets).listModels(AbortSignal.timeout(LIST_TIMEOUT_MS))
+  } catch (err) {
+    log('info', 'llm:model-pick-unavailable', { err: err instanceof Error ? err.message : String(err) })
+    if (!current) await ctx.settings.set('llm.openai.model', GEMINI_PRESET.model)
+    return
+  }
+  if (current && current !== GEMINI_PRESET.model && listed.includes(current)) return
+  const newest = newestFlashModel(listed) ?? (current || GEMINI_PRESET.model)
+  if (newest === current) return
+  await ctx.settings.set('llm.openai.model', newest)
+  log('info', 'llm:model-picked', { model: newest, previous: current || null })
 }
 
 /** Drops the cached lists (a provider, key or base URL changed). */

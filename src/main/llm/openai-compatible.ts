@@ -17,9 +17,10 @@
 // is sent when a purpose sets it; a 2xx `text/html` answer is an intercepting network
 // (intercept.ts).
 
-import { GEMINI_PRESET, type LlmProviderId } from '@shared/types/enhance'
+import { GEMINI_PRESET, parseRetiredModel, type LlmProviderId } from '@shared/types/enhance'
 import { enhanceError, EnhanceError } from '../enhance/errors'
 import { checkIntercepted, LlmInterceptedError } from './intercept'
+import { noteRetiredModel } from './retired'
 import {
   LlmImagesUnsupportedError,
   LlmToolsUnsupportedError,
@@ -76,6 +77,8 @@ interface OpenAiReplay {
 /** Text that is a tool call a server wrote out instead of using `tool_calls`. */
 const TOOL_TEXT_LEAD = /^(\{|\[\s*\{|<tool_call>|\[TOOL_CALLS\]|```(?:json)?\s*\{)/
 const TOOL_ERROR_HINT = /\b(tools?|tool_choice|function[s_]?|function calling)\b/i
+/** A 400 about the output budget (errorFromResponse puts the status in the message). */
+const TOKEN_LIMIT_HINT = /\(400\).*\b(max_tokens|max_completion_tokens|max_output_tokens|output limit|token limit)\b/i
 
 function label(id: Options['id']): string {
   return id === 'local' ? 'The local model' : 'The AI provider'
@@ -158,7 +161,8 @@ class ThinkFilter {
   }
 }
 
-async function errorFromResponse(id: Options['id'], res: Response): Promise<EnhanceError> {
+/** `model` is the model the request asked for, or null for a call that names none (the list). */
+async function errorFromResponse(id: Options['id'], res: Response, model: string | null): Promise<EnhanceError> {
   let detail = ''
   try {
     const json = (await res.json()) as unknown
@@ -171,6 +175,12 @@ async function errorFromResponse(id: Options['id'], res: Response): Promise<Enha
   }
   if (res.status === 401 || res.status === 403) {
     return enhanceError('missing-key', `${label(id)} rejected the API key.`)
+  }
+  // Settings ▸ AI offers the switch, whichever task hit it.
+  const retired = model && detail ? parseRetiredModel(detail, model) : null
+  if (retired && model) {
+    noteRetiredModel(id, { model, reason: detail, replacement: retired.replacement })
+    return enhanceError('no-model', detail)
   }
   if (res.status === 404) {
     return enhanceError('no-model', detail || `${label(id)} does not offer the selected model, or the base URL is wrong.`)
@@ -268,7 +278,7 @@ export function createOpenAiCompatibleProvider(opts: Options): LlmProvider {
     } catch (err) {
       throw networkError(opts.id, baseUrl, err)
     }
-    if (!res.ok) throw await errorFromResponse(opts.id, res)
+    if (!res.ok) throw await errorFromResponse(opts.id, res, req.model?.trim() || model)
     try {
       checkIntercepted(res, `${baseUrl}/chat/completions`)
     } catch (err) {
@@ -313,9 +323,9 @@ export function createOpenAiCompatibleProvider(opts: Options): LlmProvider {
       if (withTools && (res.status === 400 || res.status === 422)) {
         const text = await res.text().catch(() => '')
         if (TOOL_ERROR_HINT.test(text)) throw new LlmToolsUnsupportedError(opts.id, use)
-        throw await errorFromResponse(opts.id, new Response(text, { status: res.status }))
+        throw await errorFromResponse(opts.id, new Response(text, { status: res.status }), use)
       }
-      throw await errorFromResponse(opts.id, res)
+      throw await errorFromResponse(opts.id, res, use)
     }
     try {
       checkIntercepted(res, `${baseUrl}/chat/completions`)
@@ -494,7 +504,7 @@ export function createOpenAiCompatibleProvider(opts: Options): LlmProvider {
     } catch (err) {
       throw networkError(opts.id, baseUrl, err)
     }
-    if (!res.ok) throw await errorFromResponse(opts.id, res)
+    if (!res.ok) throw await errorFromResponse(opts.id, res, null)
     try {
       checkIntercepted(res, `${baseUrl}/models`)
     } catch (err) {
@@ -526,6 +536,19 @@ export function createOpenAiCompatibleProvider(opts: Options): LlmProvider {
       // Some compatible servers list nothing; only a non-empty list can disprove the model.
       if (models.length > 0 && !models.includes(model)) {
         throw enhanceError('no-model', `${label(opts.id)} does not list the model "${model}".`)
+      }
+      // A listed model can still be closed to this key, so a cloud test also sends one
+      // 1-token request. A local server skips it: loading a model on its first call can
+      // outlast the test.
+      if (opts.id === 'local') return
+      try {
+        await complete({ purpose: 'title', system: 'Reply with OK.', user: 'OK', maxTokens: 1 }, signal)
+      } catch (err) {
+        // A complaint about the 1-token budget, or a refusal, still means the model answered.
+        if (err instanceof EnhanceError && (err.code === 'refusal' || (err.code === 'provider-error' && TOKEN_LIMIT_HINT.test(err.message)))) {
+          return
+        }
+        throw err
       }
     },
     chat,

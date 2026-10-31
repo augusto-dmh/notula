@@ -117,6 +117,7 @@ import type {
   EnhanceEvent,
   GenerateRequest,
   LlmProviderId,
+  RetiredModel,
   RewriteRequest,
   TitleResult
 } from './types/enhance'
@@ -356,6 +357,8 @@ export interface InvokeChannels {
   'llm:test': [{ provider: LlmProviderId }, ProviderTestResult]
   /** `anthropic`: a static list; `local`/`openai`: `GET {baseUrl}/models`. */
   'llm:list-models': [{ provider: LlmProviderId }, string[]]
+  /** The provider's last "model no longer available" answer, while the settings model is that model. */
+  'llm:retired-model': [{ provider: LlmProviderId }, RetiredModel | null]
   'permissions:get-state': [void, PermissionsState]
   'permissions:request-microphone': [void, PermissionsState]
   'permissions:request-system-audio': [SystemAudioRequest, PermissionsState]
@@ -1498,6 +1501,7 @@ export interface NotulaApi {
     clearKey: InvokeMember<'llm:clear-key'>
     test: InvokeMember<'llm:test'>
     listModels: InvokeMember<'llm:list-models'>
+    retiredModel: InvokeMember<'llm:retired-model'>
   }
   permissions: {
     getState: InvokeMember<'permissions:get-state'>

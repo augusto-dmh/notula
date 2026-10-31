@@ -17,7 +17,9 @@ import { noteChatInputs } from './chat-inputs'
 import { runDevHarness } from './dev-harness'
 import { toEnhanceError } from './errors'
 import { Generator, ipcCode } from './generation'
+import { forgetModelLists, pickGeminiModel } from '../llm/models'
 import { buildProvider, CLOUD_LLM_PROVIDERS, LLM_PROVIDERS, llmSecretId } from '../llm/registry'
+import { retiredModelFor } from '../llm/retired'
 import { generateTitle } from './title'
 
 const MAX_KEY_LENGTH = 1_024
@@ -81,6 +83,11 @@ export function registerEnhance(ctx: MainContext): EnhanceApi {
     }
     await ctx.secrets.set(llmSecretId(provider), key)
     log('info', 'llm:key-set', { provider })
+    // A new Gemini key may not reach the preset's model; the save answers once the pick is written.
+    if (provider === 'openai') {
+      forgetModelLists()
+      await pickGeminiModel(ctx).catch((err: unknown) => log('warn', 'llm:model-pick-failed', { err }))
+    }
   })
 
   ipcMain.handle('llm:has-key' satisfies InvokeChannel, async (_e, req: InvokeReq<'llm:has-key'>): Promise<boolean> => {
@@ -122,6 +129,16 @@ export function registerEnhance(ctx: MainContext): EnhanceApi {
         const e = toEnhanceError(err)
         throw expected(notulaError(ipcCode(e.code), e.message))
       }
+    }
+  )
+
+  ipcMain.handle(
+    'llm:retired-model' satisfies InvokeChannel,
+    async (_e, req: InvokeReq<'llm:retired-model'>): Promise<InvokeRes<'llm:retired-model'>> => {
+      const id = anyProvider(req)
+      const s = await ctx.settings.getAll()
+      const model = id === 'anthropic' ? s['llm.anthropic.model'] : id === 'openai' ? s['llm.openai.model'] : s['llm.local.model']
+      return retiredModelFor(id, model.trim())
     }
   )
 
