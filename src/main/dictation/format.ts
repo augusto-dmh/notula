@@ -187,7 +187,10 @@ export async function formatDictation(ctx: MainContext, input: FormatInput): Pro
     }
     return finish(out, 'llm')
   } catch (err) {
-    log('info', 'dictation-cleanup-failed', { reason: err instanceof Error ? err.name : 'error' })
+    // The code says why (key, quota, timeout, model) without logging any dictated text.
+    const code = err instanceof Error && 'code' in err && typeof err.code === 'string' ? err.code : null
+    const detail = err instanceof Error ? err.message.slice(0, 160) : null
+    log('info', 'dictation-cleanup-failed', { reason: err instanceof Error ? err.name : 'error', code, detail })
     return finish(raw, 'raw')
   }
 }

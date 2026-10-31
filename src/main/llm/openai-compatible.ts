@@ -147,8 +147,10 @@ class ThinkFilter {
 async function errorFromResponse(id: Options['id'], res: Response): Promise<EnhanceError> {
   let detail = ''
   try {
-    const body = (await res.json()) as { error?: { message?: unknown } | string; message?: unknown }
-    const msg = typeof body.error === 'string' ? body.error : (body.error?.message ?? body.message)
+    const json = (await res.json()) as unknown
+    // Some compatible servers wrap the error object in a one-item array.
+    const body = (Array.isArray(json) ? json[0] : json) as { error?: { message?: unknown } | string; message?: unknown } | null
+    const msg = typeof body?.error === 'string' ? body.error : (body?.error?.message ?? body?.message)
     if (typeof msg === 'string') detail = msg.slice(0, MAX_ERROR_CHARS)
   } catch {
     // Not JSON: the status says enough.
