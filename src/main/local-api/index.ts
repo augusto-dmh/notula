@@ -50,16 +50,25 @@ import type { ApiNoteFilters, ApiSeriesItem } from '../storage/api'
 /** `source_kind` values (the storage repo checks them again). */
 const SOURCE_KINDS: readonly SourceKind[] = ['video', 'live', 'lesson', 'other']
 
-/** A course's app names, from the app ids in its match; an app that maps to no name is left out. */
-async function withAppNames<T extends ApiSeriesItem>(ctx: MainContext, items: T[]): Promise<T[]> {
-  if (!items.some((x) => x.registered)) return items
-  const courses = new Map((await ctx.storage.listCourses()).map((c) => [c.id, c.match?.apps ?? []]))
+/**
+ * A course's app names: storage answers `apps` with the app ids of its match, and each id maps
+ * once per call; an app that maps to no name is left out.
+ */
+async function withAppNames<T extends ApiSeriesItem>(items: T[]): Promise<T[]> {
+  const names = new Map<string, Promise<string | null>>()
+  const nameOf = (appId: string): Promise<string | null> => {
+    let p = names.get(appId)
+    if (!p) {
+      p = mapApp(appId).then((m) => m.name, () => null)
+      names.set(appId, p)
+    }
+    return p
+  }
   return Promise.all(
     items.map(async (x) => {
-      const apps = courses.get(x.id) ?? []
-      if (!apps.length) return x
-      const names = await Promise.all(apps.map((a) => mapApp(a.appUserModelId).then((m) => m.name, () => null)))
-      return { ...x, apps: [...new Set(names.filter((n): n is string => !!n))] }
+      if (!x.apps?.length) return x
+      const mapped = await Promise.all(x.apps.map(nameOf))
+      return { ...x, apps: [...new Set(mapped.filter((n): n is string => !!n))] }
     })
   )
 }
@@ -457,12 +466,12 @@ export function registerLocalApi(ctx: MainContext): void {
       case 'series.list': {
         const registered = flag(p['registered'], 'registered')
         const all = await ctx.storage.apiListSeries()
-        return { series: await withAppNames(ctx, registered === undefined ? all : all.filter((x) => (x.registered === true) === registered)) }
+        return { series: await withAppNames(registered === undefined ? all : all.filter((x) => (x.registered === true) === registered)) }
       }
       case 'series.get': {
         const s = await ctx.storage.apiGetSeries(id(p['id'], 'id'))
         if (!s) throw new ApiError('NOT_FOUND', 'Series not found')
-        return (await withAppNames(ctx, [s]))[0]
+        return (await withAppNames([s]))[0]
       }
     }
   }

@@ -18,7 +18,7 @@ import type {
 } from '@shared/types/chat'
 import type { FoldersState } from '@shared/types/folders'
 import type { Note, NoteListItem } from '@shared/types/notes'
-import type { NoteSourceView, SourceConfidence, SourceKind } from '@shared/types/sources'
+import type { LessonOrigin, LessonState, NoteSourceView, SourceConfidence, SourceKind } from '@shared/types/sources'
 import type { MainContext } from '../context'
 import { latestSummaryPanel } from '../enhance/chat-inputs'
 import { log } from '../log'
@@ -103,8 +103,13 @@ export interface PayloadSource {
   channel: string | null
   url: string | null
   duration_ms: number | null
-  series: { id: string; title: string } | null
+  /** `course`: the series is in Courses. */
+  series: { id: string; title: string; course: boolean } | null
   lesson: number | null
+  /** The lesson's standing and, for a `numbered` one, where its number came from. */
+  lesson_state: LessonState
+  lesson_origin: LessonOrigin | null
+  watched_percent: number | null
   confidence: SourceConfidence
 }
 
@@ -117,14 +122,22 @@ export const PAYLOAD_SOURCE_SCHEMA: Record<string, unknown> = {
     channel: { type: ['string', 'null'] },
     url: { type: ['string', 'null'] },
     duration_ms: { type: ['integer', 'null'] },
-    series: { type: ['object', 'null'], properties: { id: { type: 'string' }, title: { type: 'string' } }, required: ['id', 'title'] },
+    series: {
+      type: ['object', 'null'],
+      properties: { id: { type: 'string' }, title: { type: 'string' }, course: { type: 'boolean' } },
+      required: ['id', 'title', 'course']
+    },
     lesson: { type: ['integer', 'null'] },
+    lesson_state: { type: 'string', enum: ['numbered', 'guessed', 'pending'] },
+    lesson_origin: { type: ['string', 'null'], enum: ['catalog', 'playlist', 'extension', 'manual', null] },
+    watched_percent: { type: ['integer', 'null'] },
     confidence: { type: 'string', enum: ['exact', 'high', 'guess'] }
   },
-  required: ['kind', 'title', 'channel', 'url', 'duration_ms', 'series', 'lesson', 'confidence']
+  required: ['kind', 'title', 'channel', 'url', 'duration_ms', 'series', 'lesson', 'lesson_state', 'lesson_origin', 'watched_percent', 'confidence']
 }
 
-export function payloadSource(v: NoteSourceView | null): PayloadSource | null {
+/** `course`: whether the source's series is in Courses (the view's series row doesn't say). */
+export function payloadSource(v: NoteSourceView | null, course = false): PayloadSource | null {
   if (!v) return null
   const s = v.source
   return {
@@ -133,8 +146,11 @@ export function payloadSource(v: NoteSourceView | null): PayloadSource | null {
     channel: s.channel,
     url: s.url,
     duration_ms: s.duration_ms,
-    series: v.series ? { id: v.series.id, title: v.series.title } : null,
+    series: v.series ? { id: v.series.id, title: v.series.title, course } : null,
     lesson: s.lesson_number,
+    lesson_state: s.lesson_state,
+    lesson_origin: s.lesson_origin,
+    watched_percent: v.watched.percent,
     confidence: s.confidence
   }
 }
@@ -142,13 +158,15 @@ export function payloadSource(v: NoteSourceView | null): PayloadSource | null {
 /** The note's source and stamped notes; nulls without a source or when storage can't tell. */
 export async function loadSource(ctx: MainContext, noteId: string): Promise<{ source: PayloadSource | null; stamped: string | null }> {
   const v = await ctx.storage.getNoteSourceView(noteId).catch(() => null)
-  return { source: payloadSource(v), stamped: v?.source.notes_md_stamped?.trim() || null }
+  const series = v?.series ? await ctx.storage.getSeries(v.series.id).catch(() => null) : null
+  return { source: payloadSource(v, !!series?.registered_at), stamped: v?.source.notes_md_stamped?.trim() || null }
 }
 
 function sourceLine(s: PayloadSource): string {
   const what = s.kind === 'lesson' ? 'Lesson' : s.kind === 'live' ? 'Live video' : s.kind === 'video' ? 'Video' : 'Source'
   const parts = [`${what}: ${s.title}${s.channel ? ` by ${s.channel}` : ''}`]
-  if (s.series) parts.push(`series ${s.series.title}${s.lesson !== null ? `, lesson ${s.lesson}` : ''}`)
+  if (s.series) parts.push(`${s.series.course ? 'course' : 'series'} ${s.series.title}${s.lesson !== null ? `, lesson ${s.lesson}` : ''}`)
+  if (s.watched_percent !== null) parts.push(`${s.watched_percent}% watched`)
   if (s.url) parts.push(s.url)
   if (s.confidence === 'guess') parts.push('not confirmed')
   return parts.join(' · ')

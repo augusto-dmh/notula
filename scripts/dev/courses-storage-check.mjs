@@ -19,6 +19,11 @@
 // 4. The course view on a seeded course: watched %, finished at 90 %, lessons with notes (trashed
 //    notes don't count), the next lesson (after the most recently finished; with nothing
 //    finished, the first without a note), Needs a lesson, and Courses ordered by last watched.
+// 5. The storage review's fixes: the course and series lists prepare as many statements for more
+//    series (no per-series reads), sites and apps only for a registered series, a pick of an item
+//    without a number stays counted, finished on the raw share (89.5 % isn't), manual lessons
+//    against updates and replaced sources, learned titles and hosts trimmed instead of refused,
+//    `discardSourceRun`, and the export's `series.json` (a course with no notes included).
 //
 // Exits 1 on any failure. `--keep` keeps the scratch folder.
 
@@ -379,9 +384,14 @@ try {
   // ---------- the match on write and on read ----------
 
   const many = (n, f) => Array.from({ length: n }, (_, i) => f(i))
-  check('at most 20 learned titles', throws(() => call('updateCourse', course.id, { match: { ...MATCH, titles: many(21, (i) => `Title ${i}`) } }), /match\.titles/))
-  check('20 learned titles are fine', call('updateCourse', course.id, { match: { ...MATCH, titles: many(20, (i) => `Title ${i}`) } }).match.titles.length === 20)
-  check('at most 50 hosts', throws(() => call('updateCourse', course.id, { match: { ...MATCH, hosts: many(51, (i) => `h${i}.example.com`) } }), /match\.hosts/))
+  const t21 = call('updateCourse', course.id, { match: { ...MATCH, titles: many(21, (i) => `Title ${i}`) } }).match.titles
+  check('a 21st learned title trims the oldest instead of failing', t21.length === 20 && t21[0] === 'Title 1' && t21[19] === 'Title 20', t21)
+  const relearned = call('updateCourse', course.id, { match: { ...MATCH, titles: [...t21, 'Title 1'] } }).match.titles
+  check('… a title learned again counts as the newest', relearned.length === 20 && relearned[19] === 'Title 1' && relearned[0] === 'Title 2', relearned)
+  check('20 learned titles are kept whole', call('updateCourse', course.id, { match: { ...MATCH, titles: many(20, (i) => `Title ${i}`) } }).match.titles.length === 20)
+  const h51 = call('updateCourse', course.id, { match: { ...MATCH, hosts: many(51, (i) => `h${i}.example.com`) } }).match.hosts
+  check('a 51st host trims the oldest instead of failing', h51.length === 50 && h51[0] === 'h1.example.com' && h51[49] === 'h50.example.com', h51.length)
+  call('updateCourse', course.id, { match: { ...MATCH, titles: many(20, (i) => `Title ${i}`) } })
   check('a host must be a host name', throws(() => call('updateCourse', course.id, { match: { ...MATCH, hosts: ['https://community.example.com/c'] } }), /host names/))
   check('an app needs a known browser', throws(() => call('updateCourse', course.id, { match: { ...MATCH, apps: [{ ...MATCH.apps[0], browser: 'netscape' }] } }), /browser/))
   check('an app needs an app id', throws(() => call('updateCourse', course.id, { match: { ...MATCH, apps: [{ ...MATCH.apps[0], appUserModelId: '' }] } }), /appUserModelId/))
@@ -481,6 +491,160 @@ try {
   check('a list row carries lessonsTotal, lessonsWithNotes and the next lesson', listed?.lessonsTotal === 5 && listed.lessonsWithNotes === 5 && listed.nextLesson === null && courses[0].nextLesson?.number === 2, listed)
   const plainRow = cc('listSeries').find((x) => x.id === channel.id)
   check('a series without a lesson list has no progress', plainRow?.lessonsTotal === 0 && plainRow.lessonsWithNotes === 0 && plainRow.nextLesson === null)
+  // ---------- R1 fixes ----------
+
+  // Set-based views: the number of statements a list prepares doesn't grow with the series.
+  const proto = Database.prototype
+  const prepare = proto.prepare
+  let prepares = 0
+  proto.prepare = function (...a) {
+    prepares++
+    return prepare.apply(this, a)
+  }
+  const counted = (fn) => {
+    prepares = 0
+    fn()
+    return prepares
+  }
+  const listCost = counted(() => cc('listCourses'))
+  const seriesCost = counted(() => cc('listSeries'))
+  check('getCourseView reads the series, its lesson list, notes, spans and duplicates once each', counted(() => cc('getCourseView', course.id)) <= 5, prepares)
+  for (let k = 0; k < 3; k++) {
+    const extra = cc('upsertSeries', { kind: 'course', provider: 'circle', canonical_key: `circle:courses.example.org:course:extra-${k}`, title: `Extra ${k}` }).series
+    cc('replaceCatalog', extra.id, [1, 2].map((n) => ({ number: n, section: null, title: `Extra part ${n}`, url: null, canonical_key: `circle:courses.example.org:extra-${k}-${n}`, duration_ms: 600_000 })))
+    const en = cc('createNote', { origin: 'unknown', title: `Extra ${k}`, created_via: 'Windows' }).id
+    cc('createNoteSource', {
+      note_id: en, kind: 'lesson', provider: 'circle', canonical_key: `circle:courses.example.org:extra-${k}-1`, title: `Extra ${k}`, duration_ms: 600_000,
+      series_id: extra.id, lesson_number: 1, lesson_state: 'numbered', confidence: 'exact', detected_via: 'history'
+    })
+    cc('addSourceSpans', en, [{ wall_start: T0 + 8 * HOUR, wall_end: T0 + 8 * HOUR + 600_000, pos_start_ms: 0, pos_end_ms: 600_000, rate: 1 }])
+    cc('registerCourse', extra.id, { onPlay: 'record', onEnd: 'notes' }, { apps: [], hosts: [], titles: [], keys: [], windowRead: false })
+  }
+  check('listCourses prepares as many statements for 5 courses as for 2', listCost > 0 && counted(() => cc('listCourses')) === listCost, { before: listCost, after: prepares })
+  check('listSeries prepares as many statements for 6 series as for 3', counted(() => cc('listSeries')) === seriesCost, { before: seriesCost, after: prepares })
+  check('the API series list and series get too', counted(() => cc('apiListSeries')) === seriesCost && counted(() => cc('apiGetSeries', course.id)) <= 7, prepares)
+  proto.prepare = prepare
+  const consistent = cc('listCourses').every((x) => {
+    const d = cc('getSeriesDetail', x.id)
+    return d.lessonsTotal === x.lessonsTotal && d.lessonsWithNotes === x.lessonsWithNotes && JSON.stringify(d.nextLesson) === JSON.stringify(x.nextLesson)
+  })
+  check('every list row has the progress of its own lessons view', consistent)
+
+  // The API's course fields: sites and apps only for a registered series; apps leave storage as ids.
+  cc('registerCourse', channel.id, BEHAVIOR, MATCH)
+  cc('unregisterCourse', channel.id)
+  const apiRows = cc('apiListSeries')
+  const apiChannel = apiRows.find((x) => x.id === channel.id)
+  const apiCourse = apiRows.find((x) => x.id === course.id)
+  check('an unregistered series has no sites, apps or behavior', apiChannel?.registered === false && apiChannel.sites.length === 0 && apiChannel.apps.length === 0 && apiChannel.on_play === null, apiChannel)
+  check('a course has its sites, and its app ids for main to name', apiCourse?.sites.join() === 'community.example.com' && apiCourse.apps.join() === MATCH.apps[0].appUserModelId, apiCourse)
+  const apiOne = cc('apiGetSeries', course.id)
+  check('series.get has the list fields and the lessons with finished', apiOne?.lessons_total === 5 && apiOne.lessons.length >= 5 && apiOne.lessons.every((l) => typeof l.finished === 'boolean'), apiOne?.lessons_total)
+
+  // A pick of an item without a number stays counted (the key binds them).
+  const freshItems = cc('replaceCatalog', fresh.id, [
+    ...[1, 2, 3].map((n) => ({ number: n, section: null, title: `Part ${n}`, url: `https://courses.example.org/c/second/lessons/${n}`, canonical_key: `circle:courses.example.org:${n}`, duration_ms: 600_000 })),
+    { number: null, section: 'Extras', title: 'Bonus with a key', url: 'https://courses.example.org/c/second/lessons/bonus', canonical_key: 'circle:courses.example.org:bonus', duration_ms: 600_000 },
+    { number: null, section: 'Extras', title: 'Bonus without a key', url: null, canonical_key: null, duration_ms: 600_000 }
+  ])
+  const pendingNote = (title) => {
+    const nid = cc('createNote', { origin: 'unknown', title, created_via: 'Windows' }).id
+    cc('createNoteSource', { note_id: nid, kind: 'lesson', provider: 'circle', canonical_key: `title:courses.example.org:${title.toLowerCase()}`, title, series_id: fresh.id, confidence: 'guess', detected_via: 'media-session' })
+    return nid
+  }
+  const withKey = pendingNote('Bonus one')
+  const withoutKey = pendingNote('Bonus two')
+  const beforePick = cc('getCourseView', fresh.id)
+  const pk1 = cc('setLessonForNote', withKey, freshItems[3].id, 'manual')
+  const pk2 = cc('setLessonForNote', withoutKey, freshItems[4].id, 'manual')
+  const afterPick = cc('getCourseView', fresh.id)
+  const rowOf = (itemId) => afterPick?.detail.lessons.find((l) => l.catalogItemId === itemId)
+  check(
+    'a picked numberless item takes its note (the note adopts the item key)',
+    rowOf(freshItems[3].id)?.noteId === withKey && pk1.canonical_key === 'circle:courses.example.org:bonus' && pk1.lesson_number === null && pk1.lesson_state === 'numbered',
+    pk1
+  )
+  check('a picked numberless item without a key takes the note key', rowOf(freshItems[4].id)?.noteId === withoutKey && cc('listCatalog', fresh.id)[4].canonical_key === pk2.canonical_key)
+  check(
+    '… both count in lessonsWithNotes, leave Needs a lesson and are not left over',
+    afterPick.detail.lessonsWithNotes === beforePick.detail.lessonsWithNotes + 2 &&
+      afterPick.needsLesson.length === 0 &&
+      !afterPick.detail.lessons.some((l) => l.catalogItemId === null && (l.noteId === withKey || l.noteId === withoutKey)),
+    { before: beforePick.detail.lessonsWithNotes, after: afterPick.detail.lessonsWithNotes, needs: afterPick.needsLesson.length }
+  )
+
+  // Finished is >= 90 % of the raw share; a note without a duration measures against its item's.
+  const almost = cc('createNote', { origin: 'unknown', title: 'Part 3', created_via: 'Windows' }).id
+  cc('createNoteSource', {
+    note_id: almost, kind: 'lesson', provider: 'circle', canonical_key: 'circle:courses.example.org:3', title: 'Part 3', series_id: fresh.id, lesson_number: 3,
+    lesson_state: 'numbered', lesson_origin: 'catalog', confidence: 'exact', detected_via: 'media-session'
+  })
+  cc('addSourceSpans', almost, [{ wall_start: T0 + 9 * HOUR, wall_end: T0 + 9 * HOUR + 537_000, pos_start_ms: 0, pos_end_ms: 537_000, rate: 1 }])
+  const part3 = cc('getCourseView', fresh.id).detail.lessons.find((l) => l.catalogItemId === freshItems[2].id)
+  check('89.5 % shows as 90 % but is not finished', part3?.noteId === almost && part3.watchedPercent === 90 && part3.finished === false, part3)
+
+  // A manual lesson survives updateNoteSource and a replaced source of another origin.
+  const manualNote = cc('createNote', { origin: 'unknown', title: 'Manual', created_via: 'Windows' }).id
+  const manualSrc = { note_id: manualNote, kind: 'lesson', provider: 'circle', canonical_key: 'circle:courses.example.org:manual', title: 'Manual', series_id: fresh.id, confidence: 'exact', detected_via: 'manual' }
+  cc('createNoteSource', { ...manualSrc, lesson_number: 2, lesson_state: 'numbered', lesson_origin: 'manual' })
+  const up = cc('updateNoteSource', manualNote, { title: 'Manual renamed', lesson_number: 7, lesson_state: 'numbered', lesson_origin: 'playlist' })
+  check('updateNoteSource keeps a manual number against another origin, and applies the rest', up.lesson_number === 2 && up.lesson_origin === 'manual' && up.title === 'Manual renamed', up)
+  const rep = cc('createNoteSource', { ...manualSrc, title: 'Replaced', lesson_number: 3, lesson_state: 'numbered', lesson_origin: 'catalog' }, { replace: true })
+  check('a replaced source of another origin keeps the manual lesson', rep.lesson_number === 2 && rep.lesson_origin === 'manual' && rep.title === 'Replaced', rep)
+  const rep2 = cc('createNoteSource', { ...manualSrc, title: 'Replaced again' }, { replace: true })
+  check('… and so does a replacement with no lesson', rep2.lesson_number === 2 && rep2.lesson_origin === 'manual', rep2)
+  const typed = cc('updateNoteSource', manualNote, { lesson_number: 4, lesson_state: 'numbered', lesson_origin: 'manual' })
+  check('a manual write still changes it', typed.lesson_number === 4)
+  const userCleared = cc('updateNoteSource', manualNote, { lesson_number: null, lesson_state: 'pending', lesson_origin: null })
+  check('the user clearing the number goes through', userCleared.lesson_number === null && userCleared.lesson_origin === null, userCleared)
+  cc('updateNoteSource', manualNote, { lesson_number: 4, lesson_state: 'numbered', lesson_origin: 'manual' })
+  const moved = cc('updateNoteSource', manualNote, { series_id: course.id, lesson_number: null, lesson_state: 'pending', lesson_origin: null })
+  check('a move to another series takes its own lesson', moved.series_id === course.id && moved.lesson_number === null, moved)
+
+  // discardSourceRun: the run's spans go and its session is hidden, in one transaction.
+  const runNote = cc('createNote', { origin: 'unknown', title: 'Continued', created_via: 'Windows' }).id
+  cc('createNoteSource', { note_id: runNote, kind: 'video', provider: 'youtube', canonical_key: 'youtube:lmnopqrstuv', title: 'Continued', confidence: 'exact', detected_via: 'media-session' })
+  const runSpans = [0, 1, 2].map((h) => ({ wall_start: T0 + (10 + h) * HOUR, wall_end: T0 + (10 + h) * HOUR + 60_000, pos_start_ms: h * 60_000, pos_end_ms: (h + 1) * 60_000, rate: 1 }))
+  cc('addSourceSpans', runNote, runSpans)
+  const disc = cc('discardSourceRun', runNote, T0 + 11 * HOUR, 'session-run-1')
+  const runSrc = cc('getNoteSource', runNote)
+  check(
+    'discardSourceRun deletes the spans from the run start and hides the session',
+    disc.spans === 2 && disc.hidden === true && cc('listSourceSpans', runNote).length === 1 && runSrc.superseded_session_ids.join() === 'session-run-1',
+    disc
+  )
+  const disc2 = cc('discardSourceRun', runNote, T0 + 11 * HOUR, 'session-run-1')
+  check('… again, it changes nothing', disc2.spans === 0 && disc2.hidden === false && cc('getNoteSource', runNote).superseded_session_ids.length === 1)
+  check('without a session it only deletes spans', cc('discardSourceRun', runNote, T0, null).spans === 1 && cc('getNoteSource', runNote).superseded_session_ids.length === 1)
+  const bareNote = cc('createNote', { origin: 'unknown', title: 'No source', created_via: 'Windows' }).id
+  cc('addSourceSpans', bareNote, runSpans)
+  check('a session for a note without a source is refused, and no span goes', throws(() => cc('discardSourceRun', bareNote, T0, 'session-run-2'), /not-found/) === true && cc('listSourceSpans', bareNote).length === 3)
+
+  // The data export's series block: every series with its course fields, notes or not.
+  const lonely = cc('upsertSeries', { kind: 'course', provider: 'circle', canonical_key: 'circle:courses.example.org:course:lonely', title: 'No notes yet' }).series
+  cc('replaceCatalog', lonely.id, [{ number: 1, section: null, title: 'Only lesson', url: null, canonical_key: null, duration_ms: null }])
+  cc('registerCourse', lonely.id, BEHAVIOR, MATCH)
+  const exportRoot = join(OUT, 'Notula export 2026-11-01 10.00')
+  mkdirSync(exportRoot, { recursive: true })
+  const ws = cc('writeExportSeries', { root: exportRoot })
+  const file = JSON.parse(readFileSync(join(exportRoot, 'series.json'), 'utf8'))
+  const lonelyBlock = file.series.find((x) => x.id === lonely.id)
+  check(
+    'series.json has one block per series, a course without notes with its course fields and lesson list',
+    ws.series === file.series.length &&
+      new Set(file.series.map((x) => x.id)).size === file.series.length &&
+      !!lonelyBlock?.registered_at &&
+      lonelyBlock.on_play === 'ask' &&
+      lonelyBlock.match?.hosts.join() === 'community.example.com' &&
+      lonelyBlock.lessons.length === 1 &&
+      lonelyBlock.catalog_origin === null,
+    lonelyBlock
+  )
+  check('… and a plain series too, with its course fields empty', file.series.find((x) => x.id === channel.id)?.registered_at === null)
+  check('a second series block in the same export is refused (never overwrites)', throws(() => cc('writeExportSeries', { root: exportRoot }), /EEXIST|exists/) === true)
+  const wn = cc('writeExportNotes', { root: exportRoot, notes: [{ id: notes.l1, baseName: 'lesson-one', trashed: false, hasTranscript: false }], markdown: true, transcripts: false })
+  check('the notes of an export still carry their series fields', wn.written.length === 1 && wn.errors.length === 0 && /series/.test(readFileSync(join(exportRoot, wn.written[0].notesFile), 'utf8')), wn.errors)
+
   check('logs carry no titles, URLs or hosts', !JSON.stringify([...c.logs, ...c2.logs]).match(/example\.(com|org)|Lesson \d|Example course/), c2.logs.map((l) => l.event))
   cc('close')
 } catch (err) {

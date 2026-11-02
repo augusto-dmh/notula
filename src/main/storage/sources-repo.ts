@@ -321,9 +321,24 @@ const MAX_APP_ID = 500
 const MAX_HOST = 253
 const HOST = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:\d{1,5})?$/
 
+/** A learned list's input bound; the stored cap is applied by trimming. */
+const MAX_LEARNED_INPUT = 1_000
+
 function list(v: unknown, what: string, max: number): unknown[] {
   if (!Array.isArray(v) || v.length > max) throw invalid(`${what} must be a list of at most ${max}`)
   return v
+}
+
+/** Deduplicated (a repeat counts where it last appears), then the last `max` entries. */
+function newest(values: string[], max: number): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (let i = values.length - 1; i >= 0 && out.length < max; i--) {
+    if (seen.has(values[i]!)) continue
+    seen.add(values[i]!)
+    out.push(values[i]!)
+  }
+  return out.reverse()
 }
 
 /** A whole `CourseMatch`, checked field by field; hosts are lower-cased and every list deduplicated. */
@@ -340,18 +355,28 @@ function matchValue(v: unknown): CourseMatch {
       appId: textOrNull(app['appId'], 'appId', MAX_LABEL)
     }
   })
-  const hosts = list(m['hosts'], 'match.hosts', SOURCES_LIMITS.historyHosts).map((h) => {
-    const host = text(h, 'host', MAX_HOST).trim().toLowerCase()
-    if (!HOST.test(host)) throw invalid('match.hosts must hold host names')
-    return host
-  })
-  const titles = list(m['titles'], 'match.titles', SOURCES_LIMITS.learnedTitles).map((t) => text(t, 'title', MAX_TITLE).trim()).filter(Boolean)
+  // Learned lists grow by appending: past their cap the oldest (first) entries go, so a learner
+  // never fails a write and a long stored row reads trimmed rather than empty.
+  const hosts = newest(
+    list(m['hosts'], 'match.hosts', MAX_LEARNED_INPUT).map((h) => {
+      const host = text(h, 'host', MAX_HOST).trim().toLowerCase()
+      if (!HOST.test(host)) throw invalid('match.hosts must hold host names')
+      return host
+    }),
+    SOURCES_LIMITS.historyHosts
+  )
+  const titles = newest(
+    list(m['titles'], 'match.titles', MAX_LEARNED_INPUT)
+      .map((t) => text(t, 'title', MAX_TITLE).trim())
+      .filter(Boolean),
+    SOURCES_LIMITS.learnedTitles
+  )
   const keys = list(m['keys'], 'match.keys', MAX_MATCH_KEYS).map((k) => key(k, 'match key'))
   if (typeof m['windowRead'] !== 'boolean') throw invalid('match.windowRead must be true or false')
   return {
     apps: apps.filter((a, i) => apps.findIndex((b) => b.appUserModelId === a.appUserModelId) === i),
-    hosts: [...new Set(hosts)],
-    titles: [...new Set(titles)],
+    hosts,
+    titles,
     keys: [...new Set(keys)],
     windowRead: m['windowRead']
   }
@@ -391,8 +416,14 @@ function ownNoteRow(s: StoreCtx, noteId: string): Row {
 
 // ---------- coverage ----------
 
-/** The share of the duration covered by the spans' positions (0–100), or null without a duration. */
+/** The share of the duration covered by the spans' positions (0–100, rounded), or null without a duration. */
 export function watchedPercent(spans: Pick<SourceSpan, 'pos_start_ms' | 'pos_end_ms'>[], durationMs: number | null, live = false): number | null {
+  const ratio = watchedRatio(spans, durationMs, live)
+  return ratio === null ? null : Math.round(ratio * 100)
+}
+
+/** The covered share as a ratio (0–1, unrounded), or null without a duration. */
+export function watchedRatio(spans: Pick<SourceSpan, 'pos_start_ms' | 'pos_end_ms'>[], durationMs: number | null, live = false): number | null {
   if (live || durationMs === null || !(durationMs > 0)) return null
   const ranges = spans
     .map((sp) => [Math.max(0, Math.min(sp.pos_start_ms, sp.pos_end_ms)), Math.min(durationMs, Math.max(sp.pos_start_ms, sp.pos_end_ms))] as const)
@@ -411,7 +442,7 @@ export function watchedPercent(spans: Pick<SourceSpan, 'pos_start_ms' | 'pos_end
     }
   }
   if (end > start) covered += end - start
-  return Math.min(100, Math.round((covered / durationMs) * 100))
+  return Math.min(1, covered / durationMs)
 }
 
 /** Every span of each note, by wall start (one query). */
@@ -496,15 +527,36 @@ function sourceValues(s: StoreCtx, input: Omit<NewNoteSource, 'note_id'>): Recor
   }
 }
 
+const LESSON_FIELDS = ['lesson_number', 'lesson_label', 'lesson_state', 'lesson_origin'] as const
+
+/**
+ * Whether a write would put a non-manual lesson over the stored manual one. Only within the
+ * same series: a move to another series takes its lesson with it. `strict` also counts a cleared
+ * lesson (a replaced source); otherwise a clear is the user's and goes through.
+ */
+function overwritesManual(
+  stored: NoteSource,
+  next: { series_id?: unknown; lesson_number?: unknown; lesson_origin?: unknown },
+  strict: boolean
+): boolean {
+  if (stored.lesson_origin !== 'manual') return false
+  if (next.series_id !== undefined && next.series_id !== stored.series_id) return false
+  if (next.lesson_origin === 'manual') return false
+  if (strict) return true
+  return (next.lesson_origin !== undefined && next.lesson_origin !== null) || (next.lesson_number !== undefined && next.lesson_number !== null)
+}
+
 /** Inserts (or, with `replace`, overwrites) the note's source inside the caller's transaction. */
 export function writeNoteSource(s: StoreCtx, input: NewNoteSource, replace: boolean): void {
   const noteId = id(input?.note_id, 'note_id')
   ownNoteRow(s, noteId)
   const values = sourceValues(s, input)
   const now = nowIso()
-  const existing = s.db.prepare(`SELECT id FROM note_sources WHERE note_id = ?`).get(noteId) as Row | undefined
+  const existing = getSourceRow(s, noteId)
   if (existing) {
     if (!replace) throw invalid('This note already has a source')
+    // A manual lesson stays: the replacement's own lesson is dropped.
+    if (overwritesManual(existing, values, true)) for (const f of LESSON_FIELDS) delete values[f]
     const names = Object.keys(values)
     s.db
       .prepare(`UPDATE note_sources SET ${names.map((n) => `${n} = @${n}`).join(', ')}, updated_at = @now WHERE note_id = @note_id`)
@@ -557,11 +609,15 @@ export function updateNoteSource(s: StoreCtx, noteId: string, patch: NoteSourceU
   id(noteId, 'noteId')
   if (typeof patch !== 'object' || patch === null) throw invalid('patch must be an object')
   const changed = inTransaction(s.db, () => {
-    if (!getSourceRow(s, noteId)) throw notFound('note source', noteId)
+    const stored = getSourceRow(s, noteId)
+    if (!stored) throw notFound('note source', noteId)
+    // A manual lesson number is never overwritten by another origin; the rest of the patch applies.
+    const keepLesson = overwritesManual(stored, patch, false)
     const sets: string[] = []
     const params: Record<string, unknown> = { note_id: noteId, now: nowIso() }
     for (const k of Object.keys(UPDATE_COLUMNS) as (keyof NoteSourceUpdate)[]) {
       if (!Object.hasOwn(patch, k) || patch[k] === undefined) continue
+      if (keepLesson && (LESSON_FIELDS as readonly string[]).includes(k)) continue
       sets.push(`${k} = @${k}`)
       params[k] = UPDATE_COLUMNS[k](patch[k], s)
     }
@@ -709,6 +765,36 @@ export function listSourceSpans(s: StoreCtx, noteId: string): SourceSpan[] {
   return spansByNote(s, [noteId]).get(noteId) ?? []
 }
 
+/**
+ * Undo of a continued note, one transaction: the note's spans that started at or after
+ * `sinceWallMs` go, and the run's transcript session (when given) is hidden as superseded; its
+ * chunks are kept, like every superseded session's.
+ */
+export function discardSourceRun(s: StoreCtx, noteId: string, sinceWallMs: number, sessionId: string | null): { spans: number; hidden: boolean } {
+  id(noteId, 'noteId')
+  if (typeof sinceWallMs !== 'number' || !Number.isFinite(sinceWallMs) || sinceWallMs < 0) throw invalid('sinceWallMs must be a number')
+  const session = sessionId === null || sessionId === undefined ? null : id(sessionId, 'sessionId')
+  const res = inTransaction(s.db, () => {
+    ownNoteRow(s, noteId)
+    let hidden = false
+    if (session !== null) {
+      const source = getSourceRow(s, noteId)
+      if (!source) throw notFound('note source', noteId)
+      if (!source.superseded_session_ids.includes(session)) {
+        if (source.superseded_session_ids.length >= MAX_SUPERSEDED) throw invalid('This note has too many hidden transcript sessions')
+        setSuperseded(s, noteId, [...source.superseded_session_ids, session], nowIso())
+        hidden = true
+      }
+    }
+    const spans = s.db.prepare(`DELETE FROM source_spans WHERE note_id = ? AND wall_start >= ?`).run(noteId, Math.floor(sinceWallMs)).changes
+    return { spans, hidden }
+  })
+  if (res.spans) s.touch('source_spans', noteId)
+  if (res.hidden) s.touch('note_sources', noteId)
+  s.log('info', 'sources:run-discarded', { spans: res.spans, hidden: res.hidden })
+  return res
+}
+
 // ---------- series ----------
 
 export function getSeries(s: StoreCtx, seriesId: string): SourceSeries | null {
@@ -806,15 +892,29 @@ export function pauseSeries(s: StoreCtx, seriesId: string): SourceSeries {
 }
 
 export function listSeries(s: StoreCtx): SeriesListItem[] {
-  return seriesListItems(s, null)
+  return seriesRows(s, { seriesId: null, registered: false, full: false }).map((x) => x.item)
 }
 
 /** One `listSeries` row, or null for an unknown series or another owner's. */
 export function getSeriesListItem(s: StoreCtx, seriesId: string): SeriesListItem | null {
-  return seriesListItems(s, id(seriesId, 'seriesId'))[0] ?? null
+  return seriesRows(s, { seriesId: id(seriesId, 'seriesId'), registered: false, full: false })[0]?.item ?? null
 }
 
-function seriesListItems(s: StoreCtx, seriesId: string | null): SeriesListItem[] {
+/** One `listSeries` row and its lessons view, computed once (the API's `series.get`). */
+export function getSeriesItemAndDetail(s: StoreCtx, seriesId: string): { item: SeriesListItem; detail: SeriesDetail } | null {
+  const row = seriesRows(s, { seriesId: id(seriesId, 'seriesId'), registered: false, full: true })[0]
+  return row?.detail ? { item: row.item, detail: row.detail } : null
+}
+
+/**
+ * Series rows with their counts, and the progress fields of those with a lesson list. Set-based:
+ * the lesson lists, notes and spans of every listed series come in one query each. `full` builds
+ * the whole lessons view, duplicates included, of every row (meant for one series).
+ */
+function seriesRows(
+  s: StoreCtx,
+  q: { seriesId: string | null; registered: boolean; full: boolean }
+): { item: SeriesListItem; detail: SeriesDetail | null }[] {
   const rows = s.db
     .prepare(
       `SELECT ${SERIES_COLS.split(', ').map((c) => `ss.${c}`).join(', ')},
@@ -826,23 +926,30 @@ function seriesListItems(s: StoreCtx, seriesId: string | null): SeriesListItem[]
             WHERE ns.series_id = ss.id AND ${OWN_NOTE}) AS last_wall
        FROM source_series ss
        WHERE ss.owner_id = @owner AND ss.workspace_id = @workspace AND (@series IS NULL OR ss.id = @series)
+         AND (@registered = 0 OR ss.registered_at IS NOT NULL)
        ORDER BY lower(ss.title), ss.created_at, ss.id`
     )
-    .all({ ...scope(s), series: seriesId }) as Row[]
-  return rows.map((r) => {
-    const series = toSeries(r, s)
-    const catalogCount = num(r['catalog_count']) ?? 0
-    // The progress fields come from the lessons view; a series without a lesson list has none.
-    const detail = catalogCount > 0 ? getSeriesDetail(s, series.id) : null
+    .all({ ...scope(s), series: q.seriesId, registered: q.registered ? 1 : 0 }) as Row[]
+  const items = rows.map((r) => ({ series: toSeries(r, s), catalogCount: num(r['catalog_count']) ?? 0, r }))
+  // The progress fields come from the lessons view; a series without a lesson list has none.
+  const parts = detailParts(s, items.filter((x) => q.full || x.catalogCount > 0).map((x) => x.series.id))
+  return items.map(({ series, catalogCount, r }) => {
+    const p = parts.get(series.id)
+    const duplicates = q.full ? listSourceDuplicates(s, { seriesId: series.id }) : []
+    const detail = p ? buildDetail(series, p.catalog, p.notes, p.spans, duplicates) : null
+    const progress = catalogCount > 0 ? detail : null
     return {
-      ...series,
-      noteCount: num(r['note_count']) ?? 0,
-      catalogCount,
-      pendingCount: num(r['pending_count']) ?? 0,
-      lastWatchedAt: isoOfMs(num(r['last_wall'])),
-      lessonsTotal: detail?.lessonsTotal ?? 0,
-      lessonsWithNotes: detail?.lessonsWithNotes ?? 0,
-      nextLesson: detail?.nextLesson ?? null
+      item: {
+        ...series,
+        noteCount: num(r['note_count']) ?? 0,
+        catalogCount,
+        pendingCount: num(r['pending_count']) ?? 0,
+        lastWatchedAt: isoOfMs(num(r['last_wall'])),
+        lessonsTotal: progress?.lessonsTotal ?? 0,
+        lessonsWithNotes: progress?.lessonsWithNotes ?? 0,
+        nextLesson: progress?.nextLesson ?? null
+      },
+      detail
     }
   })
 }
@@ -878,12 +985,64 @@ export function listSourceDuplicates(s: StoreCtx, q?: { seriesId?: string }): { 
  * Notes sharing a key show once (the oldest) and are listed as duplicates.
  */
 export function getSeriesDetail(s: StoreCtx, seriesId: string): SeriesDetail | null {
+  return seriesDetailWithNotes(s, seriesId)?.detail ?? null
+}
+
+/** The detail and the series' notes it was built from, for a caller that needs both. */
+function seriesDetailWithNotes(s: StoreCtx, seriesId: string): { detail: SeriesDetail; notes: NoteSource[] } | null {
   const series = getSeries(s, seriesId)
   if (!series) return null
-  const catalog = listCatalog(s, seriesId)
-  const notes = listNoteSources(s, { seriesId })
-  const spans = spansByNote(s, notes.map((n) => n.note_id))
-  const duplicates = listSourceDuplicates(s, { seriesId })
+  const p = detailParts(s, [seriesId]).get(seriesId) ?? { catalog: [], notes: [], spans: new Map() }
+  return { detail: buildDetail(series, p.catalog, p.notes, p.spans, listSourceDuplicates(s, { seriesId })), notes: p.notes }
+}
+
+interface DetailParts {
+  catalog: CatalogItem[]
+  notes: NoteSource[]
+  spans: Map<string, SourceSpan[]>
+}
+
+/** The lesson lists, own non-trashed notes and their spans of these series: three queries in all. */
+function detailParts(s: StoreCtx, seriesIds: string[]): Map<string, DetailParts> {
+  const out = new Map<string, DetailParts>()
+  if (!seriesIds.length) return out
+  for (const sid of seriesIds) out.set(sid, { catalog: [], notes: [], spans: new Map() })
+  const ids = JSON.stringify(seriesIds)
+  const catalog = s.db
+    .prepare(`SELECT ${CATALOG_COLS} FROM series_catalog_items WHERE series_id IN (SELECT value FROM json_each(@ids)) AND ${OWN_ROW} ORDER BY series_id, position`)
+    .all({ ...scope(s), ids }) as Row[]
+  for (const r of catalog) {
+    const it = toCatalogItem(r)
+    out.get(it.series_id)?.catalog.push(it)
+  }
+  const notes = s.db
+    .prepare(
+      `SELECT ${SOURCE_SELECT} FROM note_sources ns JOIN documents d ON d.id = ns.note_id
+       WHERE ${OWN_NOTE} AND ns.series_id IN (SELECT value FROM json_each(@ids))
+       ORDER BY d.created_at ASC, d.id ASC`
+    )
+    .all({ ...scope(s), ids }) as Row[]
+  const all: NoteSource[] = notes.map(toNoteSource)
+  for (const n of all) out.get(n.series_id as string)?.notes.push(n)
+  const spans = spansByNote(s, all.map((n) => n.note_id))
+  for (const n of all) {
+    const sp = spans.get(n.note_id)
+    if (sp) out.get(n.series_id as string)?.spans.set(n.note_id, sp)
+  }
+  return out
+}
+
+/**
+ * The lessons view from loaded rows (no queries). A note the picker bound to a numberless item
+ * shares its key (`setLessonForNote`), so the key pass finds it.
+ */
+function buildDetail(
+  series: SourceSeries,
+  catalog: CatalogItem[],
+  notes: NoteSource[],
+  spans: Map<string, SourceSpan[]>,
+  duplicates: SeriesDetail['duplicates']
+): SeriesDetail {
   const shown = new Map<string, NoteSource>()
   for (const n of notes) if (!shown.has(n.canonical_key)) shown.set(n.canonical_key, n)
   const unused = new Set([...shown.values()].map((n) => n.note_id))
@@ -917,15 +1076,20 @@ export function getSeriesDetail(s: StoreCtx, seriesId: string): SeriesDetail | n
   for (const it of catalog) if (it.canonical_key) take(it.id, firstUnused(byKey, it.canonical_key))
   for (const it of catalog) if (it.url) take(it.id, firstUnused(byUrl, it.url))
   for (const it of catalog) if (it.number !== null) take(it.id, firstUnused(byNumber, it.number))
-  const lessonOf = (n: NoteSource): Pick<SeriesLesson, 'noteId' | 'lessonState' | 'watchedPercent' | 'lastWatchedAt' | 'finished'> => {
+  // A lesson in the list measures against the item's duration when its note has none.
+  const lessonOf = (
+    n: NoteSource,
+    itemDurationMs: number | null
+  ): Pick<SeriesLesson, 'noteId' | 'lessonState' | 'watchedPercent' | 'lastWatchedAt' | 'finished'> => {
     const sp = spans.get(n.note_id) ?? []
-    const percent = watchedPercent(sp, n.duration_ms, n.live)
+    const ratio = watchedRatio(sp, n.duration_ms ?? itemDurationMs, n.live)
     return {
       noteId: n.note_id,
       lessonState: n.lesson_state,
-      watchedPercent: percent,
+      watchedPercent: ratio === null ? null : Math.round(ratio * 100),
       lastWatchedAt: isoOfMs(lastWall(sp)),
-      finished: percent !== null && percent >= SOURCES_LIMITS.finishedPercent
+      // The raw share: 89.5 % shows as 90 % but isn't finished.
+      finished: ratio !== null && ratio * 100 >= SOURCES_LIMITS.finishedPercent
     }
   }
   const lessons: SeriesLesson[] = catalog.map((it) => {
@@ -939,7 +1103,7 @@ export function getSeriesDetail(s: StoreCtx, seriesId: string): SeriesDetail | n
       url: it.url ?? n?.url ?? null,
       canonicalKey: it.canonical_key ?? n?.canonical_key ?? null,
       durationMs: it.duration_ms ?? n?.duration_ms ?? null,
-      ...(n ? lessonOf(n) : { noteId: null, lessonState: null, watchedPercent: null, lastWatchedAt: null, finished: false })
+      ...(n ? lessonOf(n, it.duration_ms) : { noteId: null, lessonState: null, watchedPercent: null, lastWatchedAt: null, finished: false })
     }
   })
   const rest = available().sort(
@@ -957,7 +1121,7 @@ export function getSeriesDetail(s: StoreCtx, seriesId: string): SeriesDetail | n
       url: n.url,
       canonicalKey: n.canonical_key,
       durationMs: n.duration_ms,
-      ...lessonOf(n)
+      ...lessonOf(n, null)
     })
   }
   return {
@@ -1051,8 +1215,8 @@ export function unregisterCourse(s: StoreCtx, seriesId: string): SourceSeries {
 
 /** Series in Courses, last watched first (never watched last, the newest added first among them). */
 export function listCourses(s: StoreCtx): SeriesListItem[] {
-  return seriesListItems(s, null)
-    .filter((x) => x.registered_at !== null)
+  return seriesRows(s, { seriesId: null, registered: true, full: false })
+    .map((x) => x.item)
     .sort(
       (a, b) =>
         (b.lastWatchedAt ?? '').localeCompare(a.lastWatchedAt ?? '') ||
@@ -1063,9 +1227,10 @@ export function listCourses(s: StoreCtx): SeriesListItem[] {
 
 /** A course page; null for an unknown series or one not in Courses. `playsIn` is main's to fill. */
 export function getCourseView(s: StoreCtx, seriesId: string): CourseView | null {
-  const detail = getSeriesDetail(s, seriesId)
-  if (!detail || detail.series.registered_at === null) return null
-  const needsLesson = listNoteSources(s, { seriesId })
+  const got = seriesDetailWithNotes(s, id(seriesId, 'seriesId'))
+  if (!got || got.detail.series.registered_at === null) return null
+  const { detail } = got
+  const needsLesson = got.notes
     .filter((n) => n.lesson_state === 'pending' || n.lesson_state === 'guessed')
     .map((n) => ({ noteId: n.note_id, label: n.lesson_label, state: n.lesson_state }))
   return { detail, playsIn: null, needsLesson }
@@ -1099,6 +1264,8 @@ export function setLessonForNote(s: StoreCtx, noteId: string, itemId: string | n
   id(noteId, 'noteId')
   const item = itemId === null ? null : id(itemId, 'itemId')
   const o = oneOf(origin, LESSON_ORIGINS, 'lesson origin')
+  // Set inside the transaction: the series whose item took the note's key.
+  let itemTouched = null as string | null
   const changed = inTransaction(s.db, () => {
     const source = getSourceRow(s, noteId)
     if (!source) throw notFound('note source', noteId)
@@ -1110,6 +1277,23 @@ export function setLessonForNote(s: StoreCtx, noteId: string, itemId: string | n
       const it = getCatalogItem(s, item)
       if (!it) throw notFound('catalog item', item)
       cols = { series_id: it.series_id, lesson_number: it.number, lesson_label: null, lesson_state: 'numbered', lesson_origin: o }
+      // A numberless item has nothing else to match the note by, and `note_sources` has no column
+      // for an item id: the pick binds them by key. An item without a key takes the note's; else
+      // the note takes the item's (the key of the lesson it now is), keeping its own URL if any.
+      if (it.number === null && it.canonical_key !== source.canonical_key) {
+        if (it.canonical_key === null) {
+          const fill: Record<string, unknown> = { canonical_key: source.canonical_key }
+          if (it.url === null && source.url !== null) fill['url'] = source.url
+          const names = Object.keys(fill)
+          s.db
+            .prepare(`UPDATE series_catalog_items SET ${names.map((n) => `${n} = @${n}`).join(', ')}, updated_at = @now WHERE id = @id`)
+            .run({ ...fill, now: nowIso(), id: it.id })
+          itemTouched = it.series_id
+        } else {
+          cols['canonical_key'] = it.canonical_key
+          if (source.url === null && it.url !== null) cols['url'] = it.url
+        }
+      }
     }
     const names = Object.keys(cols)
     s.db
@@ -1118,6 +1302,7 @@ export function setLessonForNote(s: StoreCtx, noteId: string, itemId: string | n
     return true
   })
   if (changed) s.touch('note_sources', noteId)
+  if (itemTouched) s.touch('series_catalog_items', itemTouched)
   return getSourceRow(s, noteId) as NoteSource
 }
 
@@ -1146,6 +1331,23 @@ export function rememberLessonKey(s: StoreCtx, itemId: string, canonicalKey: Can
 }
 
 // ---------- catalog ----------
+
+/** Every own series row, oldest first (one query). */
+export function listOwnSeries(s: StoreCtx): SourceSeries[] {
+  return (s.db.prepare(`SELECT ${SERIES_COLS} FROM source_series WHERE ${OWN_ROW} ORDER BY created_at, rid`).all(scope(s)) as Row[]).map((r) => toSeries(r, s))
+}
+
+/** Every own series row with its lesson list (the data export): two queries. */
+export function listSeriesWithCatalog(s: StoreCtx): { series: SourceSeries; catalog: CatalogItem[] }[] {
+  const series = listOwnSeries(s)
+  const bySeries = new Map(series.map((x) => [x.id, [] as CatalogItem[]]))
+  const items = s.db.prepare(`SELECT ${CATALOG_COLS} FROM series_catalog_items WHERE ${OWN_ROW} ORDER BY series_id, position`).all(scope(s)) as Row[]
+  for (const r of items) {
+    const it = toCatalogItem(r)
+    bySeries.get(it.series_id)?.push(it)
+  }
+  return series.map((x) => ({ series: x, catalog: bySeries.get(x.id) ?? [] }))
+}
 
 export function listCatalog(s: StoreCtx, seriesId: string): CatalogItem[] {
   const rows = s.db

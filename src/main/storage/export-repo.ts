@@ -62,7 +62,7 @@ import { getSettingsRaw } from './kv-repo'
 import { getNote, listNotes } from './notes-repo'
 import { listPanels } from './panels-repo'
 import { DB_FILE, KEY_FILE } from './protocol'
-import { getNoteSourceView, getSeries } from './sources-repo'
+import { getNoteSourceView, listOwnSeries, listSeriesWithCatalog } from './sources-repo'
 import { getTranscript } from './transcript-repo'
 import { listTrash } from './trash-repo'
 import { invalid, StoreError, type Db, type StoreCtx } from './store'
@@ -408,6 +408,12 @@ export function writeExportNotes(
   const wordLevel = getSettingsRaw(s)['transcription.diarization'] === true
   const written: { id: string; notesFile: string | null; transcriptFile: string | null }[] = []
   const errors: { noteId: string; message: string }[] = []
+  // Every series row once for the batch, not one read per note.
+  let seriesRows: Map<string, SourceSeries> | null = null
+  const seriesOf = (seriesId: string): SourceSeries | null => {
+    seriesRows ??= new Map(listOwnSeries(s).map((x) => [x.id, x]))
+    return seriesRows.get(seriesId) ?? null
+  }
   for (const ref of q2.notes) {
     try {
       if (typeof ref?.id !== 'string' || typeof ref.baseName !== 'string') throw invalid('bad note reference')
@@ -455,7 +461,7 @@ export function writeExportNotes(
             transcript: transcriptFile,
             trashed: ref.trashed,
             source,
-            series: source?.series ? getSeries(s, source.series.id) : null,
+            series: source?.series ? seriesOf(source.series.id) : null,
             format
           },
           body
@@ -470,6 +476,49 @@ export function writeExportNotes(
   }
   s.log('info', 'export-notes-batch', { written: written.length, errors: errors.length })
   return { written, errors }
+}
+
+// ---------- series.json ----------
+
+/** The export's series file, the same in both formats. */
+export const EXPORT_SERIES_FILE = 'series.json'
+
+/**
+ * One block per series: its row with the course fields (registered, behavior, match, where the
+ * lesson list came from) and its lesson list, so a course with no notes yet is exported too.
+ * Written once per export; a series with nothing in it is still listed.
+ */
+export function writeExportSeries(s: StoreCtx, q2: { root: string }): { series: number } {
+  const root = assertRoot(q2?.root)
+  const rows = listSeriesWithCatalog(s)
+  const series = rows.map(({ series: x, catalog }) => ({
+    id: x.id,
+    kind: x.kind,
+    provider: x.provider,
+    canonical_key: x.canonical_key,
+    title: x.title,
+    folder_id: x.folder_id,
+    state: x.state,
+    created_at: x.created_at,
+    updated_at: x.updated_at,
+    registered_at: x.registered_at,
+    on_play: x.on_play,
+    on_end: x.on_end,
+    match: x.match,
+    catalog_origin: x.catalog_origin,
+    lessons: catalog.map((it) => ({
+      number: it.number,
+      section: it.section,
+      title: it.title,
+      url: it.url,
+      canonical_key: it.canonical_key,
+      duration_ms: it.duration_ms
+    }))
+  }))
+  writeNew(root, EXPORT_SERIES_FILE, `${JSON.stringify({ notula_export_version: DATA_EXPORT.exportVersion, series }, null, 2)}
+`)
+  s.log('info', 'export-series-written', { series: series.length, courses: series.filter((x) => x.registered_at !== null).length })
+  return { series: series.length }
 }
 
 // ---------- index.csv ----------

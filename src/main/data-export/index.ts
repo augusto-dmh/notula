@@ -182,6 +182,8 @@ export function registerDataExport(ctx: MainContext): void {
         for (const r of refs) rows.push({ id: r.id, notesFile: null, transcriptFile: null })
       }
 
+      // Series and courses, notes or not: `series.json` beside the notes.
+      if (include.notes && !run.cancelled) await ctx.storage.writeExportSeries({ root }).catch((err: unknown) => errors.push({ noteId: '', message: parseError(err).message }))
       if (include.index && !run.cancelled) {
         push('progress', { exportId: run.exportId, phase: 'index', done: 0, total: 1 })
         await ctx.storage.writeExportIndex({ root, rows })

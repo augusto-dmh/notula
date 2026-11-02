@@ -27,7 +27,7 @@ import type {
   ApiTranscript
 } from '../storage/api'
 import { nowIso, parseJson } from '../storage/rows'
-import { getSeriesDetail, getSeriesListItem, listSeries, SOURCE_KINDS, spansByNote, toNoteSource, watchedPercent } from '../storage/sources-repo'
+import { getSeriesItemAndDetail, listSeries, SOURCE_KINDS, spansByNote, toNoteSource, watchedPercent } from '../storage/sources-repo'
 import { invalid, notFound, type StoreCtx } from '../storage/store'
 import type { AudioSource, IsoTime } from '@shared/types/common'
 import type { CalendarEvent } from '@shared/types/notes'
@@ -473,12 +473,13 @@ function apiSeriesItem(x: SeriesListItem): ApiSeriesItem {
     catalog_count: x.catalogCount,
     pending_count: x.pendingCount,
     last_watched_at: x.lastWatchedAt,
-    // Courses. `apps` holds names, which only main can map: it fills them.
+    // Courses: only a registered series has them. `apps` leaves storage holding the app ids, which
+    // only main can map to names; main replaces them before anything is answered.
     registered: x.registered_at !== null,
     on_play: x.registered_at !== null ? x.on_play : null,
     on_end: x.registered_at !== null ? x.on_end : null,
-    sites: x.match?.hosts ?? [],
-    apps: [],
+    sites: x.registered_at !== null ? (x.match?.hosts ?? []) : [],
+    apps: x.registered_at !== null ? (x.match?.apps ?? []).map((a) => a.appUserModelId) : [],
     lessons_total: x.lessonsTotal,
     lessons_with_notes: x.lessonsWithNotes,
     next_lesson: x.nextLesson ? { number: x.nextLesson.number, title: x.nextLesson.title, url: x.nextLesson.url } : null
@@ -492,9 +493,9 @@ export function apiListSeries(s: StoreCtx): ApiSeriesItem[] {
 export function apiGetSeries(s: StoreCtx, id: string): ApiSeriesDetail | null {
   if (typeof id !== 'string' || !id || id.length > 200) throw invalid('id is required')
   // Only the local owner's series.
-  const item = getSeriesListItem(s, id)
-  const detail = item ? getSeriesDetail(s, id) : null
-  if (!item || !detail) return null
+  const got = getSeriesItemAndDetail(s, id)
+  if (!got) return null
+  const { item, detail } = got
   const pending = s.db
     .prepare(
       `SELECT d.id FROM note_sources ns JOIN documents d ON d.id = ns.note_id

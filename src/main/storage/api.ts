@@ -1400,6 +1400,8 @@ export interface StorageApi {
     rows: { id: string; notesFile: string | null; transcriptFile: string | null }[]
   }): Promise<void>
   writeExportReadme(q: { root: string; text: string }): Promise<void>
+  /** `series.json`: every series with its course fields and lesson list, notes or not. */
+  writeExportSeries(q: { root: string }): Promise<{ series: number }>
   /**
    * Encrypted: checkpoint, then the recovery file set plus `Local State`; decrypted:
    * `sqlcipher_export` into an attached plaintext database.
@@ -1534,6 +1536,11 @@ export interface StorageApi {
   addSourceSpans(noteId: string, spans: NewSourceSpan[]): Promise<{ added: number; merged: number }>
   /** By wall start. */
   listSourceSpans(noteId: string): Promise<SourceSpan[]>
+  /**
+   * Undo of a continued note, one transaction: deletes the note's spans that started at or after
+   * `sinceWallMs` (epoch ms) and, with a session id, hides that transcript session as superseded.
+   */
+  discardSourceRun(noteId: string, sinceWallMs: number, sessionId: string | null): Promise<{ spans: number; hidden: boolean }>
   /** Finds or creates; an existing series keeps its title unless that is empty. */
   upsertSeries(input: NewSourceSeries): Promise<{ series: SourceSeries; created: boolean }>
   getSeries(id: string): Promise<SourceSeries | null>

@@ -329,7 +329,7 @@ check(
   slCourse
 )
 const slChannel = sl.json?.series.find((x) => x.id === channel.id)
-check('series list: a plain series is not registered and has no behavior', slChannel?.registered === false && slChannel.on_play === null && slChannel.next_lesson === null, slChannel)
+check('series list: a plain series is not registered and has no behavior, sites or apps', slChannel?.registered === false && slChannel.on_play === null && slChannel.next_lesson === null && slChannel.sites.length === 0 && slChannel.apps.length === 0, slChannel)
 const slReg = await cli('series', 'list', '--registered')
 check('series list --registered keeps only courses', slReg.code === 0 && slReg.json.series.map((x) => x.id).join() === course.id, slReg.json)
 const slUnreg = await cli('series', 'list', '--registered=false')

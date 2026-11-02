@@ -591,6 +591,7 @@ export function createStorage(opts: StorageOptions): StorageApi {
     writeExportNotes: data('writeExportNotes'),
     writeExportIndex: data('writeExportIndex'),
     writeExportReadme: data('writeExportReadme'),
+    writeExportSeries: data('writeExportSeries'),
     writeDatabaseCopy: data('writeDatabaseCopy'),
     // src/main/repos/
     getConsentPost: data('getConsentPost'),
@@ -666,6 +667,7 @@ export function createStorage(opts: StorageOptions): StorageApi {
     listNoteSources: data('listNoteSources'),
     addSourceSpans: data('addSourceSpans'),
     listSourceSpans: data('listSourceSpans'),
+    discardSourceRun: data('discardSourceRun'),
     upsertSeries: data('upsertSeries'),
     getSeries: data('getSeries'),
     findSeriesByFolder: data('findSeriesByFolder'),
