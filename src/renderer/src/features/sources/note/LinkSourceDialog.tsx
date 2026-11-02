@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Link source by hand, from the note chip:
-// - Link: Recently played (`sources:list-playing`), a link field parsed at once for known
+// - Link: Recently played (`sources:list-playing`, one row per video; a video that has another
+//   note offers Open note first and Link here anyway second), a link field parsed at once for known
 //   providers (`parseSourceUrl`), and Search by title (`sources:search`, lookups granted). A
 //   manual link with a URL is `exact`. Linking a lesson from an unknown Circle community asks
 //   once "Recognize lessons from <host>?".
@@ -15,7 +16,7 @@ import { parseError } from '@shared/errors'
 import { parseSourceUrl, type ParsedSourceUrl } from '@shared/lib/source-key'
 import { formatPosition } from '@shared/lib/position'
 import type { NoteSourcePatch, NoteSourceView, PlayingItem, SeriesListItem, SourceDraft, SourceSearchResult } from '@shared/types/sources'
-import { navigateToSettings } from '../../../app/navigation'
+import { navigate, navigateToSettings } from '../../../app/navigation'
 import { showToast } from '../../../app/toast'
 import { setPrefs, getPrefs } from '../../settings/prefs-store'
 import { isMissingHandler, trySources, useSourcesStatus } from './source-store'
@@ -103,6 +104,36 @@ function DraftRow({ draft, hint, onPick, disabled }: { draft: SourceDraft; hint?
       </button>
     </li>
   )
+}
+
+/** A Recently played video that has another note: Open note first, Link here anyway second. */
+function NotedRow({ draft, onOpen, onLink, disabled }: { draft: SourceDraft; onOpen(): void; onLink(): void; disabled: boolean }): JSX.Element {
+  const line = draftLine(draft)
+  return (
+    <li className="src-pick src-pick--noted">
+      <span className="src-pick__title">{draft.title}</span>
+      <span className="src-pick__meta">{[line, 'Has a note'].filter(Boolean).join(' · ')}</span>
+      <span className="src-pick__actions">
+        <button type="button" className="n-btn" disabled={disabled} onClick={onOpen}>
+          Open note
+        </button>
+        <button type="button" className="src-inline-link" disabled={disabled} onClick={onLink}>
+          Link here anyway
+        </button>
+      </span>
+    </li>
+  )
+}
+
+/** One row per video: the newest playback of each key. */
+function oneRowPerVideo(items: PlayingItem[]): PlayingItem[] {
+  const seen = new Set<string>()
+  return items.filter((i) => {
+    const key = i.draft?.canonicalKey
+    if (!key || seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
 }
 
 function LinkBody({
@@ -200,15 +231,27 @@ function LinkBody({
             <p className="src-section__empty">Nothing played recently. Videos you play in Edge or Chrome show up here.</p>
           ) : (
             <ul className="src-picks">
-              {playing.slice(0, 20).map((i) => (
-                <DraftRow
-                  key={i.playback.id}
-                  draft={i.draft as SourceDraft}
-                  hint={i.noteId && i.noteId !== noteId ? 'Has a note' : undefined}
-                  disabled={busy}
-                  onPick={() => void link(i.draft as SourceDraft, i.draft?.url ? parseSourceUrl(i.draft.url) : null)}
-                />
-              ))}
+              {oneRowPerVideo(playing)
+                .slice(0, 20)
+                .map((i) => {
+                  const draft = i.draft as SourceDraft
+                  const pick = (): void => void link(draft, draft.url ? parseSourceUrl(draft.url) : null)
+                  const other = i.noteId && i.noteId !== noteId ? i.noteId : null
+                  return other ? (
+                    <NotedRow
+                      key={i.playback.id}
+                      draft={draft}
+                      disabled={busy}
+                      onOpen={() => {
+                        onCancel()
+                        navigate(`/meeting/${encodeURIComponent(other)}`)
+                      }}
+                      onLink={pick}
+                    />
+                  ) : (
+                    <DraftRow key={i.playback.id} draft={draft} disabled={busy} onPick={pick} />
+                  )
+                })}
             </ul>
           )}
         </section>

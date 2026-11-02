@@ -17,6 +17,7 @@ import {
 import type { DeepLinkEvent } from '@shared/types/app'
 import { tryVoiceTyping } from '../features/dictation'
 import { startNewNote } from '../features/new-note'
+import { openAddCourseSheet } from '../features/sources/courses/courses-store'
 import { IconAlert, IconDownload } from './icons'
 import { isKnownRoute, isSettingsPath, navigate, navigateToSettings, useRoute } from './navigation'
 import { debugLog, isMac, isMod } from './platform'
@@ -188,6 +189,12 @@ function handleDeepLink(event: DeepLinkEvent): void {
         pathname = new URL(event.data.path, 'https://notula.invalid').pathname
       } catch {
         debugLog('deeplink:open-unparsable')
+        return
+      }
+      // Main's Add course… (a card): the sheet, prefilled from the playback (and its link).
+      if (pathname === '/courses/add') {
+        const q = new URL(event.data.path, 'https://notula.invalid').searchParams
+        openAddCourseSheet({ mode: 'add', playbackId: q.get('playback'), url: q.get('url') })
         return
       }
       if (!isKnownRoute(pathname)) {

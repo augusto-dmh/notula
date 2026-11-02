@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 // The `source-detected` card's body, buttons and menu, drawn under the
 // card's title in place of the generic actions row:
-// - offer: the source line, "Not sure which video" for a guess, Take notes / Skip;
+// - offer: the source line, "Not sure which video" (or lesson) for a guess, Take notes / Skip,
+//   and Use this note when main offers the open note (`noteTitle` on an offer);
 // - continue: the newest matching note and its last position, Continue / New note;
-// - next: Switch note / Keep this note;
-// - the first-use line (History and lookups) with Allow / Don't allow. The answer goes through
-//   `sources:grant` and keeps the card open; until that handler exists it falls back to the
-//   card actions `source:allow` / `source:not-now`;
+// - next: "Next: <number>. <title>", Switch note / Keep this note;
+// - the first-use question (Get the video's captions and details?, History only when the link
+//   isn't exact) with Allow / Not now. The answer goes through `sources:grant` and keeps the card
+//   open; until that handler exists it falls back to the card actions `source:allow` /
+//   `source:not-now`. Left unanswered, the note asks again once (SourcePlan.tsx);
 // - the menu: Don't offer for <channel>, Don't offer for <site>, Source settings, and on YouTube
-//   cards Add <channel> to Courses.
+//   cards Add <channel> to Courses, and Add <playlist> to Courses for a `list=PL…` URL.
 // - Courses: `course` (Record this lesson? Record / Skip), `add-course` (Take notes on this
 //   lesson? Add course… / Just this once / Skip), `link-capturing` (Is this <lesson> · <course>?
 //   Link this note / Keep as is), `which-course` (Which course is this? one button per candidate,
@@ -44,6 +46,7 @@ function buttonsFor(s: SourceCardPayload): Button[] {
     case 'offer':
       return [
         { action: 'take-notes', label: 'Take notes', primary: true },
+        ...(s.noteTitle !== null ? [{ action: 'link-note' as const, label: 'Use this note' }] : []),
         { action: 'skip', label: 'Skip' }
       ]
     case 'course':
@@ -92,9 +95,10 @@ function courseText(s: SourceCardPayload): { question: string; line: string | nu
 function menuFor(s: SourceCardPayload): { action: SourceCardAction; label: string; separatorBefore?: boolean }[] {
   const items: { action: SourceCardAction; label: string; separatorBefore?: boolean }[] = []
   // A YouTube video outside Courses: its channel can become a course.
-  if (s.channel && !COURSE_MODES.includes(s.mode) && /(^|\.)youtube\.com$|^youtu\.be$/i.test(s.site ?? '')) {
-    items.push({ action: 'add-channel', label: `Add ${s.channel} to Courses` })
-  }
+  const youtube = !COURSE_MODES.includes(s.mode) && /(^|\.)youtube\.com$|^youtu\.be$/i.test(s.site ?? '')
+  if (youtube && s.channel) items.push({ action: 'add-channel', label: `Add ${s.channel} to Courses` })
+  // Its playlist too, when the URL has one (`list=PL…`).
+  if (youtube && s.playlist) items.push({ action: 'add-playlist', label: `Add ${s.playlist.title ?? 'this playlist'} to Courses` })
   if (s.channel) items.push({ action: 'mute-channel', label: `Don’t offer for ${s.channel}` })
   if (s.site) items.push({ action: 'mute-site', label: `Don’t offer for ${s.site}` })
   items.push({ action: 'settings', label: 'Source settings', separatorBefore: items.length > 0 })
@@ -105,8 +109,8 @@ function sourceLine(s: SourceCardPayload): string {
   return [s.channel, s.site].filter((x): x is string => !!x).join(' · ')
 }
 
-/** The first-use question; answered in place through `sources:grant`. */
-function FirstUse({ onFallback }: { onFallback(action: 'allow' | 'not-now'): void }): JSX.Element | null {
+/** The first-use question; answered in place through `sources:grant`. History only when the link isn't exact. */
+function FirstUse({ exact, onFallback }: { exact: boolean; onFallback(action: 'allow' | 'not-now'): void }): JSX.Element | null {
   const [answer, setAnswer] = useState<'allowed' | 'declined' | null>(null)
   const [busy, setBusy] = useState(false)
   async function grant(allow: boolean): Promise<void> {
@@ -123,22 +127,23 @@ function FirstUse({ onFallback }: { onFallback(action: 'allow' | 'not-now'): voi
   if (answer) {
     return (
       <p className="src-card__first src-card__first--done" role="status">
-        {answer === 'allowed' ? 'Notula will find the exact link and details.' : 'You can turn this on in Source settings.'}
+        {answer === 'allowed' ? 'Notula will get the video’s captions and details.' : 'You can turn this on in Source settings.'}
       </p>
     )
   }
   return (
-    <div className="src-card__first" role="group" aria-label="Find the exact link and details">
+    <div className="src-card__first" role="group" aria-label="Get the video’s captions and details">
       <p className="src-card__first-text">
-        <strong>Find the exact link and details?</strong> Notula reads YouTube and course-site entries from this browser’s history on
-        this computer, and asks YouTube about the videos you take notes on.
+        <strong>Get the video’s captions and details?</strong> Notula asks YouTube about the videos you take notes on, to fetch captions
+        for the transcript and the playlist or channel.
+        {exact ? null : ' To find the exact video, it also reads YouTube entries from this browser’s history on this computer.'}
       </p>
       <div className="src-card__first-actions">
         <button type="button" className="src-card__btn src-card__btn--small" disabled={busy} onClick={() => void grant(true)}>
           Allow
         </button>
         <button type="button" className="src-card__btn src-card__btn--small src-card__btn--quiet" disabled={busy} onClick={() => void grant(false)}>
-          Don’t allow
+          Not now
         </button>
       </div>
     </div>
@@ -180,6 +185,8 @@ export function SourceDetectedCard({
   if (!s) return null
   const line = sourceLine(s)
   const course = courseText(s)
+  // Main's question names a lesson for lesson kinds.
+  const lessonKind = /lesson\?$/.test(payload.title)
   const run = (action: SourceCardAction): void => {
     setMenuOpen(false)
     act(`source:${action}`)
@@ -199,10 +206,15 @@ export function SourceDetectedCard({
       ) : (
         <div className="src-card__source">
           <div className="src-card__title" title={s.title}>
-            {s.mode === 'next' ? `Next: ${s.title}` : s.title}
+            {s.mode === 'next' ? `Next: ${s.lesson ? `${s.lesson}. ` : ''}${s.title}` : s.title}
           </div>
           {line ? <div className="src-card__meta">{line}</div> : null}
-          {s.guess ? <div className="src-card__guess">Not sure which video</div> : null}
+          {s.guess ? <div className="src-card__guess">{lessonKind ? 'Not sure which lesson' : 'Not sure which video'}</div> : null}
+          {s.mode === 'offer' && s.noteTitle ? (
+            <div className="src-card__meta" title={s.noteTitle}>
+              Open now: “{s.noteTitle}”
+            </div>
+          ) : null}
           {s.mode === 'continue' && s.noteTitle ? (
             <div className="src-card__meta" title={s.noteTitle}>
               {s.lastPositionMs !== null ? `“${s.noteTitle}”, last at ${formatPosition(s.lastPositionMs)}` : `“${s.noteTitle}”`}
@@ -210,8 +222,8 @@ export function SourceDetectedCard({
           ) : null}
         </div>
       )}
-      {s.firstUse ? <FirstUse onFallback={(a) => run(a)} /> : null}
-      <div className={`src-card__actions${course ? ' is-wrap' : ''}`}>
+      {s.firstUse ? <FirstUse exact={s.exact === true} onFallback={(a) => run(a)} /> : null}
+      <div className={`src-card__actions${course || (s.mode === 'offer' && s.noteTitle) ? ' is-wrap' : ''}`}>
         {buttonsFor(s).map((b) => (
           <button
             key={b.action}

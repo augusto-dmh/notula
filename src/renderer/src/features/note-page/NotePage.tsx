@@ -48,6 +48,7 @@ import { SourceChip } from '../sources'
 import { EndStrip } from '../sources/courses'
 import { usePickMode } from '../speaker-profiles'
 import { SpeakerNameBanner, TranscriptPanel } from '../transcript'
+import { useNoteSource } from '../transcript/SourcePlan'
 import { deletePermanently, IconRestore, IconTrash, restoreFromTrash } from '../trash'
 import { noteInNavHistory } from './nav-history'
 import { NoteActions } from './NoteActions'
@@ -235,6 +236,7 @@ function newest(panels: Panel[]): Panel | null {
 }
 
 function NoteView({ note, reveal: revealQuery }: { note: Note; reveal: string | null }): JSX.Element {
+  const noteSource = useNoteSource(note.id)
   const own = isOwnNote(note)
   const trashed = note.deleted_at !== null
   const panelsState = usePanels(note.id)
@@ -555,7 +557,8 @@ function NoteView({ note, reveal: revealQuery }: { note: Note; reveal: string | 
                 ) : null}
                 {trashed ? null : (
                   <>
-                    <NoteAttendees noteId={note.id} />
+                    {/* A source note with no people shows no attendee meta. */}
+                    {noteSource && !note.linked_event && !note.people?.attendees?.length ? null : <NoteAttendees noteId={note.id} />}
                     <SourceChip noteId={note.id} />
                     <TemplateChip noteId={note.id} hasSummary={panels.length > 0} editor={notesEditor} />
                   </>

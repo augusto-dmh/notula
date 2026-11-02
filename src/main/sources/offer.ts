@@ -21,6 +21,11 @@
 //   from the 120 s gap and the 12 h key rule (they answer a course the user added, or the capture
 //   running now); `add-course` replaces today's offer and keeps its gates. One card at a time;
 //   a course card waits while another shows.
+// - Videos outside Courses (offer-rules.ts): quiet windows per outcome and key replace the 12 h
+//   rule (Skip 12 h; ignored 30 min, then 12 h; noted 10 min); Next item counts play time
+//   without ads, capped 5 min from the end, and an item of the open note's series is always a
+//   Next card; a guess waits 2 min and never shows over a YouTube watch page, and doesn't
+//   consume the 120 s gap; Use this note offers the open note when it fits.
 // Logs carry states and counts only, never titles, channels or URLs.
 
 import type { PushChannel } from '@shared/ipc'
@@ -43,6 +48,7 @@ import { GUESS_KEY_PREFIX, SOURCES_LIMITS } from '@shared/types/sources'
 import type { MainContext } from '../context'
 import { log } from '../log'
 import { identify } from './identify'
+import { AdLedger, guessGate, isQuiet, recordOutcome, withinNextWindow, type CardOutcome, type KeyRecord } from './offer-rules'
 import { applyPage } from './page'
 
 /** Re-check a waiting candidate this often (a gate may open: gap, capture, one at a time). */
@@ -53,6 +59,10 @@ const CARD_GRACE_MS = 2_000
 const IDENTIFY_RETRY_MS = 30_000
 /** The end is reported once the old session is gone past the debounce: a next item may start just before. */
 const NEXT_SLACK_MS = 5_000
+/** Use this note: a note without a source this young (or empty) is offered. */
+const USE_NOTE_FRESH_MS = 30 * 60 * 1_000
+/** A YouTube playlist the card may offer to Courses (`list=PL…`). */
+const PLAYLIST_KEY = /^youtube:playlist:(PL[\w-]{2,62})$/
 
 export const isGuessKey = (key: CanonicalKey): boolean => key.startsWith(GUESS_KEY_PREFIX)
 
@@ -64,6 +74,8 @@ export interface Track {
   failedAt: number | null
   /** The title the draft was identified from. */
   identifiedTitle: string | null
+  /** When that identification finished (a guess waits from here). */
+  identifiedAt?: number
   /** The newest non-trashed note with the same exact or high key (Recently played, Continue). */
   noteId: string | null
   /** `waiting`: identified, a gate is closed for now; `done`: offered or never to be offered. */
@@ -134,14 +146,20 @@ interface ActiveCard {
   until: number
   /** A course-mode card (`courseCard`). */
   course?: boolean
+  /** Today's card passed its last-moment check (it is on screen). */
+  shown?: boolean
 }
 
 export class SourceOffers {
   private readonly snapshots = new Map<PlaybackProviderId, Playback[]>()
   private readonly tracks = new Map<string, Track>()
   private recent: PlayingItem[] = []
-  /** When each key last got a card (12 h rule). */
+  /** When each key last got an `add-course` card (12 h rule). */
   private readonly offeredAt = new Map<CanonicalKey, number>()
+  /** Today's card per key: its last outcome (quiet windows). */
+  private readonly outcomes = new Map<CanonicalKey, KeyRecord>()
+  /** Ad-like items per browser, for Next item. */
+  private readonly ads = new AdLedger()
   private lastCardAt = 0
   private card: ActiveCard | null = null
   private retry: NodeJS.Timeout | null = null
@@ -167,6 +185,8 @@ export class SourceOffers {
     this.tracks.clear()
     this.recent = []
     this.offeredAt.clear()
+    this.outcomes.clear()
+    this.ads.clear()
     this.courseQueue.clear()
     this.stopRetry()
     this.pushPlaying()
@@ -215,6 +235,7 @@ export class SourceOffers {
   onSnapshot(provider: PlaybackProviderId, playbacks: Playback[]): void {
     if (!this.active) return
     this.snapshots.set(provider, playbacks)
+    this.ads.apply(playbacks, Date.now())
     const present = new Set<string>()
     let recentChanged = false
     for (const p of playbacks) {
@@ -278,6 +299,7 @@ export class SourceOffers {
     }
     t.draft = draft
     t.identifiedTitle = title
+    t.identifiedAt = Date.now()
     t.noteId = isGuessKey(draft.canonicalKey) ? null : await this.newestNote(draft.canonicalKey)
     this.remember(t)
     this.hooks.feed.identified(t)
@@ -347,45 +369,77 @@ export class SourceOffers {
       return this.armRetry()
     }
 
-    // Next item: it started in the same browser within 30 s of the fed note's playback ending.
+    // Next item: it started in the same browser within 30 s of play time (ads left out, at most
+    // 5 min) of the fed note's playback ending. Any item of that note's series reads as Next.
     const next = this.hooks.feed.nextContext()
     const seriesKey = this.hooks.seriesKeyOf(draft)
     const startedAt = t.playback.seenAt ?? now - t.playback.playedMs
-    const isNext =
-      next !== null &&
-      seriesKey !== null &&
-      seriesKey === next.seriesKey &&
-      next.browser === t.playback.browser &&
-      startedAt >= next.endedAt - NEXT_SLACK_MS &&
-      startedAt - next.endedAt <= SOURCES_LIMITS.nextItemWindowMs
+    const ofSeries = next !== null && seriesKey !== null && seriesKey === next.seriesKey && next.browser === t.playback.browser
+    const isNext = ofSeries && withinNextWindow(next.endedAt, startedAt, this.ads.adMsBetween(next.browser, next.endedAt, startedAt), NEXT_SLACK_MS)
+    const guess = isGuessKey(key)
 
     t.offer = 'waiting'
-    if (!isNext && now - (this.offeredAt.get(key) ?? 0) < SOURCES_LIMITS.cardPerKeyMs) return done('per-key')
+    if (!isNext && isQuiet(this.outcomes.get(key), now)) return done('quiet')
+    // A guess (an ad's title is one): never over a YouTube watch page, and only after 2 min.
+    if (guess && !isNext && guessGate(t.playback, draft.site, t.identifiedAt ?? now, now) === 'hold') return this.armRetry()
     if (this.ctx.ui.inOnboarding()) return this.armRetry()
     if (this.cardShowing(now)) return this.armRetry()
     if (!isNext && now - this.lastCardAt < SOURCES_LIMITS.cardGapMs) return this.armRetry()
     if (await this.meetingCapturing()) return this.armRetry()
     if (this.card || t.offer !== 'waiting' || !this.active) return
 
-    const matches = isGuessKey(key) || isNext ? [] : await this.ctx.storage.findNotesBySource(key, { limit: 1 }).catch(() => [])
+    const matches = guess || ofSeries ? [] : await this.ctx.storage.findNotesBySource(key, { limit: 1 }).catch(() => [])
     if (this.card || t.offer !== 'waiting' || !this.active) return
     const match = matches[0] ?? null
-    const mode: SourceCardPayload['mode'] = isNext ? 'next' : match ? 'continue' : 'offer'
+    // Continue never while that note is open (the feed's busy keys cover the fed and capturing notes).
+    if (match && match.noteId === this.ctx.ui.viewingNoteId()) return done('note-open')
+    const mode: SourceCardPayload['mode'] = ofSeries ? 'next' : match ? 'continue' : 'offer'
+    const use = mode === 'offer' && !guess ? await this.openNoteToUse(seriesKey) : null
+    if (this.card || t.offer !== 'waiting' || !this.active) return
+    const number = draft.lesson?.number ?? draft.series?.index ?? null
+    const playlist = PLAYLIST_KEY.exec(draft.series?.canonicalKey ?? '')?.[1] ?? null
     const payload: SourceCardPayload = {
       mode,
       title: draft.title,
       channel: draft.channel,
       site: draft.site,
       guess: draft.confidence === 'guess',
-      noteTitle: match ? match.title || 'Untitled note' : null,
+      // Continue: the matching note; an offer: the open note Use this note links.
+      noteTitle: match ? match.title || 'Untitled note' : use ? use.title : null,
       lastPositionMs: match?.lastPositionMs ?? null,
-      firstUse: !s['sources.grantAsked']
+      firstUse: !s['sources.grantAsked'],
+      exact: draft.confidence === 'exact',
+      ...(mode === 'next' && number !== null ? { lesson: String(number) } : {}),
+      ...(playlist ? { playlist: { id: playlist, title: draft.series?.title ?? null } } : {})
     }
     t.offer = 'done'
-    this.show(t, payload, match?.noteId ?? null, now)
+    this.show(t, payload, match?.noteId ?? use?.noteId ?? null, now, isNext)
   }
 
-  private show(t: Track, payload: SourceCardPayload, matchId: string | null, now: number): void {
+  /**
+   * Use this note: the note the main window shows, when it has no source and is empty, or under
+   * 30 min old, or in the series' folder.
+   */
+  private async openNoteToUse(seriesKey: CanonicalKey | null): Promise<{ noteId: string; title: string } | null> {
+    const id = this.ctx.ui.viewingNoteId()
+    if (!id) return null
+    try {
+      const [note, source, empty] = await Promise.all([this.ctx.storage.getNote(id), this.ctx.storage.getNoteSource(id), this.ctx.storage.noteEmptiness(id)])
+      if (!note || note.deleted_at || source || note.linked_event) return null
+      const title = note.title?.trim() || 'Untitled note'
+      const isEmpty = !!empty && empty.notes_text_length === 0 && empty.chunk_count === 0 && empty.live_panel_count === 0
+      if (isEmpty || Date.now() - Date.parse(note.created_at) < USE_NOTE_FRESH_MS) return { noteId: id, title }
+      if (!seriesKey) return null
+      const series = (await this.ctx.storage.listSeries()).find((x) => x.canonical_key === seriesKey)
+      if (!series?.folder_id) return null
+      const members = (await this.ctx.storage.listFolders()).membership[series.folder_id] ?? []
+      return members.includes(id) ? { noteId: id, title } : null
+    } catch {
+      return null
+    }
+  }
+
+  private show(t: Track, payload: SourceCardPayload, matchId: string | null, now: number, exempt: boolean): void {
     const draft = t.draft as SourceDraft
     const lesson = draft.kind === 'lesson'
     const question =
@@ -400,6 +454,7 @@ export class SourceOffers {
             : 'Take notes on this video?'
     const playbackId = t.playback.id
     const key = draft.canonicalKey
+    const guess = isGuessKey(key)
     let id = ''
     id = this.ctx.notify.show({
       variant: 'source-detected',
@@ -418,16 +473,43 @@ export class SourceOffers {
           return false
         }
         const at = Date.now()
-        this.lastCardAt = at
-        this.offeredAt.set(key, at)
-        this.pruneOffered(at)
+        // A guess doesn't consume the gap; a Next item is exempt from it.
+        if (!guess && !exempt) this.lastCardAt = at
+        this.outcome(key, 'shown', at)
+        if (this.card?.id === id) {
+          this.card.shown = true
+          this.card.until = at + SOURCES_LIMITS.cardLifetimeMs + CARD_GRACE_MS
+          this.armIgnored(id, key)
+        }
         return true
       },
-      onAction: (action) => this.onAction(id, action, { playbackId, draft, matchId })
+      onAction: (action) => this.onAction(id, action, { playbackId, draft, matchId, key })
     })
     this.card = { id, key, playbackId, mode: payload.mode, until: now + SOURCES_LIMITS.cardLifetimeMs + CARD_GRACE_MS }
     if (payload.mode === 'next') this.hooks.feed.hold(true)
-    log('info', 'sources:card-queued', { mode: payload.mode, confidence: draft.confidence, firstUse: payload.firstUse })
+    log('info', 'sources:card-queued', { mode: payload.mode, confidence: draft.confidence, firstUse: payload.firstUse, useNote: payload.mode === 'offer' && payload.noteTitle !== null })
+  }
+
+  /** A card no one answered by the end of its life counts as ignored. */
+  private armIgnored(id: string, key: CanonicalKey): void {
+    const timer = setTimeout(() => {
+      if (this.card?.id !== id || !this.card.shown) return
+      this.outcome(key, 'ignored', Date.now())
+      this.clearCard(id)
+    }, SOURCES_LIMITS.cardLifetimeMs + CARD_GRACE_MS)
+    timer.unref()
+  }
+
+  private outcome(key: CanonicalKey, outcome: CardOutcome, at: number): void {
+    const r = recordOutcome(this.outcomes.get(key), outcome, at)
+    this.outcomes.set(key, r)
+    // Older than the longest window: forgotten.
+    for (const [k, x] of this.outcomes) if (at - x.at >= SOURCES_LIMITS.cardPerKeyMs) this.outcomes.delete(k)
+    if (outcome !== 'shown') {
+      const counts = { skipped: 0, ignored: 0, noted: 0 }
+      for (const x of this.outcomes.values()) if (x.outcome !== 'shown') counts[x.outcome]++
+      log('info', 'sources:card-outcome', { outcome, ignores: r.ignores, ...counts })
+    }
   }
 
   // ---------- the course modes ----------
@@ -546,14 +628,27 @@ export class SourceOffers {
     for (const [k, at] of this.offeredAt) if (now - at >= SOURCES_LIMITS.cardPerKeyMs) this.offeredAt.delete(k)
   }
 
-  private onAction(cardId: string, action: NotificationAction, c: { playbackId: string; draft: SourceDraft; matchId: string | null }): void {
+  private onAction(cardId: string, action: NotificationAction, c: { playbackId: string; draft: SourceDraft; matchId: string | null; key: CanonicalKey }): void {
     if (!action.startsWith('source:')) return
     const a = action.slice('source:'.length) as SourceCardAction
     log('info', 'sources:card-action', { action: a })
+    const { playbackId, draft, matchId, key } = c
+    // The first-use answer keeps the card; every other action is its outcome.
+    if (a !== 'allow' && a !== 'not-now') {
+      const noted = a === 'take-notes' || a === 'new-note' || a === 'continue' || a === 'switch-note' || a === 'link-note'
+      if (this.card?.id === cardId) this.outcome(key, noted ? 'noted' : 'skipped', Date.now())
+    }
     // Every action except the first-use answer dismisses the card (notify hides it).
     this.clearCard(cardId)
-    const { playbackId, draft, matchId } = c
     switch (a) {
+      case 'link-note':
+        // Use this note: the open note takes the source (the continue path links a note without one).
+        if (matchId && !isGuessKey(draft.canonicalKey)) this.hooks.requestNote({ draft, playbackId, mode: 'continue', noteId: matchId })
+        break
+      case 'add-channel':
+      case 'add-playlist':
+        this.openAddCourse(playbackId, draft, a === 'add-playlist')
+        break
       case 'take-notes':
       case 'new-note':
         this.hooks.requestNote({ draft, playbackId, mode: 'new', noteId: null })
@@ -582,6 +677,23 @@ export class SourceOffers {
         this.hooks.openSettings()
         break
     }
+  }
+
+  /**
+   * Add <channel> / <playlist> to Courses: the Add course sheet from this playback. The link
+   * decides what the sheet proposes: the watch URL alone for the channel, with `list=` for the
+   * playlist.
+   */
+  private openAddCourse(playbackId: string, draft: SourceDraft, playlist: boolean): void {
+    const main = this.ctx.windows.main()
+    if (!main || main.isDestroyed()) return
+    const id = /^youtube:([\w-]{6,})$/.exec(draft.canonicalKey)?.[1] ?? null
+    const url = playlist ? draft.url : id ? `https://www.youtube.com/watch?v=${id}` : null
+    if (main.isMinimized()) main.restore()
+    main.show()
+    const query = `playback=${encodeURIComponent(playbackId)}${url ? `&url=${encodeURIComponent(url)}` : ''}`
+    main.webContents.send('deeplink:received' satisfies PushChannel, { type: 'open', data: { path: `/courses/add?${query}` } })
+    log('info', 'sources:add-course-from-card', { kind: playlist ? 'playlist' : 'channel', url: url !== null })
   }
 
   /** Next item: continue that item's note when one exists (exact or high key), else a new one. */

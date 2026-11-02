@@ -369,6 +369,29 @@
   white-space: nowrap;
 }
 
+.src-pick--noted {
+  cursor: default;
+}
+
+.src-pick__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+/* Narrow windows: a field row's button goes below its input. */
+@media (max-width: 600px) {
+  .src-field-row {
+    flex-wrap: wrap;
+  }
+
+  .src-field-row .n-input {
+    flex-basis: 100%;
+  }
+}
+
 /* ---------- stamp chips in the notes editor ---------- */
 
 .ne-stamp {

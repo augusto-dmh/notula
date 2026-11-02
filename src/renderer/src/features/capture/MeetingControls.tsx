@@ -9,12 +9,17 @@
 // still capture.
 //
 // A system-only note (a source note) has no microphone: no microphone status, notice or picker.
+// On a source note the bar speaks of video audio: no button while its captions are the
+// transcript, Transcribe audio before any audio was transcribed (never Resume over captions
+// alone), and Stop transcribing while it captures.
 
 import { useEffect, useRef, useState, type JSX } from 'react'
 import type { AudioSource } from '@shared/types/common'
+import { isCaptionChunk } from '@shared/lib/source-transcript'
 import { DELETED_CHUNK_MARKER } from '@shared/types/transcript'
 import { navigate } from '../../app/navigation'
 import { dismissToast, showToast } from '../../app/toast'
+import { useNoteSource } from '../transcript/SourcePlan'
 import { isSystemOnly, MIC_SILENT_TITLE, micSilentReason } from './AudioHealthBanner'
 import type { MeetingControlsProps } from './index'
 import { InputPicker } from './InputPicker'
@@ -95,23 +100,33 @@ function statusText(s: CaptureSnapshot, seen: ReadonlySet<AudioSource>, slow: bo
   return { label: 'Transcribing' }
 }
 
-/** Whether the note already has a transcript or a summary (Resume vs Start now). */
-function useHasContent(noteId: string): boolean {
-  const [has, setHas] = useState(false)
+interface NoteContent {
+  /** A transcript or a summary (Resume vs Start now). */
+  any: boolean
+  /** Transcript lines other than video captions. */
+  audio: boolean
+}
+
+/** What the note already has: Resume vs Start now, and Transcribe audio on a source note. */
+function useHasContent(noteId: string): NoteContent {
+  const [has, setHas] = useState<NoteContent>({ any: false, audio: false })
   useEffect(() => {
     let alive = true
-    setHas(false)
+    setHas({ any: false, audio: false })
     const check = async (): Promise<void> => {
       const [chunks, panels] = await Promise.all([
         window.notula.transcript.get({ noteId }).catch(() => []),
         window.notula.panels.list({ noteId }).catch(() => [])
       ])
       if (!alive) return
-      setHas(chunks.some((c) => c.text.trim() && c.text !== DELETED_CHUNK_MARKER) || panels.length > 0)
+      const lines = chunks.filter((c) => c.text.trim() && c.text !== DELETED_CHUNK_MARKER)
+      setHas({ any: lines.length > 0 || panels.length > 0, audio: lines.some((c) => !isCaptionChunk(c)) })
     }
     void check()
     const offTranscript = window.notula.transcript.onChanged((p) => {
-      if (p.noteId === noteId && p.upserted.some((c) => c.text.trim())) setHas(true)
+      if (p.noteId !== noteId) return
+      const lines = p.upserted.filter((c) => c.text.trim())
+      if (lines.length) setHas((h) => ({ any: true, audio: h.audio || lines.some((c) => !isCaptionChunk(c)) }))
     })
     const offNotes = window.notula.notes.onChanged((c) => {
       if (c.tables.includes('note_panels')) void check()
@@ -154,7 +169,9 @@ export function MeetingControls({ noteId, transcriptOpen, onToggleTranscript }: 
   const s = useCaptureSnapshot()
   const isThis = s.transcribingNoteId === noteId
   useMicSilentToast(noteId, isThis && isSystemOnly(s))
-  const hasContent = useHasContent(noteId)
+  const content = useHasContent(noteId)
+  const hasContent = content.any
+  const source = useNoteSource(noteId)?.source ?? null
   const [popover, setPopover] = useState(false)
   const otherBusy = s.transcribingNoteId !== null && !isThis
   const seenActive = useSeenActive(s, noteId)
@@ -212,7 +229,7 @@ export function MeetingControls({ noteId, transcriptOpen, onToggleTranscript }: 
     showToast({ kind: 'error', title: "Couldn't restart transcription", description: 'Stop and resume the transcript.' })
   }
 
-  let main: JSX.Element
+  let main: JSX.Element | null
   if (s.pendingStart && !isThis) {
     main = (
       <button type="button" className="nt-cap-btn" onClick={cancelPendingStart}>
@@ -236,25 +253,30 @@ export function MeetingControls({ noteId, transcriptOpen, onToggleTranscript }: 
         <button
           type="button"
           className="nt-cap-btn nt-cap-btn-stop"
-          title="Stop transcript"
+          title={source ? 'Stop transcribing' : 'Stop transcript'}
           onClick={() => stopTranscription('note_stop_button')}
         >
-          Stop transcript
+          {source ? 'Stop transcribing' : 'Stop transcript'}
         </button>
         {/* A system-only note opens no microphone, so there is none to pick. */}
         {!isSystemOnly(s) && <InputPicker />}
       </>
     )
+  } else if (source && source.transcript_plan === 'captions' && !content.audio) {
+    // The video's captions are the transcript: nothing to start here (the panel offers audio).
+    main = null
   } else {
+    // A source note: Resume only once its audio was transcribed, never over captions alone.
+    const label = source ? (content.audio ? 'Resume' : 'Transcribe audio') : hasContent ? 'Resume' : 'Start now'
     main = (
       <button
         type="button"
         className="nt-cap-btn nt-cap-btn-primary"
         disabled={otherBusy}
-        title={otherBusy ? 'Another note is transcribing' : undefined}
+        title={otherBusy ? 'Another note is transcribing' : source ? 'Transcribes this computer’s audio, without your microphone' : undefined}
         onClick={() => void start()}
       >
-        {hasContent ? 'Resume' : 'Start now'}
+        {label}
       </button>
     )
   }

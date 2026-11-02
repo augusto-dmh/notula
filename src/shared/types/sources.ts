@@ -514,10 +514,14 @@ export interface SourceCardPayload {
   firstUse: boolean
   /** The course modes: the course's name. */
   course?: string | null
-  /** The course modes: the lesson's label ("Aula 53"). */
+  /** The course modes: the lesson's label ("Aula 53"); `next`: the item's number. */
   lesson?: string | null
   /** `which-course`: at most `SOURCES_LIMITS.courseCandidates`, picked as `pick-course:<index>`. */
   candidates?: { seriesId: string; title: string }[]
+  /** The card's link is exact: the first-use question leaves out History. */
+  exact?: boolean
+  /** A YouTube playlist (`list=PL…`): the menu offers Add <playlist> to Courses. */
+  playlist?: { id: string; title: string | null }
 }
 
 export type SourceCardMode = 'offer' | 'continue' | 'next' | 'course' | 'add-course' | 'link-capturing' | 'which-course'

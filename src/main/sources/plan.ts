@@ -34,6 +34,9 @@
 //   video audio starts at once; with no transcription set up, or local-only mode with a cloud
 //   transcription provider, `none` with the reason for the card. Their prompts use the watched
 //   scope: the lines inside the note's spans ± 60 s, or the whole video once watched ≥ 85 %.
+// - No captions, outside Courses (`sources.noCaptions`): `always` starts video audio at once when
+//   a Take notes plan settles on `system-audio`; `ask` leaves it to the note's banner
+//   (SourcePlan.tsx); `never` does nothing. Course notes always transcribe (course-auto.ts).
 //
 // Nothing runs while `sources.enabled` is off or off Windows. Logs carry states and counts only.
 
@@ -159,6 +162,20 @@ export async function coursePlan(ctx: MainContext, noteId: string): Promise<{ pl
   // Local-only mode: video audio needs on-device transcription.
   if (await egressBlocked(ctx, { kind: 'asr', provider: await ctx.settings.get('asr.provider') })) return { plan: 'none', blocked: 'local-only' }
   return { plan: 'system-audio', blocked: null }
+}
+
+/**
+ * After Take notes (a playback): with `sources.noCaptions` at `always`, a note outside Courses
+ * whose plan settled on `system-audio` starts video audio at once. Never over another capture.
+ */
+async function noCaptionsStart(ctx: MainContext, noteId: string): Promise<void> {
+  if ((await ctx.settings.get('sources.noCaptions')) !== 'always' || ctx.capture.isCapturing()) return
+  const source = await ctx.storage.getNoteSource(noteId)
+  if (!source || source.transcript_plan !== 'system-audio') return
+  const series = source.series_id ? await ctx.storage.getSeries(source.series_id).catch(() => null) : null
+  if (series?.registered_at) return
+  const ok = await ctx.capture.startFromMain(noteId, { audioSources: ['system'] })
+  log('info', 'sources:no-captions-start', { started: ok })
 }
 
 /** Link this note: the running capture of `noteId` became system audio only. */
@@ -580,13 +597,18 @@ export function registerTranscriptPlan(ctx: MainContext): void {
     return setPlan(ctx, noteId, plan as Exclude<TranscriptPlan, 'pending'>)
   })
 
-  ctx.bus.on('sources:noted', ({ noteId }) => {
+  ctx.bus.on('sources:noted', ({ noteId, playbackId, created }) => {
     // Synchronously, before the sources core asks `choosePlan` right after this event.
     decideBy.set(noteId, Date.now() + SOURCES_LIMITS.planDecideMs)
     recentlyNoted.set(noteId, Date.now() + FOLLOW_MS)
     void sourcesOn(ctx).then(async (on) => {
-      if (on) await decide(ctx, noteId)
-      else decideBy.delete(noteId)
+      if (!on) {
+        decideBy.delete(noteId)
+        return
+      }
+      await decide(ctx, noteId)
+      // Take notes on a new note (not a Continue, not a link by hand).
+      if (playbackId && created) await noCaptionsStart(ctx, noteId).catch((err: unknown) => log('warn', 'sources:no-captions-start-failed', { err }))
     })
   })
 

@@ -4,6 +4,14 @@
 // when both exist, which one the panel shows. Also the source note's turns: video-time lines,
 // with no speaker labels.
 //
+// Above the line, at most one banner (outside Courses):
+// - the first-use question left unanswered on the card: "Use this video's captions as the
+//   transcript?" Allow / Not now, once, on the first YouTube note made while it was unanswered.
+//   Allow turns lookups on (main looks this note up at once) and uses the captions once listed;
+// - lookups off: "Captions are off: Notula doesn't ask YouTube." Allow lookups;
+// - no captions with `sources.noCaptions` at `ask`: "This video has no captions." Transcribe its
+//   audio / Not now (per note).
+//
 // Nothing here runs unless Sources is on and the note has a source. Every sources channel may
 // answer "No handler registered" while main has no handler for it; that reads as no source.
 
@@ -15,6 +23,7 @@ import type { TranscriptChunk } from '@shared/types/transcript'
 import { navigate } from '../../app/navigation'
 import { showToast } from '../../app/toast'
 import { startTranscription, stopTranscription, useCaptureSnapshot } from '../capture/store'
+import { useCourses } from '../sources/courses/courses-store'
 import { usePrefs } from '../settings/prefs-store'
 import type { Turn } from './turns'
 import './source-plan.css'
@@ -81,6 +90,43 @@ export function positionLabel(ms: number | null): string | null {
   return ms === null ? null : formatPosition(ms)
 }
 
+/** The note the unanswered first-use question returns in (once). */
+const FIRST_USE_NOTE_KEY = 'notula.sources.firstUseNote'
+const NO_CAPTIONS_DISMISSED_KEY = 'notula.sources.noCaptionsDismissed'
+
+function readStore(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+function writeStore(key: string, value: string): void {
+  try {
+    window.localStorage.setItem(key, value)
+  } catch {
+    // Storage full or off: the banner may show again.
+  }
+}
+
+/** True for one note only: the first that asks keeps the question. */
+function firstUseNoteIs(noteId: string): boolean {
+  const kept = readStore(FIRST_USE_NOTE_KEY)
+  if (kept) return kept === noteId
+  writeStore(FIRST_USE_NOTE_KEY, noteId)
+  return true
+}
+
+function noCaptionsDismissed(noteId: string): boolean {
+  return (readStore(NO_CAPTIONS_DISMISSED_KEY) ?? '').split(',').includes(noteId)
+}
+
+function dismissNoCaptions(noteId: string): void {
+  const ids = (readStore(NO_CAPTIONS_DISMISSED_KEY) ?? '').split(',').filter(Boolean)
+  writeStore(NO_CAPTIONS_DISMISSED_KEY, [...ids, noteId].slice(-50).join(','))
+}
+
 function failed(title: string, description: string): void {
   showToast({ id: 'source-plan-failed', kind: 'error', title, description })
 }
@@ -95,7 +141,12 @@ interface Props {
 
 export function SourcePlanBar({ noteId, view, views, shown, onShow }: Props): JSX.Element {
   const cap = useCaptureSnapshot()
+  const prefs = usePrefs()
+  const courses = useCourses()
   const [busy, setBusy] = useState(false)
+  const [dismissed, setDismissed] = useState(() => noCaptionsDismissed(noteId))
+  /** The banner's Allow: use the captions as soon as the lookup lists a track. */
+  const [wantCaptions, setWantCaptions] = useState(false)
   const s = view.source
   const capturing = cap.transcribingNoteId === noteId
   const otherBusy = (cap.transcribingNoteId !== null && !capturing) || cap.pendingStart
@@ -160,6 +211,52 @@ export function SourcePlanBar({ noteId, view, views, shown, onShow }: Props): JS
       }
     })
 
+  // Banners: never on a course's note (courses always transcribe), never while capturing.
+  const inCourses = !!view.series && (courses ?? []).some((c) => c.id === view.series?.id)
+  const youtube = s.provider === 'youtube'
+  const settled = s.enrichment?.state === 'done' || s.enrichment?.state === 'failed' || s.track_state === 'unavailable'
+  let banner: 'first-use' | 'lookups-off' | 'no-captions' | null = null
+  if (prefs && !inCourses && !capturing && !hasCaptions && !deciding) {
+    if (youtube && !prefs['sources.grantAsked'] && firstUseNoteIs(noteId)) banner = 'first-use'
+    else if (youtube && prefs['sources.grantAsked'] && !prefs['sources.onlineLookups']) banner = 'lookups-off'
+    else if (
+      prefs['sources.noCaptions'] === 'ask' &&
+      !dismissed &&
+      !views.includes('audio') &&
+      s.transcript_plan !== 'captions' &&
+      !hasTrack &&
+      (!youtube || (prefs['sources.onlineLookups'] && settled))
+    )
+      banner = 'no-captions'
+  }
+
+  useEffect(() => {
+    if (!wantCaptions || !hasTrack || capturing) return
+    setWantCaptions(false)
+    if (s.transcript_plan === 'captions') return
+    window.notula.sources.setTranscriptPlan({ noteId, plan: 'captions' }).catch(() => undefined)
+  }, [wantCaptions, hasTrack, capturing, s.transcript_plan, noteId])
+
+  // Allow (the question, or lookups off): lookups on, and History too when the link isn't exact.
+  const allowLookups = (): Promise<void> =>
+    run(async () => {
+      try {
+        await window.notula.sources.grant({ onlineLookups: true, ...(banner === 'first-use' && s.confidence !== 'exact' ? { readHistory: true } : {}) })
+        setWantCaptions(true)
+      } catch {
+        failed('Couldn’t turn on lookups', 'Try again in Source settings.')
+      }
+    })
+
+  const notNow = (): Promise<void> =>
+    run(async () => {
+      try {
+        await window.notula.sources.grant({ onlineLookups: false })
+      } catch {
+        // The question stays; nothing to undo.
+      }
+    })
+
   let line: string
   if (deciding) line = 'Choosing where the transcript comes from…'
   else if (fetchingCaptions) line = 'Getting the video’s captions…'
@@ -172,41 +269,96 @@ export function SourcePlanBar({ noteId, view, views, shown, onShow }: Props): JS
   const showTranscribe = !capturing && !fetchingCaptions && !deciding
   const showUseCaptions = !hasCaptions && hasTrack && !fetchingCaptions && !deciding && s.transcript_plan !== 'captions'
 
-  return (
-    <div className="nt-srcplan" role="status">
-      <span className="nt-srcplan-line">{line}</span>
-      <span className="nt-srcplan-actions">
-        {views.length > 1 && (
-          <span className="nt-srcplan-switch" role="group" aria-label="Transcript shown">
-            {views.map((v) => (
-              <button key={v} type="button" className="nt-srcplan-tab" aria-pressed={shown === v} onClick={() => onShow(v)}>
-                {v === 'captions' ? 'Captions' : 'Audio'}
-              </button>
-            ))}
-          </span>
-        )}
-        {captionsFailed && s.track_state === 'failed' && (
-          <button type="button" className="nt-tr-link" disabled={busy} onClick={() => void retry()}>
-            Try again
+  let bannerEl: JSX.Element | null = null
+  if (banner === 'first-use') {
+    bannerEl = (
+      <div className="nt-srcplan-banner" role="group" aria-label="Use this video’s captions">
+        <span className="nt-srcplan-banner-text">Use this video’s captions as the transcript?</span>
+        <span className="nt-srcplan-actions">
+          <button type="button" className="nt-tr-link" disabled={busy} onClick={() => void allowLookups()}>
+            Allow
           </button>
-        )}
-        {showUseCaptions && (
-          <button type="button" className="nt-tr-link" disabled={busy} onClick={() => void useCaptions()}>
-            Use the video’s captions
+          <button type="button" className="nt-tr-link" disabled={busy} onClick={() => void notNow()}>
+            Not now
           </button>
-        )}
-        {showTranscribe && (
+        </span>
+      </div>
+    )
+  } else if (banner === 'lookups-off') {
+    bannerEl = (
+      <div className="nt-srcplan-banner" role="group" aria-label="Captions are off">
+        <span className="nt-srcplan-banner-text">Captions are off: Notula doesn’t ask YouTube.</span>
+        <span className="nt-srcplan-actions">
+          <button type="button" className="nt-tr-link" disabled={busy} onClick={() => void allowLookups()}>
+            Allow lookups
+          </button>
+        </span>
+      </div>
+    )
+  } else if (banner === 'no-captions') {
+    bannerEl = (
+      <div className="nt-srcplan-banner" role="group" aria-label="This video has no captions">
+        <span className="nt-srcplan-banner-text">
+          This video has no captions.
+          <span className="nt-srcplan-banner-sub">Records your computer’s sound (not your microphone).</span>
+        </span>
+        <span className="nt-srcplan-actions">
+          <button type="button" className="nt-tr-link" disabled={busy || otherBusy} onClick={() => void transcribeAudio()}>
+            Transcribe its audio
+          </button>
           <button
             type="button"
             className="nt-tr-link"
-            disabled={busy || otherBusy}
-            title={otherBusy ? 'Another note is transcribing' : 'Transcribes this computer’s audio, without your microphone'}
-            onClick={() => void transcribeAudio()}
+            onClick={() => {
+              dismissNoCaptions(noteId)
+              setDismissed(true)
+            }}
           >
-            {captionsFailed ? 'Transcribe audio now' : 'Transcribe audio'}
+            Not now
           </button>
-        )}
-      </span>
-    </div>
+        </span>
+      </div>
+    )
+  }
+
+  return (
+    <>
+      {bannerEl}
+      <div className="nt-srcplan" role="status">
+        <span className="nt-srcplan-line">{line}</span>
+        <span className="nt-srcplan-actions">
+          {views.length > 1 && (
+            <span className="nt-srcplan-switch" role="group" aria-label="Transcript shown">
+              {views.map((v) => (
+                <button key={v} type="button" className="nt-srcplan-tab" aria-pressed={shown === v} onClick={() => onShow(v)}>
+                  {v === 'captions' ? 'Captions' : 'Audio'}
+                </button>
+              ))}
+            </span>
+          )}
+          {captionsFailed && s.track_state === 'failed' && (
+            <button type="button" className="nt-tr-link" disabled={busy} onClick={() => void retry()}>
+              Try again
+            </button>
+          )}
+          {showUseCaptions && (
+            <button type="button" className="nt-tr-link" disabled={busy} onClick={() => void useCaptions()}>
+              Use the video’s captions
+            </button>
+          )}
+          {showTranscribe && (
+            <button
+              type="button"
+              className="nt-tr-link"
+              disabled={busy || otherBusy}
+              title={otherBusy ? 'Another note is transcribing' : 'Transcribes this computer’s audio, without your microphone'}
+              onClick={() => void transcribeAudio()}
+            >
+              {captionsFailed ? 'Transcribe audio now' : 'Transcribe audio'}
+            </button>
+          )}
+        </span>
+      </div>
+    </>
   )
 }

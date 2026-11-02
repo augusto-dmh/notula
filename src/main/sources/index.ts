@@ -204,6 +204,10 @@ export function registerSources(ctx: MainContext): void {
     })
     const s = await ctx.settings.getAll()
     log('info', 'sources:grant', { readHistory: s['sources.readHistory'], onlineLookups: s['sources.onlineLookups'] })
+    // The note's banner Allow: the note on screen is looked up at once.
+    const shown = g.onlineLookups ? ctx.ui.viewingNoteId() : null
+    const row = shown ? await storage.getNoteSource(shown).catch(() => null) : null
+    if (shown && row) void lookup(shown, draftOfSource(row), null).catch((err: unknown) => log('warn', 'sources:lookup-failed', { err }))
     return { readHistory: s['sources.readHistory'], onlineLookups: s['sources.onlineLookups'], asked: s['sources.grantAsked'] }
   }
 
@@ -378,6 +382,25 @@ export function registerSources(ctx: MainContext): void {
   }
 
   const URL_TITLE = /^https?:\/\//i
+
+  /** A stored source as a draft, for a lookup that has no playback (the note's banner Allow). */
+  function draftOfSource(r: NoteSource): SourceDraft {
+    return {
+      canonicalKey: r.canonical_key,
+      provider: r.provider,
+      kind: r.kind,
+      url: r.url,
+      title: r.title,
+      channel: r.channel,
+      durationMs: r.duration_ms,
+      live: r.live,
+      confidence: r.confidence,
+      detectedVia: r.detected_via,
+      site: r.url ? (parseSourceUrl(r.url)?.host ?? null) : null,
+      series: null,
+      lesson: { number: r.lesson_number, label: r.lesson_label, state: r.lesson_state }
+    }
+  }
 
   /** Steps 5–7 of identification after Take notes, Continue or a link, when granted. */
   async function lookup(noteId: string, draft: SourceDraft, playbackId: string | null): Promise<void> {

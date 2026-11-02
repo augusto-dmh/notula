@@ -3,7 +3,8 @@
 // the pure state machine (debounce, eligibility, ad guard, spans, binding, course-app sessions),
 // maps synthetic installed web apps (app-map.ts), and checks the pure
 // identification rules (URL keys, tab and window facts, History matching, profiles and the host
-// filter on a synthetic in-memory History, search verification, yt-dlp parsing), plus two rules
+// filter on a synthetic in-memory History, search verification, yt-dlp parsing), the source
+// card's ad rules (Next through ads, no card for a long ad, quiet windows), plus two rules
 // outside the provider: superseded sessions at the transcript read, and when the
 // stamped projection feeds a prompt. No PowerShell, no browser, no network, no real History.
 //
@@ -51,6 +52,7 @@ const transcriptRepo = await import(src('src/main/storage/transcript-repo.ts'))
 const inputs = await import(src('src/main/enhance/inputs.ts'))
 const sqlite = await import('node:sqlite')
 const { DEFAULT_SETTINGS } = await import(src('src/shared/types/settings.ts'))
+const R = await import(src('src/main/sources/offer-rules.ts'))
 
 const LIMITS = {
   debounceMs: SOURCES_LIMITS.debounceMs,
@@ -492,6 +494,77 @@ group('drop: a browser the extension covers is forgotten without an end', () => 
 })
 
 // ---------- course apps (browser web apps) ----------
+
+// ---------- the source card's ad rules (offer-rules.ts) ----------
+
+/** Feeds every published snapshot to an AdLedger, as the offer does. */
+function ledgerOf(snaps) {
+  const ledger = new R.AdLedger()
+  for (const x of snaps) ledger.apply(x.list, x.at)
+  return ledger
+}
+
+group('Next survives ads: an end, two ads, then the next item at +88 s gives a Next card', () => {
+  const a = sess('Chrome', 'Series part 3', 'Example Channel', 'Playing', 0, 300)
+  const ad1 = sess('Chrome', 'Brand spot one', 'Brand', 'Playing', 0, 15)
+  const ad2 = sess('Chrome', 'Brand spot two', 'Brand', 'Playing', 0, 60)
+  const b = sess('Chrome', 'Series part 4', 'Example Channel', 'Playing', 0, 900)
+  const { log, snaps } = run(
+    [
+      { at: s(0), line: [a] },
+      { at: s(100), line: [] },
+      { at: s(102), line: [ad1] },
+      { at: s(117), line: [ad2] },
+      { at: s(177), line: [] },
+      { at: s(188), line: [b] }
+    ],
+    215
+  )
+  const endedA = of(log, 'ended').find((e) => e.reason === 'gone')
+  const next = snaps.flatMap((x) => x.list).find((p) => p.title === 'Series part 4')
+  check(!!endedA && !!next, 'the end and the next item are seen')
+  const endedAt = s(100)
+  const startedAt = next?.seenAt ?? 0
+  eq(Math.round((startedAt - endedAt) / 1000), 88, 'the next item starts 88 s after the end')
+  eq(of(log, 'candidate').length, 2, 'only the two videos are candidates')
+  const ledger = ledgerOf(snaps)
+  const adMs = ledger.adMsBetween(next?.browser ?? 'chrome', endedAt, startedAt)
+  check(adMs >= 70_000 && adMs <= 88_000, `the ads' time is left out (${adMs / 1000} s)`)
+  check(!R.withinNextWindow(endedAt, startedAt, 0, 5_000), 'by wall clock alone it would be too late')
+  check(R.withinNextWindow(endedAt, startedAt, adMs, 5_000), 'counting play time only, it is the next item')
+  check(!R.withinNextWindow(endedAt, endedAt + 5 * 60_000 + 1_000, 5 * 60_000, 5_000), 'never past 5 min from the end, whatever the ads')
+})
+
+group('a 2:36 ad over a YouTube watch page gives no card; the real video is not held back', () => {
+  const v = sess('Chrome', 'Watched video', 'Example Channel', 'Playing', 0, 600)
+  const ad = sess('Chrome', 'Brand film', 'Brand', 'Playing', 0, 156)
+  const { log, snaps } = run([{ at: s(0), line: [v] }, { at: s(200), line: [] }, { at: s(202), line: [ad] }, { at: s(358), line: [] }], 365)
+  const adCand = of(log, 'candidate').map((c) => snaps.flatMap((x) => x.list).find((p) => p.id === c.playbackId)).find((p) => p?.title === 'Brand film')
+  check(!!adCand, 'the long ad becomes a candidate: only the card rules keep it quiet')
+  // The tab strip names the watch page, not the ad: no site. Its key is a guess.
+  let held = true
+  for (let t = s(222); t <= s(358); t += 1_000) held = held && R.guessGate({ site: null, app: null, url: null }, null, s(222), t) === 'hold'
+  check(held, 'no guess card for the whole ad')
+  eq(R.guessGate({ site: 'youtube.com', app: null, url: null }, 'youtube.com', s(0), s(600)), 'hold', 'never a guess card on a YouTube page')
+  eq(R.guessGate({ site: 'courses.example.org', app: null, url: null }, 'courses.example.org', s(0), s(60)), 'hold', 'another site: a guess waits 2 min')
+  eq(R.guessGate({ site: 'courses.example.org', app: null, url: null }, 'courses.example.org', s(0), s(120)), 'go', 'then it shows')
+  check(!R.isAdLike({ ad: false, durationMs: 600_000, live: false, state: 'candidate' }), 'the real video is no ad: its exact card is never held by these rules')
+})
+
+group('quiet windows per outcome: skip 12 h, ignored 30 min then 12 h, noted 10 min', () => {
+  const H = 60 * 60_000
+  let r = R.recordOutcome(undefined, 'skipped', 0)
+  check(R.isQuiet(r, 12 * H - 1) && !R.isQuiet(r, 12 * H), 'skip: 12 h')
+  r = R.recordOutcome(undefined, 'ignored', 0)
+  check(R.isQuiet(r, 30 * 60_000 - 1) && !R.isQuiet(r, 30 * 60_000), 'first ignore: 30 min')
+  r = R.recordOutcome(r, 'shown', 31 * 60_000)
+  r = R.recordOutcome(r, 'ignored', 32 * 60_000)
+  eq(r.ignores, 2, 'two ignores of the key')
+  check(R.isQuiet(r, 32 * 60_000 + 11 * H) && !R.isQuiet(r, 32 * 60_000 + 12 * H), 'second ignore: 12 h')
+  r = R.recordOutcome(undefined, 'noted', 0)
+  check(R.isQuiet(r, 10 * 60_000 - 1) && !R.isQuiet(r, 10 * 60_000), 'noted: Continue at most once per 10 min')
+  check(R.isQuiet(R.recordOutcome(undefined, 'shown', 0), 30_000), 'a card on screen keeps its key quiet')
+})
 
 const CHROME_FULL = 'abcdefghijklmnopqrstuvwxyzabcdef'
 const CHROME_SHORT = 'abcdefghijqrstuvwxyzabcdef'

@@ -48,3 +48,28 @@
   background: var(--nt-tr-accent);
   color: var(--bg);
 }
+
+/* The one banner above the plan line (first-use, lookups off, no captions). */
+.nt-srcplan-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 10px;
+  margin: 8px 12px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--nt-tr-line);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--fg-1, inherit);
+}
+
+.nt-srcplan-banner-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nt-srcplan-banner-sub {
+  color: var(--fg-2);
+}
