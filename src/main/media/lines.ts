@@ -82,9 +82,10 @@ export function sessionsFromRecord(rec: Record<string, unknown>, now: number, ap
   if (rec['ev'] !== 'sessions' || !Array.isArray(rec['sessions'])) return null
   const out: MediaSession[] = []
   const seen = new Set<string>()
-  // The current session first, so a second session of one browser never wins over it.
+  // The current session first, then a playing one, so a second session of one app id never wins
+  // over it (the reader's `seek` picks the same one).
   const raw = (rec['sessions'] as unknown[]).filter((x): x is Record<string, unknown> => !!x && typeof x === 'object')
-  raw.sort((a, b) => Number(b['cur'] === true) - Number(a['cur'] === true))
+  raw.sort((a, b) => Number(b['cur'] === true) - Number(a['cur'] === true) || Number(b['status'] === 'Playing') - Number(a['status'] === 'Playing'))
   for (const s of raw) {
     const appId = str(s['app'], 200)
     const web = s['web'] === 'chrome' || s['web'] === 'edge' ? s['web'] : null

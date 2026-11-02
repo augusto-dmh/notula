@@ -111,11 +111,14 @@ class MediaReaderHost {
     return { read: read && typeof read === 'object' ? (read as LessonRead) : null, reason, reads, ms: Date.now() - t0 }
   }
 
-  /** Seeks the session of an app id; `gone` when it isn't there (or the reader isn't running). */
+  /**
+   * Seeks the session of an app id; `gone` only when the reader says it isn't there. No answer (a
+   * timeout, a reader not running) is `refused`: it says nothing about the session.
+   */
   async seek(app: string, ms: number): Promise<'ok' | 'refused' | 'gone'> {
     const rec = await this.ask('seek', MEDIA_READER_LIMITS.seekTimeoutMs, (id) => ({ type: 'seek', id, app, ms }))
     const r = rec?.['result']
-    return r === 'ok' || r === 'refused' ? r : 'gone'
+    return r === 'ok' || r === 'gone' ? r : 'refused'
   }
 
   /** One command and its answer (`ev` with the same id); null when the reader isn't running or is late. */

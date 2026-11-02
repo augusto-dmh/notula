@@ -9,7 +9,10 @@
 //   removed (the OS caps each part of an AppUserModel ID). A window of another profile adds
 //   `.<profile>` parts after it.
 // - Edge: `MSEdge._crx__<id>`, shortened the same way, or `<host>-<hash>_<publisher>!App`.
+// - The reader parses each shortcut's arguments itself and sends only the profile, the app id and
+//   the `--app-url` host, never the arguments. Hosts are normalized (`www.` dropped).
 
+import { normalizeHost } from '../../shared/lib/source-key'
 import type { AppMapping } from '../../shared/types/sources'
 
 export type AppBrowser = AppMapping['browser']
@@ -40,7 +43,8 @@ export interface AppInventory {
 /** The OS app ids of the browsers themselves (never web apps). */
 const BROWSER_IDS: Readonly<Record<string, AppBrowser>> = { Chrome: 'chrome', MSEdge: 'edge' }
 
-const SHORT_ID = /^(Chrome|MSEdge)\._crx_+([a-z]+)/
+/** `Chrome._crx_<id>` or `MSEdge._crx__<id>`, then optional `.<profile>` parts. */
+const SHORT_ID = /^(?:(Chrome)\._crx_|(MSEdge)\._crx__)([a-z]+)(?:\.(.+))?$/
 const EDGE_HOST_ID = /^([a-z0-9-]+(?:\.[a-z0-9-]+)+)-[a-z0-9]+_[a-z0-9]+!App$/i
 /** The shortest id part that may stand for an app id (one run removed from 32 letters). */
 const MIN_SHORT = 8
@@ -67,25 +71,35 @@ function hostOf(url: string | null): string | null {
   if (!url) return null
   try {
     const u = new URL(url)
-    return u.protocol === 'https:' || u.protocol === 'http:' ? u.hostname.toLowerCase() || null : null
+    return u.protocol === 'https:' || u.protocol === 'http:' ? cleanHost(u.hostname) : null
   } catch {
     return null
   }
 }
 
-/** One shortcut of the reader's record; null unless it launches a browser web app. */
-export function parseShortcut(name: string, exe: string, args: string, aumid: string | null): AppShortcut | null {
+function cleanHost(host: string | null): string | null {
+  const h = host ? normalizeHost(host.trim()) : ''
+  return /^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/.test(h) ? h : null
+}
+
+/** One shortcut, from the fields the reader parsed; null unless it launches a browser web app. */
+export function shortcutFromFields(name: string, exe: string, fields: { profile: string | null; appId: string | null; host: string | null }, aumid: string | null): AppShortcut | null {
   const browser = browserOfExe(exe)
-  const appId = arg(args, 'app-id')
-  if (!browser || !appId || !/^[a-z]{16,64}$/.test(appId)) return null
+  const appId = fields.appId?.trim() ?? ''
+  if (!browser || !/^[a-z]{16,64}$/.test(appId)) return null
   return {
     name: name.replace(/\.lnk$/i, '').trim(),
     browser,
-    profile: arg(args, 'profile-directory'),
+    profile: fields.profile?.trim() || null,
     appId,
-    host: browser === 'edge' ? hostOf(arg(args, 'app-url')) : null,
+    host: browser === 'edge' ? cleanHost(fields.host) : null,
     aumid: aumid?.trim() || null
   }
+}
+
+/** One shortcut from its argument string (the reader's parsing, as main would do it). */
+export function parseShortcut(name: string, exe: string, args: string, aumid: string | null): AppShortcut | null {
+  return shortcutFromFields(name, exe, { profile: arg(args, 'profile-directory'), appId: arg(args, 'app-id'), host: hostOf(arg(args, 'app-url')) }, aumid)
 }
 
 /** A `Web Applications` folder name → its app id. */
@@ -101,7 +115,8 @@ export function inventoryFromRecord(rec: Record<string, unknown>): AppInventory 
   for (const s of Array.isArray(rec['shortcuts']) ? (rec['shortcuts'] as unknown[]).slice(0, 500) : []) {
     if (!s || typeof s !== 'object') continue
     const o = s as Record<string, unknown>
-    const p = parseShortcut(str(o['name'], 300), str(o['exe'], 100), str(o['args'], 4_000), str(o['aumid'], 300) || null)
+    const fields = { profile: str(o['profile'], 200) || null, appId: str(o['appId'], 100) || null, host: str(o['host'], 253) || null }
+    const p = shortcutFromFields(str(o['name'], 300), str(o['exe'], 100), fields, str(o['aumid'], 300) || null)
     if (p) shortcuts.push(p)
   }
   const folders: AppFolder[] = []
@@ -129,7 +144,13 @@ export function isShortenedOf(short: string, full: string): boolean {
 /** The site an Edge app id starts with (`app.example.org-<hash>_<publisher>!App`). */
 export function hostFromAppId(appUserModelId: string): string | null {
   const m = EDGE_HOST_ID.exec(appUserModelId)
-  return m ? (m[1] ?? '').toLowerCase() || null : null
+  return m ? cleanHost(m[1] ?? null) : null
+}
+
+/** A profile folder named by an id's `.<profile>` part (`Profile 2`, `Profile2`, any case). */
+function sameProfile(hint: string, profile: string): boolean {
+  const k = (s: string): string => s.replace(/\s+/g, '').toLowerCase()
+  return k(hint) === k(profile)
 }
 
 /** The id a shortcut's app is reported under: its own AppUserModel ID, or the plain browser form. */
@@ -162,14 +183,24 @@ export function mapFromInventory(inv: AppInventory, appUserModelId: string): App
   const exact = inv.shortcuts.filter((s) => s.aumid === appUserModelId)
   const short = SHORT_ID.exec(appUserModelId)
   let browser: AppBrowser | null = exact[0]?.browser ?? null
+  // A window of another profile adds `.<profile>`: it picks among the profiles that hold the app.
+  const hint = short?.[4]?.trim() || null
   let appIds: Set<string>
   if (exact.length) {
     appIds = new Set(exact.map((s) => s.appId))
   } else if (short) {
     browser = short[1] === 'Chrome' ? 'chrome' : 'edge'
-    const part = short[2] ?? ''
+    const part = short[3] ?? ''
     const b = browser
-    appIds = new Set([...inv.shortcuts.filter((s) => s.browser === b).map((s) => s.appId), ...inv.folders.filter((f) => f.browser === b).map((f) => f.appId)].filter((id) => isShortenedOf(part, id)))
+    const ids = (hinted: boolean): Set<string> =>
+      new Set(
+        [
+          ...inv.shortcuts.filter((s) => s.browser === b && (!hinted || (!!s.profile && sameProfile(hint ?? '', s.profile)))).map((s) => s.appId),
+          ...inv.folders.filter((f) => f.browser === b && (!hinted || sameProfile(hint ?? '', f.profile))).map((f) => f.appId)
+        ].filter((id) => isShortenedOf(part, id))
+      )
+    appIds = hint ? ids(true) : new Set()
+    if (!appIds.size) appIds = ids(false)
   } else {
     return { ...unmapped(appUserModelId, 'edge'), state: 'ignored' }
   }
@@ -177,9 +208,17 @@ export function mapFromInventory(inv: AppInventory, appUserModelId: string): App
   if (!browser || appIds.size !== 1) return unmapped(appUserModelId, browser ?? 'edge', idHost)
   const appId = [...appIds][0] ?? ''
   const b = browser
-  const shortcuts = (exact.length ? exact : inv.shortcuts.filter((s) => s.browser === b && s.appId === appId))
+  const appShortcuts = exact.length ? exact : inv.shortcuts.filter((s) => s.browser === b && s.appId === appId)
+  let shortcuts = appShortcuts
+  let profiles = new Set([...shortcuts.map((s) => s.profile), ...inv.folders.filter((f) => f.browser === b && f.appId === appId).map((f) => f.profile)].filter((p): p is string => !!p))
+  if (hint && !exact.length) {
+    const named = [...profiles].filter((p) => sameProfile(hint, p))
+    if (named.length === 1) {
+      profiles = new Set(named)
+      shortcuts = shortcuts.filter((s) => !!s.profile && sameProfile(hint, s.profile))
+    }
+  }
   // Several profiles holding the app can't be told apart.
-  const profiles = new Set([...shortcuts.map((s) => s.profile), ...inv.folders.filter((f) => f.browser === b && f.appId === appId).map((f) => f.profile)].filter((p): p is string => !!p))
   if (profiles.size > 1 && !exact.length) return unmapped(appUserModelId, b, idHost)
   const sc = shortcuts[0] ?? null
   const profile = sc?.profile ?? (profiles.size === 1 ? ([...profiles][0] ?? null) : null)
@@ -188,7 +227,8 @@ export function mapFromInventory(inv: AppInventory, appUserModelId: string): App
     browser: b,
     profile,
     appId,
-    name: sc?.name || null,
+    // The app keeps its name in every profile.
+    name: sc?.name || appShortcuts[0]?.name || null,
     host: idHost ?? sc?.host ?? null,
     state: 'mapped'
   }

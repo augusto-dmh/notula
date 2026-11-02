@@ -15,7 +15,10 @@
 //   position feed, receive watched spans and binding changes. Nothing here stores anything.
 // - Startup sweeps History copies a crash may have left (identify.ts), whatever the settings.
 // - Course apps: a browser web app's session waits for its mapping (`apps.ts`) before it reaches
-//   the bus; one that isn't a browser app never does. Web apps aren't covered by the extension.
+//   the bus; one that isn't a browser app never does. Web apps aren't covered by the extension,
+//   except an installed video site (its player reports there too).
+// - The ad guard skips only courses: the machine is told the course hosts (built-in, the setting,
+//   registered courses) and the registered course apps, again whenever they change.
 
 import type {
   BrowserId,
@@ -28,11 +31,11 @@ import type {
   SourcePosition
 } from '@shared/types/sources'
 import { SOURCES_LIMITS } from '@shared/types/sources'
-import { parseSourceUrl } from '@shared/lib/source-key'
+import { BUILTIN_COURSE_HOSTS, parseSourceUrl } from '@shared/lib/source-key'
 import type { MainContext } from '../context'
 import { log } from '../log'
 import { sweepHistoryCopies } from '../sources/identify'
-import { cachedMapping, mapApp } from './apps'
+import { resolveApp } from './apps'
 import { mediaReader } from './host'
 import { sessionsFromRecord } from './lines'
 import { locateTab } from './locate'
@@ -40,6 +43,7 @@ import {
   bindingOf,
   createMachine,
   feedSample,
+  isVideoHost,
   needsTicks,
   snapshot,
   step,
@@ -63,7 +67,8 @@ let tickTimer: NodeJS.Timeout | null = null
 let lastSessions: MediaSession[] = []
 /** The last `sessions` record, kept to publish again once a web app's mapping arrives. */
 let lastRecord: Record<string, unknown> | null = null
-const mapping = new Set<string>()
+let republish: NodeJS.Timeout | null = null
+let trustTimer: NodeJS.Timeout | null = null
 let lastPlaybacks: Playback[] = []
 let covered = new Set<BrowserId>()
 let running = false
@@ -146,24 +151,27 @@ function scheduleTicks(): void {
   }
 }
 
-/** A web app's mapping, or undefined while `mapApp` runs (the session is published when it answers). */
-function resolveApp(appUserModelId: string): ReturnType<typeof cachedMapping> {
-  const hit = cachedMapping(appUserModelId)
-  if (hit || mapping.has(appUserModelId)) return hit
-  mapping.add(appUserModelId)
-  void mapApp(appUserModelId)
-    .catch((err: unknown) => log('warn', 'media:app-map-failed', { err }))
-    .finally(() => {
-      mapping.delete(appUserModelId)
-      if (running && lastRecord) onRecord(lastRecord)
-    })
-  return undefined
+/**
+ * A web app's mapping changed (it arrived, or a stale one was answered differently): the last
+ * line is read again on a later turn of the event loop, once for any number of apps.
+ */
+function mappingChanged(): void {
+  if (republish || !running) return
+  republish = setTimeout(() => {
+    republish = null
+    if (running && lastRecord) onRecord(lastRecord)
+  }, 0)
 }
 
 function onRecord(rec: Record<string, unknown>): void {
   lastRecord = rec
-  const sessions = sessionsFromRecord(rec, Date.now(), resolveApp)
+  const sessions = sessionsFromRecord(rec, Date.now(), (id) => resolveApp(id, mappingChanged))
   if (sessions) onSessions(sessions)
+}
+
+/** The extension reports these itself: a covered browser's tabs, and its installed video-site apps. */
+function coveredByExtension(s: MediaSession): boolean {
+  return covered.has(s.browser) && (!s.app || isVideoHost(s.app.host))
 }
 
 function onSessions(sessions: MediaSession[]): void {
@@ -172,8 +180,29 @@ function onSessions(sessions: MediaSession[]): void {
   const previous = lastSessions
   lastSessions = sessions
   ctx.bus.emit('media:sessions', { sessions, previous })
-  // Browser tabs the extension covers skip the passive pipeline; web apps never do.
-  apply({ type: 'sessions', sessions: sessions.filter((s) => !!s.app || !covered.has(s.browser)) })
+  apply({ type: 'sessions', sessions: sessions.filter((s) => !coveredByExtension(s)) })
+}
+
+/** Course hosts and registered course apps → the machine's ad-guard exceptions. */
+async function updateTrust(ctx: MainContext): Promise<void> {
+  const hosts = new Set<string>([...BUILTIN_COURSE_HOSTS, ...(await ctx.settings.get('sources.courseHosts'))])
+  const apps = new Set<string>()
+  for (const c of await ctx.storage.listCourses()) {
+    if (!c.registered_at || !c.match) continue
+    for (const h of c.match.hosts) hosts.add(h)
+    for (const a of c.match.apps) apps.add(a.appUserModelId)
+  }
+  if (!running) return
+  apply({ type: 'trust', hosts: [...hosts], apps: [...apps] })
+  log('debug', 'media:trust', { hosts: hosts.size, apps: apps.size })
+}
+
+function scheduleTrust(ctx: MainContext): void {
+  if (trustTimer || !running) return
+  trustTimer = setTimeout(() => {
+    trustTimer = null
+    void updateTrust(ctx).catch((err: unknown) => log('warn', 'media:trust-failed', { err }))
+  }, 250)
 }
 
 async function reconcile(ctx: MainContext): Promise<void> {
@@ -182,10 +211,13 @@ async function reconcile(ctx: MainContext): Promise<void> {
   running = want
   if (want) {
     apply({ type: 'mutes', mutes: await ctx.settings.get('sources.muted') })
+    await updateTrust(ctx).catch((err: unknown) => log('warn', 'media:trust-failed', { err }))
     mediaReader.start()
     return
   }
   mediaReader.stop()
+  if (republish) clearTimeout(republish)
+  republish = null
   // Off: forget every playback (memory only), close an open span, publish the empty snapshot.
   handle(step(machine, { type: 'unbind' }, Date.now()))
   machine = newMachine()
@@ -205,6 +237,10 @@ export function registerMedia(ctx: MainContext): void {
       void reconcile(ctx).catch((err: unknown) => log('error', 'media:reconcile-failed', { err }))
     }
     if (keys.includes('sources.muted') && running) apply({ type: 'mutes', mutes: settings['sources.muted'] })
+    if (keys.includes('sources.courseHosts')) scheduleTrust(ctx)
+  })
+  ctx.storage.onChange((change) => {
+    if (change.tables.includes('source_series')) scheduleTrust(ctx)
   })
   ctx.bus.on('media:extension', (snap) => {
     const next = new Set(snap.covered.filter((b): b is BrowserId => b === 'edge' || b === 'chrome' || b === 'brave'))

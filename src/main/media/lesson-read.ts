@@ -218,6 +218,22 @@ function readGeneric(nodes: readonly ReadNode[]): LessonRead {
   return { heading: titles.length === 1 ? (titles[0] ?? null) : null, course: null, breadcrumb: [], section: null, item: null }
 }
 
+/** A first read under this many nodes may be a page Chromium is still building. */
+const SPARSE_NODES = 20
+/** A first read this large is the whole page: a second one won't find what the parser didn't. */
+const FULL_NODES = 400
+
+/**
+ * After the first read: read once more when the page may still be building (no page yet, few
+ * nodes, or no heading among what was found), not when it already gave a heading or was a
+ * full page with nothing the site's parser knows.
+ */
+export function readAgain(nodes: readonly ReadNode[] | null, read: LessonRead | null): boolean {
+  if (!nodes) return true
+  if (read) return !read.heading || nodes.length < SPARSE_NODES
+  return nodes.length < FULL_NODES
+}
+
 /** The lesson fields a site's page shows; null when it shows none (a sparse or unknown page). */
 export function parseLessonRead(site: LessonReadSite, nodes: readonly ReadNode[]): LessonRead | null {
   const r = site === 'circle' ? readCircle(nodes) : site === 'hubla' ? readHubla(nodes) : readGeneric(nodes)

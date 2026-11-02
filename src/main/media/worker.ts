@@ -14,6 +14,9 @@
 //   go on to main, within the 3 s budget.
 // - Restarts: on a spawn error or an exit while the reader is wanted, a restart after 1 s,
 //   doubling, at most 5; the count resets once the last launch is 30 s old; then `failed`.
+// - Recycle: a window read answered `stuck` (UI Automation calls abandoned on a hung window are
+//   still alive in the reader): the reader is ended and started again at once, at most once a
+//   minute, without counting as a restart.
 // - Unavailable: PowerShell missing, blocked by policy, or the script's own `unavailable` (exit
 //   3: Constrained Language Mode, no WinRT metadata, compile failure): no restarts.
 // - Stop: close stdin, kill 1 s later if still running.
@@ -23,7 +26,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { join } from 'node:path'
 import { SOURCES_LIMITS, type LessonRead, type LessonReadSite } from '@shared/types/sources'
-import { nodesFromRecord, parseLessonRead } from './lesson-read'
+import { nodesFromRecord, parseLessonRead, readAgain } from './lesson-read'
 import { MEDIA_READER_LIMITS, restartDelay, type MainToMedia, type MediaReaderArgs, type MediaReaderState, type MediaToMain } from './protocol'
 
 /** By full path: a bare name is searched in the current directory before PATH. */
@@ -201,6 +204,29 @@ function stop(): void {
   }, MEDIA_READER_LIMITS.killGraceMs)
 }
 
+const RECYCLE_GAP_MS = 60_000
+let lastRecycleAt = 0
+let recycles = 0
+
+/**
+ * The reader answered `stuck`: UI Automation calls it abandoned on a hung window are still alive,
+ * and they live as long as the reader does. Start a fresh one (at most once a minute); its exit
+ * isn't a crash.
+ */
+function recycle(): void {
+  const child = r.child
+  if (!child || r.stopping || Date.now() - lastRecycleAt < RECYCLE_GAP_MS) return
+  lastRecycleAt = Date.now()
+  recycles++
+  log('warn', 'media:reader-recycled', { count: recycles })
+  r.stopping = true
+  try {
+    child.kill()
+  } catch {
+    // Already gone.
+  }
+}
+
 /** One command line to the reader; false when it can't be written. */
 function write(line: string): boolean {
   const child = r.child
@@ -228,7 +254,8 @@ function command(m: Extract<MainToMedia, { type: 'apps' | 'window-title' | 'seek
     fail = { ev: 'window-title', id: m.id, title: null }
   } else {
     if (APP_ID.test(m.app) && Number.isFinite(m.ms) && m.ms >= 0) line = `seek\t${m.id}\t${m.app}\t${Math.round(m.ms)}`
-    fail = { ev: 'seek', id: m.id, result: 'gone' }
+    // Not sent is not ended: the session may well be there.
+    fail = { ev: 'seek', id: m.id, result: 'refused' }
   }
   if (!line || !write(line)) send({ type: 'record', record: fail })
 }
@@ -242,6 +269,8 @@ interface LessonReadJob {
   site: LessonReadSite
   startedAt: number
   reads: number
+  /** A partial first read, kept in case the second finds less. */
+  first: LessonRead | null
   timer: NodeJS.Timeout | null
   budget: NodeJS.Timeout
 }
@@ -262,7 +291,7 @@ function sendLessonRead(id: number): void {
   if (!job) return
   job.timer = null
   const left = SOURCES_LIMITS.windowReadBudgetMs - (Date.now() - job.startedAt)
-  if (left < 100) return finishLessonRead(id, null, 'over-budget')
+  if (left < 100) return finishLessonRead(id, job.first, 'over-budget')
   job.reads++
   if (!write(`lesson-read\t${id}\t${job.hwnd}\t${left}`)) finishLessonRead(id, null, 'no-reader')
 }
@@ -272,27 +301,31 @@ function startLessonRead(m: Extract<MainToMedia, { type: 'lesson-read' }>): void
     send({ type: 'record', record: { ev: 'lesson-read', id: m.id, read: null, reason: 'invalid', reads: 0, ms: 0 } })
     return
   }
-  const budget = setTimeout(() => finishLessonRead(m.id, null, 'over-budget'), SOURCES_LIMITS.windowReadBudgetMs)
-  lessonReads.set(m.id, { hwnd: m.hwnd, site: m.site, startedAt: Date.now(), reads: 0, timer: null, budget })
+  // Over budget, a partial first read still counts.
+  const budget = setTimeout(() => finishLessonRead(m.id, lessonReads.get(m.id)?.first ?? null, 'over-budget'), SOURCES_LIMITS.windowReadBudgetMs)
+  lessonReads.set(m.id, { hwnd: m.hwnd, site: m.site, startedAt: Date.now(), reads: 0, first: null, timer: null, budget })
   sendLessonRead(m.id)
 }
 
-/** The reader's answer: parse it, read again once if the page was still sparse, or finish. */
+/** The reader's answer: parse it, read again once if the page may still be building, or finish. */
 function onLessonNodes(rec: Record<string, unknown>): void {
   const id = typeof rec['id'] === 'number' ? rec['id'] : -1
   const job = lessonReads.get(id)
   if (!job) return
   const nodes = nodesFromRecord(rec['nodes'])
-  const read = nodes ? parseLessonRead(job.site, nodes) : null
-  if (read) return finishLessonRead(id, read, null)
+  const read = (nodes ? parseLessonRead(job.site, nodes) : null) ?? job.first
   const reason = typeof rec['reason'] === 'string' ? rec['reason'].slice(0, 30) : 'sparse'
-  // Chromium builds a page's tree once a client asks: the first read can come back sparse.
+  if (reason === 'stuck') recycle()
+  // Chromium builds a page's tree once a client asks: the first read can come back sparse or partial.
   const retryAt = job.startedAt + MEDIA_READER_LIMITS.lessonReadRetryMs
-  if (job.reads === 1 && reason !== 'not-browser' && reason !== 'busy' && retryAt < job.startedAt + SOURCES_LIMITS.windowReadBudgetMs - 100) {
+  const canRetry = job.reads === 1 && reason !== 'not-browser' && reason !== 'stuck' && retryAt < job.startedAt + SOURCES_LIMITS.windowReadBudgetMs - 100
+  if (canRetry && readAgain(nodes, read)) {
+    job.first = read
     job.timer = setTimeout(() => sendLessonRead(id), Math.max(0, retryAt - Date.now()))
     return
   }
-  finishLessonRead(id, null, nodes ? 'sparse' : reason)
+  if (read) return finishLessonRead(id, read, null)
+  finishLessonRead(id, null, nodes ? (nodes.length ? 'no-match' : 'sparse') : reason)
 }
 
 function locate(m: Extract<MainToMedia, { type: 'locate' }>): void {

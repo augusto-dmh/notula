@@ -12,8 +12,10 @@
 //   `provisional` (the `locate` effect asks for the tab strip), then `candidate` once eligible:
 //   ≥ 20 s played, longer than 120 s or live, not a Short, not muted. A web app's playback has no
 //   tab strip: it is never private, its site is its app's host, and it needs no `locate`.
-// - Ad guard, only for a browser tab whose site is YouTube-like or not known yet (course apps and
-//   course sites have no ads, so their playbacks are trusted once eligible): a title replaced
+// - Ad guard, for every playback except a course's (course apps and course sites have no ads, so
+//   their playbacks are trusted once eligible): a web app a registered course names, or whose host
+//   is a course host, and a tab whose address is on a course host. A tab's site read from its
+//   label alone never lifts it, and a YouTube or Vimeo host never does (`trust`). A title replaced
 //   within its first 30 s played is discarded. A mid-playback change to an item ≤ 60 s long
 //   suspends the playing item; if its title comes back, the short item
 //   was an ad and the suspended playback resumes under its own id. While suspended it is
@@ -25,8 +27,8 @@
 //   watched span and opens the next; spans under 2 s merge into the next one. A different
 //   title never stamps the note: the binding goes `lost` until the owner binds again.
 
+import { BUILTIN_COURSE_HOSTS, hostIs, normalizeHost } from '@shared/lib/source-key'
 import type { BrowserId, CanonicalKey, MediaSession, Playback, PlaybackApp, PlaybackState, PlaybackStatus, SourcePosition } from '@shared/types/sources'
-import { isVideoSite } from './lines'
 
 export interface MachineLimits {
   debounceMs: number
@@ -66,8 +68,10 @@ export type MachineInput =
   | { type: 'hold'; on: boolean }
   /** `sources.muted` (`channel:<name>`, `site:<host>`). */
   | { type: 'mutes'; mutes: readonly string[] }
-  /** Browsers the extension covers: their tabs' playbacks are forgotten without an `ended` (web apps stay). */
+  /** Browsers the extension covers: their tabs' playbacks are forgotten without an `ended` (web apps stay, except a video site's). */
   | { type: 'drop'; browsers: readonly BrowserId[] }
+  /** What skips the ad guard: course hosts (built-in, `sources.courseHosts`, registered courses) and registered course apps. */
+  | { type: 'trust'; hosts: readonly string[]; apps: readonly string[] }
 
 export type MachineEffect =
   | { type: 'changed' }
@@ -121,6 +125,8 @@ interface Binding {
 export interface MediaMachine {
   limits: MachineLimits
   mutes: string[]
+  /** Course hosts and course app ids: their playbacks skip the ad guard. */
+  trust: { hosts: string[]; apps: Set<string> }
   seq: number
   /** By OS app id. */
   tracks: Map<string, Track>
@@ -132,7 +138,7 @@ export interface MediaMachine {
 }
 
 export function createMachine(limits: MachineLimits): MediaMachine {
-  return { limits, mutes: [], seq: 0, tracks: new Map(), suspended: new Map(), ended: [], binding: null }
+  return { limits, mutes: [], trust: { hosts: [...BUILTIN_COURSE_HOSTS], apps: new Set() }, seq: 0, tracks: new Map(), suspended: new Map(), ended: [], binding: null }
 }
 
 // ---------- helpers ----------
@@ -141,9 +147,29 @@ function identOf(s: MediaSession): string {
   return `${s.title}\u0000${s.artist ?? ''}`
 }
 
-/** The ad guard applies: a browser tab on a YouTube-like site, or one whose site isn't known yet. */
-function guarded(t: Track): boolean {
-  return !t.app && (t.site === null || isVideoSite(t.site))
+const VIDEO_HOSTS: readonly string[] = ['youtube.com', 'youtu.be', 'youtube-nocookie.com', 'vimeo.com']
+
+/** A YouTube or Vimeo host, any subdomain (`music.youtube.com`, `www.youtube.com`): ads, never a course. */
+export function isVideoHost(site: string | null | undefined): boolean {
+  return !!site && site.includes('.') && VIDEO_HOSTS.some((h) => hostIs(site, h))
+}
+
+function courseHost(m: MediaMachine, site: string | null): boolean {
+  return !!site && site.includes('.') && !isVideoHost(site) && m.trust.hosts.some((h) => hostIs(site, h))
+}
+
+/**
+ * The ad guard applies to everything but a known course: a web app a registered course names or
+ * on a course host, or a tab whose address (not its label) is on a course host.
+ */
+function guarded(m: MediaMachine, t: Track): boolean {
+  if (isVideoHost(t.site)) return true
+  if (t.app) return !m.trust.apps.has(t.app.appUserModelId) && !courseHost(m, t.site)
+  return t.url === null || !courseHost(m, t.site)
+}
+
+function appHost(s: MediaSession): string | null {
+  return s.app?.host ? normalizeHost(s.app.host) : null
 }
 
 function appOf(s: MediaSession): PlaybackApp | null {
@@ -215,7 +241,7 @@ function newTrack(m: MediaMachine, s: MediaSession, now: number): Track {
     // Web apps don't open in InPrivate or Incognito windows.
     privateWindow: app ? false : 'unknown',
     url: null,
-    site: app ? (s.app?.host ?? null) : null,
+    site: app ? appHost(s) : null,
     short: false,
     endReason: null
   }
@@ -327,7 +353,7 @@ function updateSample(m: MediaMachine, t: Track, s: MediaSession, now: number, f
   // A web app's mapping can be refreshed while it plays.
   if (t.app && s.app) {
     t.app = appOf(s)
-    t.site = s.app.host ?? t.site
+    t.site = appHost(s) ?? t.site
   }
   t.status = s.status
   t.rate = s.rate
@@ -392,7 +418,7 @@ function applySession(m: MediaMachine, s: MediaSession, now: number, fx: Machine
     // A long new title instead of the interrupted one: the user moved on.
     m.suspended.delete(slot)
     finish(m, sus.track, sus.at, 'replaced', fx)
-  } else if (cur && !guarded(cur)) {
+  } else if (cur && !guarded(m, cur)) {
     // No ads here: a new title is a new playback, whatever the old one played. A title that was
     // never stable for the debounce (a page still loading) was never a playback.
     accumulate(cur, now)
@@ -535,8 +561,15 @@ export function step(m: MediaMachine, input: MachineInput, now: number): Machine
         }
       }
       break
+    case 'trust':
+      m.trust = {
+        hosts: [...new Set(input.hosts.map((h) => normalizeHost(h.trim())).filter((h) => h.includes('.')))],
+        apps: new Set(input.apps)
+      }
+      break
     case 'drop': {
-      const tab = (t: Track): boolean => !t.app && input.browsers.includes(t.browser)
+      // The extension reports a video site's player wherever it runs, an installed app's window too.
+      const tab = (t: Track): boolean => (!t.app || isVideoHost(t.site)) && input.browsers.includes(t.browser)
       const slots = new Set<string>()
       for (const t of m.tracks.values()) if (tab(t)) slots.add(t.slot)
       for (const [slot, sus] of m.suspended) if (tab(sus.track)) slots.add(slot)

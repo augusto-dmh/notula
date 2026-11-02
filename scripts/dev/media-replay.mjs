@@ -46,6 +46,8 @@ const { SOURCES_LIMITS } = await import(src('src/shared/types/sources.ts'))
 const { createMachine, step, snapshot, feedSample, bindingOf } = await import(src('src/main/media/machine.ts'))
 const { sessionsFromRecord, tabFacts, windowFacts, siteFromLabel } = await import(src('src/main/media/lines.ts'))
 const A = await import(src('src/main/media/app-map.ts'))
+const { createAppCache, APP_REFRESH_MS, APP_RETRY_MS } = await import(src('src/main/media/app-cache.ts'))
+const { readAgain } = await import(src('src/main/media/lesson-read.ts'))
 const M = await import(src('src/main/media/match.ts'))
 const { parseSourceUrl, guessKey, cleanTitle } = await import(src('src/shared/lib/source-key.ts'))
 const transcriptRepo = await import(src('src/main/storage/transcript-repo.ts'))
@@ -90,6 +92,17 @@ function group(name, fn) {
   fn()
   console.log(`${failures === before ? 'ok  ' : 'FAIL'} ${name}`)
 }
+
+async function agroup(name, fn) {
+  if (file) return
+  current = name
+  const before = failures
+  await fn()
+  console.log(`${failures === before ? 'ok  ' : 'FAIL'} ${name}`)
+}
+
+/** Lets pending promise callbacks run (a few turns of the event loop). */
+const settle = () => new Promise((r) => setTimeout(r, 5))
 
 // ---------- synthetic reader lines ----------
 
@@ -573,18 +586,16 @@ const EDGE_AUMID = 'courses.example.org-1a2b3c4d_5e6f7g8h9i0j!App'
 const OTHER_FULL = 'zyxwvutsrqponmlkjihgfedcbazyxwvu'
 const OTHER_SHORT = 'zyxwvutsrqjihgfedcbazyxwvu'
 
+/** The reader parses a shortcut's arguments itself and sends only these fields (review R2 #10). */
 const APPS_RECORD = {
   ev: 'apps',
   shortcuts: [
-    { name: 'Example Community', exe: 'chrome_proxy.exe', args: ` --profile-directory=Default --app-id=${CHROME_FULL}`, aumid: `Chrome._crx_${CHROME_SHORT}` },
-    {
-      name: 'Example Courses',
-      exe: 'msedge_proxy.exe',
-      args: ` --profile-directory="Profile 1" --app-id=${EDGE_FULL} --app-url=https://courses.example.org/m/abc123 --app-run-on-os-login-mode=windowed`,
-      aumid: EDGE_AUMID
-    },
-    { name: 'Notes', exe: 'notepad.exe', args: `--app-id=${CHROME_FULL}`, aumid: null },
-    { name: 'Plain browser', exe: 'chrome.exe', args: '--profile-directory=Default', aumid: null }
+    { name: 'Example Community', exe: 'chrome_proxy.exe', profile: 'Default', appId: CHROME_FULL, host: null, aumid: `Chrome._crx_${CHROME_SHORT}` },
+    { name: 'Example Courses', exe: 'msedge_proxy.exe', profile: 'Profile 1', appId: EDGE_FULL, host: 'WWW.Courses.Example.org', aumid: EDGE_AUMID },
+    { name: 'Notes', exe: 'notepad.exe', profile: null, appId: CHROME_FULL, host: null, aumid: null },
+    { name: 'Plain browser', exe: 'chrome.exe', profile: 'Default', appId: null, host: null, aumid: null },
+    // The earlier shape, with the full arguments: never read.
+    { name: 'Old shape', exe: 'chrome_proxy.exe', args: `--profile-directory=Default --app-id=${OTHER_FULL}`, aumid: null }
   ],
   folders: [
     { browser: 'chrome', profile: 'Default', folder: `_crx_${CHROME_FULL}` },
@@ -600,7 +611,9 @@ group('web apps: the inventory and the mapping of app ids', () => {
   eq(INV.shortcuts.length, 2, 'only browser shortcuts with an --app-id')
   eq(INV.folders.length, 3, 'only _crx_ folders')
   const edge = INV.shortcuts.find((x) => x.browser === 'edge')
-  eq([edge?.profile, edge?.host, edge?.appId], ['Profile 1', 'courses.example.org', EDGE_FULL], 'Edge shortcut: quoted profile, the --app-url host only')
+  eq([edge?.profile, edge?.host, edge?.appId], ['Profile 1', 'courses.example.org', EDGE_FULL], 'Edge shortcut: the profile, the --app-url host normalized')
+  const parsed = A.parseShortcut('Example Courses.lnk', 'msedge_proxy.exe', ` --profile-directory="Profile 1" --app-id=${EDGE_FULL} --app-url=https://www.courses.example.org/m/abc123 --app-run-on-os-login-mode=windowed`, EDGE_AUMID)
+  eq([parsed?.name, parsed?.profile, parsed?.appId, parsed?.host], ['Example Courses', 'Profile 1', EDGE_FULL, 'courses.example.org'], 'the argument rule the reader applies: quoted profile, the host only')
   check(A.isShortenedOf(CHROME_SHORT, CHROME_FULL), 'one contiguous run removed')
   check(A.isShortenedOf(CHROME_FULL, CHROME_FULL), 'the full id')
   check(!A.isShortenedOf('abcdeghijqrstuvwxyzabcdef', CHROME_FULL), 'two runs removed: no match')
@@ -613,6 +626,13 @@ group('web apps: the inventory and the mapping of app ids', () => {
   eq(A.mapFromInventory(INV, `Chrome._crx_${OTHER_SHORT}.Profile 2`).state, 'mapped', 'a profile part after the id')
   const twoProfiles = A.inventoryFromRecord({ ...APPS_RECORD, folders: [...APPS_RECORD.folders, { browser: 'chrome', profile: 'Default', folder: `_crx_${OTHER_FULL}` }] })
   eq(A.mapFromInventory(twoProfiles, `Chrome._crx_${OTHER_SHORT}`).state, 'unmapped', 'the app in two profiles: unmapped')
+  const named = A.mapFromInventory(twoProfiles, `Chrome._crx_${OTHER_SHORT}.Profile 2`)
+  eq([named.state, named.profile, named.appId], ['mapped', 'Profile 2', OTHER_FULL], 'two profiles, the id names one: that profile (review R2 #11)')
+  eq(A.mapFromInventory(twoProfiles, `Chrome._crx_${OTHER_SHORT}.profile2`).profile, 'Profile 2', 'the profile part in another case and spacing')
+  eq(A.mapFromInventory(twoProfiles, `Chrome._crx_${OTHER_SHORT}.Profile 9`).state, 'unmapped', 'a profile part no folder has: still unmapped')
+  eq(A.mapFromInventory(INV, `Chrome._crx__${CHROME_SHORT}`).state, 'ignored', 'Chrome with two underscores: not a Chrome app id')
+  eq(A.mapFromInventory(INV, `MSEdge._crx_${EDGE_FULL}`).state, 'ignored', 'Edge with one underscore: not an Edge app id')
+  eq(A.hostFromAppId('WWW.Courses.Example.org-1a2b3c4d_5e6f7g8h9i0j!App'), 'courses.example.org', 'an Edge id host, normalized')
   const twoApps = A.inventoryFromRecord({
     ev: 'apps',
     shortcuts: [],
@@ -635,6 +655,97 @@ group('web apps: the inventory and the mapping of app ids', () => {
   eq(A.listFromInventory(INV).map((x) => [x.appUserModelId, x.state]), [[`Chrome._crx_${CHROME_SHORT}`, 'mapped'], [EDGE_AUMID, 'mapped']], 'the installed apps')
 })
 
+/**
+ * index.ts's session path over a fake reader and clock: each record is read with the cache's
+ * resolver, and a changed mapping reads the last record again at once (the worst case: index.ts
+ * itself waits a turn of the event loop).
+ */
+function sessionPath(readApps) {
+  const clock = { t: 1_000_000 }
+  const stats = { asks: 0, reads: 0 }
+  const cache = createAppCache({
+    readApps: async () => {
+      stats.asks++
+      return readApps()
+    },
+    now: () => clock.t
+  })
+  let last = null
+  const read = (rec) => {
+    last = rec
+    stats.reads++
+    // A runaway loop is cut short so the harness reports it instead of hanging.
+    if (stats.reads > 500) return []
+    return sessionsFromRecord(rec, clock.t, (id) => cache.resolve(id, () => read(last)))
+  }
+  return { clock, stats, cache, read }
+}
+
+const appLine = (id, web) => ({ ev: 'sessions', sessions: [{ ...sess(id, 'Lesson', '', 'Playing', 1, 900), web, hwnd: null, updated: 0 }] })
+
+await agroup('course apps: no inventory never loops, and a failed read backs off (review R2 H1)', async () => {
+  for (const [what, answer] of [
+    ['no answer', () => null],
+    ['an error record', () => ({ ev: 'apps', error: true, shortcuts: [], folders: [] })],
+    ['a rejected call', () => Promise.reject(new Error('reader gone'))]
+  ]) {
+    const p = sessionPath(answer)
+    const rec = appLine(EDGE_AUMID, 'edge')
+    p.read(rec)
+    await settle()
+    eq(p.stats.asks, 1, `${what}: one inventory read`)
+    check(p.stats.reads <= 2, `${what}: the line is read again at most once (got ${p.stats.reads})`)
+    const before = p.stats.reads
+    for (let i = 0; i < 20; i++) p.read(rec)
+    await settle()
+    eq([p.stats.asks, p.stats.reads - before], [1, 20], `${what}: later lines within 10 s ask nothing and trigger nothing`)
+    p.clock.t += APP_RETRY_MS + 1
+    p.read(rec)
+    await settle()
+    eq(p.stats.asks, 2, `${what}: asked again once the 10 s gap is over`)
+  }
+  // The reader comes back: the app is mapped and the line read again, once.
+  let up = false
+  const p = sessionPath(() => (up ? APPS_RECORD : null))
+  const rec = appLine(EDGE_AUMID, 'edge')
+  eq(p.read(rec).length, 0, 'an Edge app id without an inventory: not on the bus yet')
+  await settle()
+  up = true
+  p.clock.t += APP_RETRY_MS + 1
+  const reads = p.stats.reads
+  p.read(rec)
+  await settle()
+  eq(p.stats.reads - reads, 2, 'the mapping arrives: the last line is read again once')
+  eq(p.read(rec).map((x) => x.app?.state), ['mapped'], 'now mapped')
+})
+
+await agroup('course apps: a stale ignored or unmapped answer is asked again on the refresh rule (review R2 M2)', async () => {
+  const NEW_AUMID = 'app.example.com-5f6e7d8c_0a1b2c3d4e5f!App'
+  let installed = false
+  const record = () => (installed ? { ...APPS_RECORD, shortcuts: [...APPS_RECORD.shortcuts, { name: 'New app', exe: 'msedge_proxy.exe', profile: 'Default', appId: 'mnopqrstuvwxyzabmnopqrstuvwxyzab', host: null, aumid: NEW_AUMID }] } : APPS_RECORD)
+  const p = sessionPath(record)
+  await p.cache.listApps()
+  eq(p.stats.asks, 1, 'the inventory read (Add course)')
+  p.clock.t += 20_000
+  installed = true
+  const rec = appLine(NEW_AUMID, 'edge')
+  p.read(rec)
+  await settle()
+  eq([p.cache.cachedMapping(NEW_AUMID)?.state, p.stats.asks], ['ignored', 1], 'installed after the read: ignored from the 20 s-old inventory')
+  p.clock.t += 30_000
+  p.read(rec)
+  await settle()
+  eq(p.stats.asks, 1, 'within the minute: not asked again')
+  p.clock.t += APP_REFRESH_MS
+  p.read(rec)
+  await settle()
+  eq([p.stats.asks, p.cache.cachedMapping(NEW_AUMID)?.state], [2, 'mapped'], 'a minute on: asked again, and mapped')
+  eq(p.read(rec).map((x) => x.app?.name), ['New app'], 'the session reaches the bus')
+  // A new inventory never takes a mapped app off the bus while it is mapped again.
+  await p.cache.listApps()
+  eq(p.read(rec).map((x) => x.app?.state), ['mapped'], 'after another read of the inventory: still there')
+})
+
 /** A web-app session line as the reader prints it. */
 function appSess(app, web, title, status, posS, endS, extra = {}) {
   return { ...sess(app, title, '', status, posS, endS, extra), web, hwnd: '4196402' }
@@ -654,16 +765,23 @@ group('web apps: an Edge app session reaches the snapshot with its app, trusted 
   eq(p?.app, { appUserModelId: EDGE_AUMID, name: 'Example Courses' }, 'the playback carries its app')
 })
 
-group('web apps: no ad guard; a title change is a new playback, as a tab change is', () => {
+/** The machine told what skips the ad guard, as index.ts does from the settings and registered courses. */
+const trusting =
+  ({ hosts = [], apps = [] }) =>
+  (m, apply) =>
+    apply({ type: 'trust', hosts, apps }, s(0))
+
+group('web apps: a course app has no ad guard; a title change is a new playback, as a tab change is', () => {
   const app = `Chrome._crx_${CHROME_SHORT}`
   const a = appSess(app, 'chrome', 'Space one | Example Community', 'Playing', 0, 7635.9)
   const short = appSess(app, 'chrome', 'Space two | Example Community', 'Playing', 0, 30)
-  const r1 = run([{ at: s(0), line: [a] }, { at: s(10), line: [short] }], 40, null, appsOf(INV))
+  const course = trusting({ apps: [app] })
+  const r1 = run([{ at: s(0), line: [a] }, { at: s(10), line: [short] }], 40, course, appsOf(INV))
   eq(of(r1.log, 'ended').map((e) => e.reason), ['replaced'], 'a title played 10 s is replaced, not discarded')
   check(r1.snaps.every((x) => x.list.every((p) => !p.ad)), 'a short next item is never an ad')
   eq(r1.snaps.flatMap((x) => x.list.filter((p) => p.state === 'ended')).length, 1, 'the first playback is reported ended once')
   const b = appSess(app, 'chrome', 'Space two | Example Community', 'Playing', 0, 5000)
-  const r2 = run([{ at: s(0), line: [a] }, { at: s(40), line: [b] }], 70, null, appsOf(INV))
+  const r2 = run([{ at: s(0), line: [a] }, { at: s(40), line: [b] }], 70, course, appsOf(INV))
   eq(of(r2.log, 'ended').map((e) => e.reason), ['replaced'], 'the first lesson is replaced')
   eq(of(r2.log, 'candidate').length, 2, 'both are candidates')
   const ids = new Set(r2.snaps.flatMap((x) => x.list.map((p) => p.id)))
@@ -691,19 +809,78 @@ group('web apps: a tab and an app of one browser are two playbacks; drop keeps t
   eq(lastList(snaps).map((p) => p.app?.name ?? null), ['Example Community'], 'the extension covers the tab, not the app')
 })
 
-group('a browser tab on a course site: no ad guard once the site is known', () => {
+/** A tab's window read: the site, and the address only when the tab was the selected one. */
+const windowAt = (at, site, url) => ({ at, fn: (mm, apply, t) => apply({ type: 'window', playbackId: snapshot(mm, t)[0].id, privateWindow: false, site, url, short: false }, t) })
+
+group('a browser tab on a course host (by its address): no ad guard', () => {
   const lesson = sess('Chrome', 'Aula 3 - Example', '', 'Playing', 0, 2400)
   const next = sess('Chrome', 'Aula 4 - Example', '', 'Playing', 0, 40)
   const { log, snaps } = run(
-    [
-      { at: s(0), line: [lesson] },
-      { at: s(3), fn: (mm, apply, at) => apply({ type: 'window', playbackId: snapshot(mm, at)[0].id, privateWindow: false, site: 'courses.example.org', url: null, short: false }, at) },
-      { at: s(40), line: [next] }
-    ],
-    60
+    [{ at: s(0), line: [lesson] }, windowAt(s(3), 'courses.example.org', 'https://courses.example.org/c/lesson-3'), { at: s(40), line: [next] }],
+    60,
+    trusting({ hosts: ['courses.example.org'] })
   )
   eq(of(log, 'ended').map((e) => e.reason), ['replaced'], 'replaced, not suspended as a mid-roll')
   check(snaps.every((x) => x.list.every((p) => !p.ad)), 'never an ad')
+})
+
+/** A 40 s item after 40 s of a long video: suspended as a mid-roll when the ad guard applies. */
+function midRoll(first, second, setup, apps, extra = []) {
+  const r = run([{ at: s(0), line: [first] }, ...extra, { at: s(40), line: [second] }], 50, setup, apps)
+  return { ads: r.snaps.some((x) => x.list.some((p) => p.ad)), ended: of(r.log, 'ended').map((e) => e.reason) }
+}
+
+group('ad guard by host, never by tab label (review R2 M4)', () => {
+  const v = sess('Chrome', 'Song one', 'Chan', 'Playing', 0, 2400)
+  const ad = sess('Chrome', 'Short ad', 'Brand', 'Playing', 0, 40)
+  const course = trusting({ hosts: ['courses.example.org'] })
+  eq(midRoll(v, ad, course, undefined, [windowAt(s(3), siteFromLabel('YouTube Music'), null)]).ads, true, 'a background YouTube Music tab (label only): guarded')
+  eq(midRoll(v, ad, course, undefined, [windowAt(s(3), 'music.youtube.com', 'https://music.youtube.com/watch?v=abcdefghijk')]).ads, true, 'music.youtube.com by address: guarded')
+  eq(midRoll(v, ad, course, undefined, [windowAt(s(3), 'twitch', null)]).ads, true, 'an unknown site label: guarded')
+  eq(midRoll(v, ad, course, undefined, [windowAt(s(3), 'courses.example.org', null)]).ads, true, 'a course host from the label alone: guarded')
+  eq(midRoll(v, ad, course, undefined, [windowAt(s(3), 'other.example.net', 'https://other.example.net/v/1')]).ads, true, 'an address on a host no course names: guarded')
+  eq(midRoll(v, ad, course, undefined, [windowAt(s(3), 'courses.example.org', 'https://courses.example.org/c/1')]).ads, false, 'an address on a course host: trusted')
+  eq(midRoll(v, ad, trusting({ hosts: ['youtube.com'] }), undefined, [windowAt(s(3), 'youtube.com', 'https://www.youtube.com/watch?v=abcdefghijk')]).ads, true, 'YouTube stays guarded even if named a course host')
+  eq(midRoll(v, ad, null, undefined, [windowAt(s(3), 'udemy.com', 'https://www.udemy.com/course/x/learn')]).ads, false, 'a built-in course host by address: trusted')
+})
+
+const YT_AUMID = 'www.youtube.com-9a8b7c6d_5e4f3g2h1i0j!App'
+const YT_INV = A.inventoryFromRecord({
+  ev: 'apps',
+  shortcuts: [...APPS_RECORD.shortcuts, { name: 'YouTube', exe: 'msedge_proxy.exe', profile: 'Default', appId: 'qrstuvwxyzabcdefqrstuvwxyzabcdef', host: 'www.youtube.com', aumid: YT_AUMID }],
+  folders: APPS_RECORD.folders
+})
+
+group('an installed YouTube app keeps the ad guard; the extension covers it (review R2 M3)', () => {
+  const ytMap = A.mapFromInventory(YT_INV, YT_AUMID)
+  eq([ytMap.state, ytMap.host], ['mapped', 'youtube.com'], 'its host, normalized')
+  const v = appSess(YT_AUMID, 'edge', 'Video one', 'Playing', 0, 2400)
+  const ad = appSess(YT_AUMID, 'edge', 'Short ad', 'Playing', 0, 40)
+  const r = midRoll(v, ad, trusting({ apps: [YT_AUMID] }), appsOf(YT_INV))
+  eq(r.ads, true, 'a mid-roll in the YouTube app is an ad, even registered as a course app')
+  const app = `Chrome._crx_${CHROME_SHORT}`
+  const c1 = appSess(app, 'chrome', 'Space one | Example Community', 'Playing', 0, 7635.9)
+  const c2 = appSess(app, 'chrome', 'Space two | Example Community', 'Playing', 0, 40)
+  eq(midRoll(c1, c2, null, appsOf(INV)).ads, true, 'an app no course names, with no host: guarded')
+  eq(midRoll(c1, c2, trusting({ apps: [app] }), appsOf(INV)).ads, false, 'the same app once a course names it: trusted')
+  const e1 = appSess(EDGE_AUMID, 'edge', 'Lesson one', 'Playing', 0, 7635.9)
+  const e2 = appSess(EDGE_AUMID, 'edge', 'Lesson two', 'Playing', 0, 40)
+  eq(midRoll(e1, e2, trusting({ hosts: ['courses.example.org'] }), appsOf(INV)).ads, false, 'an app on a course host: trusted')
+  const both = run(
+    [{ at: s(0), line: [v, { ...appSess(EDGE_AUMID, 'edge', 'Lesson', 'Playing', 0, 900), cur: false }] }, { at: s(25), input: { type: 'drop', browsers: ['edge'] } }],
+    30,
+    null,
+    appsOf(YT_INV)
+  )
+  eq(lastList(both.snaps).map((p) => p.app?.name ?? null), ['Example Courses'], 'drop forgets the YouTube app (the extension reports it) and keeps the course app')
+})
+
+group('one app id, two sessions: the current one, else the playing one (seek picks the same)', () => {
+  const a = { ...sess('Chrome', 'Paused one', 'Chan', 'Paused', 10, 900), cur: false }
+  const b = { ...sess('Chrome', 'Playing one', 'Chan', 'Playing', 10, 900), cur: false }
+  const pick = (list) => sessionsFromRecord({ ev: 'sessions', sessions: list.map((x) => ({ ...x, updated: s(0) })) }, s(0)).map((x) => x.title)
+  eq(pick([a, b]), ['Playing one'], 'neither current: the playing one')
+  eq(pick([{ ...a, cur: true }, b]), ['Paused one'], 'the current one, playing or not')
 })
 
 // ---------- identification rules ----------

@@ -28,7 +28,7 @@ registerHooks({
   }
 })
 
-const { nodesFromRecord, parseLessonRead } = await import(pathToFileURL(resolve(root, 'src/main/media/lesson-read.ts')).href)
+const { nodesFromRecord, parseLessonRead, readAgain } = await import(pathToFileURL(resolve(root, 'src/main/media/lesson-read.ts')).href)
 
 const FIXTURES = resolve(root, 'scripts/dev/fixtures/lesson-read')
 const FIELDS = ['heading', 'course', 'breadcrumb', 'section', 'item']
@@ -83,6 +83,23 @@ group('the reader record: malformed nodes are skipped, no page is null', () => {
   const nodes = nodesFromRecord([[1, 'Text', '  two   spaces '], [1, 'Image', 'x'], ['1', 'Text', 'y'], [-1, 'Text', 'z'], [2, 'Button'], 'junk'])
   eq(nodes, [{ depth: 1, type: 'Text', name: 'two spaces' }], 'only well-formed nodes of the four types, whitespace collapsed')
   eq(parseLessonRead('circle', []), null, 'an empty page')
+})
+
+group('the second read: only when the page may still be building (review R2 #12)', () => {
+  const filler = (n) => Array.from({ length: n }, (_, i) => [4, 'Text', `Filler ${i}`])
+  const circle = JSON.parse(readFileSync(resolve(FIXTURES, 'circle-lesson.json'), 'utf8'))
+  const full = nodesFromRecord([...circle.nodes, ...filler(40)])
+  eq(readAgain(full, parseLessonRead('circle', full)), false, 'a heading on a page of many nodes: final')
+  const topBarOnly = nodesFromRecord([[3, 'Button', 'aula anterior'], [3, 'Text', 'Example Course'], [3, 'Button', 'Próximo aula'], ...filler(60)])
+  const partial = parseLessonRead('circle', topBarOnly)
+  check(partial !== null && partial.heading === null, 'the fixture: a course name, no heading')
+  eq(readAgain(topBarOnly, partial), true, 'a partial read without a heading: read again')
+  eq(readAgain(nodesFromRecord(filler(5)), null), true, 'a sparse page: read again')
+  eq(readAgain(null, null), true, 'no page yet: read again')
+  const big = nodesFromRecord(filler(500))
+  eq(readAgain(big, parseLessonRead('generic', big)), false, 'a full page the parser knows nothing in: final, no second fetch')
+  const small = nodesFromRecord([[3, 'Group', 'Video Player - Lesson']])
+  eq(readAgain(small, parseLessonRead('generic', small)), true, 'a heading among very few nodes: read again')
 })
 
 group('a field is capped at 200 characters', () => {
