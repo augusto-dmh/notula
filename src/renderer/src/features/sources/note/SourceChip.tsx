@@ -9,6 +9,8 @@
 // Courses: on a course's note the lesson label (*<course> › Aula 53*) opens the lesson picker; a
 // guessed lesson reads *Aula 54?* with Yes and Change; a lesson not known yet reads *Not sure
 // which lesson*. A series outside Courses adds *Add <series> to Courses* to the menu.
+// The source title leads the line only once the note is renamed; until then the note's own title
+// says it, and the line starts at the channel or the course.
 
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react'
 import type { NoteSourceView } from '@shared/types/sources'
@@ -18,7 +20,7 @@ import { isMac } from '../../../app/platform'
 import { IconPlay } from '../../settings/icons'
 import { usePrefs } from '../../settings/prefs-store'
 import { AddCourseSheet } from '../courses/AddCourseSheet'
-import { refreshCourses, useCourses } from '../courses/courses-store'
+import { refreshCourses, useCourseFolderIds, useCourses } from '../courses/courses-store'
 import { failure } from '../courses/helpers'
 import { LessonPicker } from '../courses/LessonPicker'
 import { showToast } from '../../../app/toast'
@@ -36,14 +38,19 @@ function lessonText(view: NoteSourceView): string | null {
   return view.series && view.series.kind !== 'channel' && s.lesson_state === 'pending' ? '—' : null
 }
 
-function confidenceText(view: NoteSourceView): string | null {
+/** The word a source note's copy uses for its source: a lesson in a course, a video otherwise. */
+export function sourceNoun(view: NoteSourceView, inCourses: boolean): 'lesson' | 'video' {
+  return inCourses || view.source.kind === 'lesson' || view.series?.kind === 'course' ? 'lesson' : 'video'
+}
+
+function confidenceText(view: NoteSourceView, noun: 'lesson' | 'video'): string | null {
   switch (view.source.confidence) {
     case 'exact':
       return null
     case 'high':
       return 'Likely match'
     case 'guess':
-      return 'Not sure which video'
+      return `Not sure which ${noun}`
   }
 }
 
@@ -79,6 +86,18 @@ function useNoteSource(noteId: string, enabled: boolean): [Loaded | null, () => 
   }, [enabled, noteId, load])
 
   return [loaded, load]
+}
+
+/** For the note chat's prompt: lesson or video on a source note, null on any other note. */
+export function useSourceNoun(noteId: string | null): 'lesson' | 'video' | null {
+  const enabled = !isMac && usePrefs()?.['sources.enabled'] === true && noteId !== null
+  const [loaded] = useNoteSource(noteId ?? '', enabled)
+  // The course list only loads while Sources is on, like the sidebar's.
+  const courseFolders = useCourseFolderIds(enabled)
+  const view = loaded?.available ? loaded.view : null
+  if (!enabled || !view) return null
+  const folder = view.series?.folder_id
+  return sourceNoun(view, !!folder && courseFolders.has(folder))
 }
 
 /** Yes on a guessed lesson: the same lesson, now set by the user. */
@@ -142,7 +161,7 @@ function SameAsPrompt({ noteId, otherId }: { noteId: string; otherId: string }):
   )
 }
 
-export function SourceChipView({ noteId }: { noteId: string }): JSX.Element | null {
+export function SourceChipView({ noteId, noteTitle }: { noteId: string; noteTitle: string | null }): JSX.Element | null {
   const prefs = usePrefs()
   const enabled = !isMac && prefs?.['sources.enabled'] === true
   const [loaded, reload] = useNoteSource(noteId, enabled)
@@ -213,7 +232,8 @@ export function SourceChipView({ noteId }: { noteId: string }): JSX.Element | nu
 
   const course = view.series ? (courses?.find((c) => c.id === view.series?.id) ?? null) : null
   const lesson = lessonText(view)
-  const confidence = confidenceText(view)
+  const confidence = confidenceText(view, sourceNoun(view, course !== null))
+  const renamed = (noteTitle ?? '').trim() !== source.title.trim()
   const seriesTitle = course ? course.title : view.series && view.series.kind !== 'channel' ? view.series.title : null
   const guessed = source.lesson_state === 'guessed'
   const courseLesson = course ? (lesson && lesson !== '—' ? `${lesson}${guessed ? '?' : ''}` : 'Not sure which lesson') : null
@@ -232,7 +252,7 @@ export function SourceChipView({ noteId }: { noteId: string }): JSX.Element | nu
     <div className="src-chip" ref={rootRef}>
       <div className="src-chip__row">
         <IconPlay size={14} className="src-chip__icon" />
-        {source.url ? (
+        {!renamed ? null : source.url ? (
           <button type="button" className="src-chip__title" title={`Open original: ${source.title}`} onClick={openOriginal}>
             {source.title}
           </button>

@@ -12,8 +12,8 @@ export { openSourceNote } from './note/open-source-note'
 export { SourceDetectedCard } from './note/SourceDetectedCard'
 
 /** The note header, below the attendees. */
-export function SourceChip({ noteId }: { noteId: string }): JSX.Element {
-  return createElement(SourceChipView, { noteId })
+export function SourceChip({ noteId, noteTitle }: { noteId: string; noteTitle: string | null }): JSX.Element {
+  return createElement(SourceChipView, { noteId, noteTitle })
 }
 
 /** Settings ▸ Sources (the page, with its named rows). */

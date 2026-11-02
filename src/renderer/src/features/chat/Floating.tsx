@@ -10,6 +10,7 @@ import { CHAT_LIMITS, groupingKeyFor, type ChatPlace, type ChatThread } from '@s
 import { IconClose, IconSparkle } from '../../app/icons'
 import { currentRoute, navigate, useRoute } from '../../app/navigation'
 import { debugLog } from '../../app/platform'
+import { useSourceNoun } from '../sources/note/SourceChip'
 import { ChatSurfaceView } from './ChatSurface'
 import { NEW_CHAT_SHORTCUT } from './ChatPage'
 import { IconCompose, IconExpand, IconHistory, IconSend } from './icons'
@@ -38,6 +39,7 @@ export function FloatingChatView(): JSX.Element | null {
   const route = useRoute()
   const floating = useChat((s) => s.floating)
   const key = groupingKeyFor(floating.place)
+  const noun = useSourceNoun(floating.place.kind === 'meeting' ? floating.place.noteId : null) ?? 'meeting'
   const list = useChat((s) => s.lists.get(key))
   const selected = useChat((s) => s.selection.get(key))
   const threadId = selected ?? null
@@ -182,7 +184,7 @@ export function FloatingChatView(): JSX.Element | null {
               <IconSparkle size={18} />
             </span>
             <p className="chat-hero__text">
-              {floating.place.kind === 'meeting' ? 'Ask about this meeting.' : floating.place.kind === 'list' ? 'Ask about the notes in this folder.' : 'Ask about your meetings.'}
+              {floating.place.kind === 'meeting' ? `Ask about this ${noun}.` : floating.place.kind === 'list' ? 'Ask about the notes in this folder.' : 'Ask about your meetings.'}
             </p>
           </div>
         }

@@ -10,6 +10,7 @@ import { createPortal } from 'react-dom'
 import { groupingKeyFor, type ChatPlace, type ChatThread } from '@shared/types/chat'
 import { IconClose, IconSparkle } from '../../app/icons'
 import { navigate } from '../../app/navigation'
+import { useSourceNoun } from '../sources/note/SourceChip'
 import { ChatSurfaceView } from './ChatSurface'
 import { NEW_CHAT_SHORTCUT } from './ChatPage'
 import { IconCompose, IconExpand, IconHistory } from './icons'
@@ -22,6 +23,7 @@ export function NoteChatPanelView(p: NoteChatPanelProps): JSX.Element | null {
   const place = useMemo((): ChatPlace => ({ kind: 'meeting', noteId: p.noteId }), [p.noteId])
   const key = groupingKeyFor(place)
   const surfaceId = `note:${p.noteId}`
+  const about = `Ask about this ${useSourceNoun(p.noteId) ?? 'meeting'}`
   const list = useChat((s) => s.lists.get(key))
   const selected = useChat((s) => s.selection.get(key))
   const noteAsk = useChat((s) => s.noteAsk)
@@ -125,7 +127,7 @@ export function NoteChatPanelView(p: NoteChatPanelProps): JSX.Element | null {
         }}
       >
         <IconSparkle size={15} />
-        <span>Ask about this meeting</span>
+        <span>{about}</span>
       </button>
     )
     return (
@@ -212,7 +214,8 @@ export function NoteChatPanelView(p: NoteChatPanelProps): JSX.Element | null {
               <IconSparkle size={18} />
             </span>
             <p className="chat-hero__text">
-              Ask about this meeting{p.target ? ', or ask for changes to the ' + (p.target.kind === 'summary' ? 'summary' : 'notes') : ''}.
+              {about}
+              {p.target ? ', or ask for changes to the ' + (p.target.kind === 'summary' ? 'summary' : 'notes') : ''}.
             </p>
           </div>
         }

@@ -559,7 +559,7 @@ function NoteView({ note, reveal: revealQuery }: { note: Note; reveal: string | 
                   <>
                     {/* A source note with no people shows no attendee meta. */}
                     {noteSource && !note.linked_event && !note.people?.attendees?.length ? null : <NoteAttendees noteId={note.id} />}
-                    <SourceChip noteId={note.id} />
+                    <SourceChip noteId={note.id} noteTitle={note.title} />
                     <TemplateChip noteId={note.id} hasSummary={panels.length > 0} editor={notesEditor} />
                   </>
                 )}
