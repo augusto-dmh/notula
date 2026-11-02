@@ -755,14 +755,15 @@ export function registerCourses(ctx: MainContext): void {
       // Another course…: the note moves to that course's folder.
       const to = await storage.getSeries(r.seriesId)
       if (!to) throw notulaError('not-found', 'No such course')
-      await storage.updateNoteSource(r.noteId, { series_id: to.id })
-      next = await storage.setLessonForNote(r.noteId, r.itemId, 'manual')
+      // A lesson sets the series from its item; with none, the note joins the course unnumbered.
+      next = r.itemId
+        ? await storage.setLessonForNote(r.noteId, r.itemId, 'manual')
+        : await storage.updateNoteSource(r.noteId, { series_id: to.id, lesson_number: null, lesson_label: null, lesson_state: 'pending', lesson_origin: null })
       if (from?.folder_id) await storage.removeNoteFromFolder(from.folder_id, r.noteId).catch(() => undefined)
       if (to.folder_id) await storage.addNotesToFolder(to.folder_id, [r.noteId], 'manual').catch(() => undefined)
     } else if (r.itemId === null) {
       // Not a lesson of this course: course and lesson leave the source; the note goes to Home.
       next = await storage.setLessonForNote(r.noteId, null, 'manual')
-      next = await storage.updateNoteSource(r.noteId, { series_id: null })
       if (from?.folder_id) await storage.removeNoteFromFolder(from.folder_id, r.noteId).catch(() => undefined)
     } else {
       next = await storage.setLessonForNote(r.noteId, r.itemId, 'manual')
