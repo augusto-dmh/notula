@@ -181,6 +181,13 @@ export interface SourceSeries {
   title: string
   folder_id: string | null
   state: SeriesState
+  /** Courses (migration 19): set while the series is in Courses; null = a plain Sources series. */
+  registered_at: IsoTime | null
+  on_play: CourseBehavior['onPlay']
+  on_end: CourseBehavior['onEnd']
+  /** `match_json`, parsed; null until the course is added. */
+  match: CourseMatch | null
+  catalog_origin: CatalogOrigin | null
   created_at: IsoTime
   updated_at: IsoTime
 }
@@ -207,6 +214,10 @@ export interface SeriesListItem extends SourceSeries {
   catalogCount: number
   pendingCount: number
   lastWatchedAt: IsoTime | null
+  /** Courses: catalog items, items with a note, and the next lesson (derived, never stored). */
+  lessonsTotal: number
+  lessonsWithNotes: number
+  nextLesson: CourseNextLesson | null
 }
 
 /** `sources:get-series`: lessons in catalog order. */
@@ -215,6 +226,9 @@ export interface SeriesDetail {
   lessons: SeriesLesson[]
   /** Notes sharing a canonical key, oldest first in each group. */
   duplicates: { canonicalKey: CanonicalKey; noteIds: string[] }[]
+  lessonsTotal: number
+  lessonsWithNotes: number
+  nextLesson: CourseNextLesson | null
 }
 
 export interface SeriesLesson {
@@ -231,6 +245,8 @@ export interface SeriesLesson {
   lessonState: LessonState | null
   watchedPercent: number | null
   lastWatchedAt: IsoTime | null
+  /** Watched ≥ 90 % (derived, never stored). */
+  finished: boolean
 }
 
 /** `source_spans`: one stretch of continuous playback while the note was open. */
@@ -311,6 +327,14 @@ export interface Playback {
   playedMs: number
   /** Epoch ms the provider first saw this playback (History time correlation). */
   seenAt?: number
+  /** The installed web app (course app) it plays in; null or absent = a browser window. */
+  app?: PlaybackApp | null
+}
+
+/** The course app a playback plays in. */
+export interface PlaybackApp {
+  appUserModelId: string
+  name: string | null
 }
 
 /** One session as the passive reader reports it (bus `media:sessions`). Raw, never stored. */
@@ -328,6 +352,10 @@ export interface MediaSession {
   rate: number
   /** Epoch ms the OS last updated the timeline. */
   lastUpdatedAt: number
+  /** A web-app session (`Chrome._crx_<id>`, an Edge app id): its mapping; absent for a browser. */
+  app?: AppMapping | null
+  /** The session window's handle, when the reader knows it (`window-title`, `lesson-read`). */
+  hwnd?: string | null
 }
 
 /** A row of Recently played (`sources:list-playing`). At most 20, cleared at quit. */
@@ -468,7 +496,12 @@ export type SourceHint = 'course-host' | 'file-rule' | 'same-as'
 
 /** What the `source-detected` card shows. */
 export interface SourceCardPayload {
-  mode: 'offer' | 'continue' | 'next'
+  /**
+   * Courses: `course` asks before recording a lesson (`on_play = ask`); `add-course` is a
+   * course-like playback outside Courses; `link-capturing` offers the hand-started note that is
+   * capturing; `which-course` answers an `ambiguous` recognition from `candidates`.
+   */
+  mode: SourceCardMode
   title: string
   channel: string | null
   site: string | null
@@ -479,7 +512,15 @@ export interface SourceCardPayload {
   lastPositionMs: number | null
   /** The first-use line with Allow and Not now. */
   firstUse: boolean
+  /** The course modes: the course's name. */
+  course?: string | null
+  /** The course modes: the lesson's label ("Aula 53"). */
+  lesson?: string | null
+  /** `which-course`: at most `SOURCES_LIMITS.courseCandidates`, picked as `pick-course:<index>`. */
+  candidates?: { seriesId: string; title: string }[]
 }
+
+export type SourceCardMode = 'offer' | 'continue' | 'next' | 'course' | 'add-course' | 'link-capturing' | 'which-course'
 
 /** The card's buttons and menu items; clicks arrive as `source:<action>`. */
 export type SourceCardAction =
@@ -494,6 +535,16 @@ export type SourceCardAction =
   | 'mute-channel'
   | 'mute-site'
   | 'settings'
+  // Courses
+  | 'record'
+  | 'add-course'
+  | 'just-once'
+  | 'link-note'
+  | 'keep-as-is'
+  | 'not-a-course'
+  | 'add-channel'
+  | 'add-playlist'
+  | `pick-course:${0 | 1 | 2}`
 
 export const SOURCE_CARD_ACTIONS: readonly SourceCardAction[] = [
   'take-notes',
@@ -506,7 +557,18 @@ export const SOURCE_CARD_ACTIONS: readonly SourceCardAction[] = [
   'not-now',
   'mute-channel',
   'mute-site',
-  'settings'
+  'settings',
+  'record',
+  'add-course',
+  'just-once',
+  'link-note',
+  'keep-as-is',
+  'not-a-course',
+  'add-channel',
+  'add-playlist',
+  'pick-course:0',
+  'pick-course:1',
+  'pick-course:2'
 ]
 
 /** The note a card asks the renderer to create or continue (`NewNoteRequest.source`). */
@@ -530,6 +592,8 @@ export const LESSON_TEMPLATE_ID = '9b8f4427-7f53-4488-bd79-0c3689d18cd3'
 
 export type SourcesOfferMode = 'ask' | 'off'
 export type SourcesYtDlpMode = 'managed' | 'external' | 'off'
+/** `sources.noCaptions`: a video outside Courses with no captions. */
+export type SourcesNoCaptionsMode = 'ask' | 'always' | 'never'
 /** `channel:<name>` or `site:<host>`. */
 export type SourceMute = `channel:${string}` | `site:${string}`
 
@@ -551,5 +615,202 @@ export const SOURCES_LIMITS = {
   planDecideMs: 5_000,
   spanMergeMs: 2_000,
   muteChars: 300,
-  searchResults: 3
+  searchResults: 3,
+  // Courses
+  historyHosts: 50,
+  learnedTitles: 20,
+  courseCandidates: 3,
+  playlistAutoFill: 300,
+  finishedPercent: 90,
+  courseCardLifetimeMs: 30_000,
+  windowReadBudgetMs: 3_000
 } as const
+
+// ---------- Courses ----------
+// A course is a series with `registered_at` set (no new entity). Its behavior and match are
+// stored on the series (migration 19).
+
+/** What a course does when a lesson plays and when it ends (`on_play`, `on_end`). */
+export interface CourseBehavior {
+  onPlay: 'record' | 'ask'
+  onEnd: 'notes' | 'button'
+}
+
+/** One course app a course plays in. */
+export interface CourseMatchApp {
+  browser: BrowserId
+  appUserModelId: string
+  profile: string | null
+  appId: string | null
+}
+
+/** `match_json`: what belongs to a course. */
+export interface CourseMatch {
+  apps: CourseMatchApp[]
+  /** Lesson-URL hosts (`community.example.com`). */
+  hosts: string[]
+  /** Learned session or window titles, at most `SOURCES_LIMITS.learnedTitles`. */
+  titles: string[]
+  /** Course keys: a Circle space slug, a Hubla member area, a YouTube playlist id or channel. */
+  keys: string[]
+  /** The window read is on for this course (the Add course switch, with the History grant). */
+  windowRead: boolean
+}
+
+/** Where a series' lesson list came from. */
+export type CatalogOrigin = 'playlist' | 'import' | 'vault' | 'manual'
+
+/** How sure recognition is of the course. */
+export type CourseConfidence = 'exact' | 'title' | 'app' | 'ambiguous' | 'none'
+
+/** `recognize()`: the course, and the lesson within it. */
+export interface Recognition {
+  courseId: string | null
+  confidence: CourseConfidence
+  lesson: {
+    itemId: string | null
+    number: number | null
+    label: string | null
+    state: LessonState
+    origin: LessonOrigin | null
+  }
+  /** The signals and rules that decided (`S5`, `course:1`, `lesson:3`): for logs and the harness. */
+  signals: string[]
+  /** `ambiguous`: the series ids that fit. */
+  candidates?: string[]
+}
+
+/** An installed browser web app, mapped from its media-session app id. */
+export interface AppMapping {
+  appUserModelId: string
+  browser: 'chrome' | 'edge'
+  profile: string | null
+  appId: string | null
+  name: string | null
+  host: string | null
+  state: 'mapped' | 'unmapped' | 'ignored'
+}
+
+/** The window read: only these fields, never stored or logged. */
+export interface LessonRead {
+  heading: string | null
+  course: string | null
+  breadcrumb: string[]
+  section: string | null
+  item: { label: string | null; index: number | null } | null
+}
+
+/** Which window-read parser runs. */
+export type LessonReadSite = 'circle' | 'hubla' | 'generic'
+
+/** The first lesson in list order after the newest finished one that has no finished note. */
+export interface CourseNextLesson {
+  catalogItemId: string
+  number: number | null
+  title: string
+  url: string | null
+}
+
+/** A course row: the sidebar, Settings ▸ Sources, the Add course sheet. */
+export interface CourseListItem extends SeriesListItem {
+  /** Where it plays ("Example Community app", "YouTube"); null = not linked yet. */
+  playsIn: string | null
+}
+
+/** A course page. */
+export interface CourseView {
+  detail: SeriesDetail
+  playsIn: string | null
+  /** Automatic notes whose lesson is `pending` or `guessed` (Needs a lesson). */
+  needsLesson: { noteId: string; label: string | null; state: LessonState }[]
+}
+
+export type CourseLessonListInput =
+  | { kind: 'vault'; handle: string }
+  | { kind: 'paste'; text: string }
+  | { kind: 'playlist' }
+  | { kind: 'later' }
+
+/** `sources:add-course`. `seriesId` adds an existing series; otherwise `draft` makes one. */
+export interface AddCourseRequest {
+  seriesId: string | null
+  draft: { kind: SeriesKind; provider: SourceProvider; canonicalKey: CanonicalKey } | null
+  title: string
+  behavior: CourseBehavior
+  match: CourseMatch
+  lessonList: CourseLessonListInput
+  /** YouTube courses: Use the video's captions (turns on `sources.onlineLookups`). */
+  captions: boolean
+  /** The playback the sheet was opened from: it is recorded at once, without the 20 s wait. */
+  playbackId: string | null
+}
+
+/** `sources:update-course`. Unset fields are kept. */
+export interface CoursePatch {
+  title?: string
+  behavior?: Partial<CourseBehavior>
+  match?: Partial<CourseMatch>
+}
+
+/** `sources:course-candidates`: what the Add course sheet offers for a playback or a link. */
+export interface CourseCandidates {
+  /** Courses with no site or app yet (added from the vault): "Link to <course>". */
+  unlinked: CourseListItem[]
+  /** The prefilled sheet; null when nothing course-like was found. */
+  proposal: CourseProposal | null
+}
+
+export interface CourseProposal {
+  title: string
+  kind: SeriesKind
+  provider: SourceProvider
+  canonicalKey: CanonicalKey
+  match: CourseMatch
+  playsIn: string | null
+  /** The host found in History for the user to confirm; nothing is kept on cancel. */
+  foundHost: string | null
+  /** The switch is shown (every site except YouTube). */
+  windowReadOffered: boolean
+  lessonListOptions: CourseLessonListInput['kind'][]
+}
+
+/** `sources:set-lesson` (the picker). `itemId: null` = Not a lesson of this course. */
+export interface SetLessonRequest {
+  noteId: string
+  itemId: string | null
+  /** Another course…: the course to move the note to. */
+  seriesId?: string | null
+}
+
+/** `sources:seek`. */
+export interface SeekRequest {
+  noteId: string
+  positionMs: number
+  /** From the main window: bring the player's window forward. */
+  bringForward: boolean
+}
+
+/** `opened`: no live session; the lesson opened and seeks once it plays. */
+export type SeekResult = 'ok' | 'refused' | 'gone' | 'opened'
+
+/** `sources:export-series`: a new folder `<Course> <date>`, never overwriting. */
+export interface ExportSeriesResult {
+  folder: string
+  files: number
+}
+
+/** The `course-recording` card. */
+export interface CourseCardPayload {
+  noteId: string
+  /** "Aula 53". */
+  lesson: string
+  course: string
+  plan: TranscriptPlan
+  /** Why the plan is `none`, for the card's line and Set up. */
+  blocked: 'no-transcription' | 'local-only' | null
+}
+
+/** The `course-recording` card's buttons; clicks arrive as `course:<action>`. */
+export type CourseCardAction = 'undo' | 'stop' | 'open-note' | 'set-up'
+
+export const COURSE_CARD_ACTIONS: readonly CourseCardAction[] = ['undo', 'stop', 'open-note', 'set-up']

@@ -75,6 +75,11 @@ import type { SecretId, SettingKey, Settings } from '@shared/types/settings'
 import type {
   CanonicalKey,
   CatalogItem,
+  CatalogOrigin,
+  CourseBehavior,
+  CourseMatch,
+  CourseNextLesson,
+  CourseView,
   LessonOrigin,
   LessonState,
   NoteSource,
@@ -614,6 +619,16 @@ export interface ApiSeriesItem {
   catalog_count: number
   pending_count: number
   last_watched_at: IsoTime | null
+  /** Courses (`series.list`, filter `registered`). */
+  registered?: boolean
+  on_play?: CourseBehavior['onPlay'] | null
+  on_end?: CourseBehavior['onEnd'] | null
+  sites?: string[]
+  /** App names only. */
+  apps?: string[]
+  lessons_total?: number
+  lessons_with_notes?: number
+  next_lesson?: Pick<CourseNextLesson, 'number' | 'title' | 'url'> | null
 }
 
 /** `series.get`: lessons in catalog order, with note ids, pending and duplicates. */
@@ -628,6 +643,7 @@ export interface ApiSeriesDetail extends ApiSeriesItem {
     note_id: string | null
     state: LessonState | null
     watched_percent: number | null
+    finished?: boolean
   }[]
   pending_note_ids: string[]
   duplicates: { canonical_key: string; note_ids: string[] }[]
@@ -766,6 +782,12 @@ export interface NewSourceSeries {
 }
 
 export type SourceSeriesPatch = Partial<Pick<SourceSeries, 'title' | 'folder_id' | 'state'>>
+
+/** `updateCourse`: unset fields are kept; `match` replaces the stored one whole. */
+export interface CourseSeriesPatch {
+  behavior?: Partial<CourseBehavior>
+  match?: CourseMatch
+}
 
 export type NewCatalogItem = Pick<CatalogItem, 'number' | 'section' | 'title' | 'url' | 'canonical_key' | 'duration_ms'>
 
@@ -1534,6 +1556,20 @@ export interface StorageApi {
    * (the default) only `pending` and `guessed` lessons change. Resolves with the count changed.
    */
   applyLessonNumbers(rows: LessonNumberUpdate[], opts?: { onlyUnsettled?: boolean }): Promise<number>
+  /** Courses: marks the series as a course, with its behavior and match. */
+  registerCourse(seriesId: string, behavior: CourseBehavior, match: CourseMatch): Promise<SourceSeries>
+  updateCourse(seriesId: string, patch: CourseSeriesPatch): Promise<SourceSeries>
+  /** Back to a plain series; notes, folder and catalog are kept. */
+  unregisterCourse(seriesId: string): Promise<SourceSeries>
+  /** Series in Courses, last watched first. */
+  listCourses(): Promise<SeriesListItem[]>
+  /** A course page; null for an unknown series or one not in Courses. `playsIn` is main's to fill. */
+  getCourseView(seriesId: string): Promise<CourseView | null>
+  setCatalogOrigin(seriesId: string, origin: CatalogOrigin | null): Promise<SourceSeries>
+  /** The lesson picker: `itemId` null clears the lesson. */
+  setLessonForNote(noteId: string, itemId: string | null, origin: LessonOrigin): Promise<NoteSource>
+  /** A remembered pick: fills the item's key and URL when empty. */
+  rememberLessonKey(itemId: string, key: CanonicalKey, url: string | null): Promise<CatalogItem | null>
   /** Own, non-trashed notes sharing a canonical key, oldest first in each group. */
   listSourceDuplicates(q?: { seriesId?: string }): Promise<{ canonicalKey: CanonicalKey; noteIds: string[] }[]>
   /**

@@ -1648,6 +1648,19 @@ FROM settings WHERE key = 'dictation.failedAudioRetention';
 DELETE FROM settings WHERE key = 'dictation.failedAudioRetention';
 `
 
+/**
+ * Version 19: Courses. A course is a series with `registered_at` set; its behavior, its match
+ * (apps, hosts, learned titles, course keys, the window read) and where its lesson list came
+ * from live on the series. No CHECK, like the rest of Sources; existing rows stay plain series.
+ */
+const COURSES = `
+ALTER TABLE source_series ADD COLUMN registered_at TEXT;
+ALTER TABLE source_series ADD COLUMN on_play TEXT NOT NULL DEFAULT 'record';
+ALTER TABLE source_series ADD COLUMN on_end TEXT NOT NULL DEFAULT 'notes';
+ALTER TABLE source_series ADD COLUMN match_json TEXT;
+ALTER TABLE source_series ADD COLUMN catalog_origin TEXT;
+`
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: BASELINE_VERSION, name: 'baseline', sql: BASELINE },
   { version: 9, name: 'sources-and-imports', sql: SOURCES_AND_IMPORTS },
@@ -1657,7 +1670,8 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 14, name: 'dictation-dictionary', sql: DICTATION_DICTIONARY },
   { version: 15, name: 'user-context-entries', sql: USER_CONTEXT_ENTRIES },
   { version: 16, name: 'mcp-usage', sql: MCP_USAGE },
-  { version: 18, name: 'attachment-capture', sql: ATTACHMENT_CAPTURE }
+  { version: 18, name: 'attachment-capture', sql: ATTACHMENT_CAPTURE },
+  { version: 19, name: 'courses', sql: COURSES }
 ]
 
 /**

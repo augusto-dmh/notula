@@ -15,7 +15,16 @@
 //   position feed, receive watched spans and binding changes. Nothing here stores anything.
 // - Startup sweeps History copies a crash may have left (identify.ts), whatever the settings.
 
-import type { BrowserId, CanonicalKey, DetectorStatus, MediaSession, Playback, SourcePosition } from '@shared/types/sources'
+import type {
+  BrowserId,
+  CanonicalKey,
+  DetectorStatus,
+  LessonRead,
+  LessonReadSite,
+  MediaSession,
+  Playback,
+  SourcePosition
+} from '@shared/types/sources'
 import { SOURCES_LIMITS } from '@shared/types/sources'
 import { parseSourceUrl } from '@shared/lib/source-key'
 import type { MainContext } from '../context'
@@ -221,4 +230,27 @@ export const mediaFeed = {
     bindingListeners.add(l)
     return () => bindingListeners.delete(l)
   }
+}
+
+// ---------- Courses: reader commands ----------
+// Final signatures; the reader commands behind them (`window-title`, `lesson-read`, `seek`) are
+// not written yet, so each answers as if the read found nothing.
+
+/** The window title of a course app or browser window, by handle; null when unreadable. */
+export async function windowTitle(_hwnd: string): Promise<string | null> {
+  return null
+}
+
+/**
+ * The window read: the lesson heading, the course name or breadcrumb, the section and the item
+ * marker, by window handle with no focus and no clicks, within `SOURCES_LIMITS.windowReadBudgetMs`.
+ * `skipped` when over budget, sparse, or no reader fits the site.
+ */
+export async function lessonRead(_hwnd: string, _site: LessonReadSite): Promise<LessonRead | 'skipped'> {
+  return 'skipped'
+}
+
+/** Seeks the session of this app id through the media session. */
+export async function seek(_appUserModelId: string, _ms: number): Promise<'ok' | 'refused' | 'gone'> {
+  return 'gone'
 }

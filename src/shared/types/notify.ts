@@ -2,13 +2,15 @@
 // Notula-drawn notification windows.
 
 import type { IsoTime } from './common'
-import type { SourceCardAction, SourceCardPayload } from './sources'
+import type { CourseCardAction, CourseCardPayload, SourceCardAction, SourceCardPayload } from './sources'
 
 /**
  * `info` is a Notula info card: title, body, at most 3 buttons, close. `source-detected` offers
  * a note on the video or lesson playing (content sources), with its own gates and menu.
+ * `course-recording` says a lesson of a course is recording (Undo, Stop, Open note); it never
+ * takes focus and is gated like `source-detected`.
  */
-export type NotificationVariant = 'scheduled-meeting' | 'detected-meeting' | 'info' | 'source-detected'
+export type NotificationVariant = 'scheduled-meeting' | 'detected-meeting' | 'info' | 'source-detected' | 'course-recording'
 
 export type NotificationAction =
   | 'click'
@@ -23,6 +25,8 @@ export type NotificationAction =
   | `info:${string}`
   /** A `source-detected` card's buttons and menu items. */
   | `source:${SourceCardAction}`
+  /** A `course-recording` card's buttons. */
+  | `course:${CourseCardAction}`
 
 /**
  * The normalized conference provider name (for example `Zoom`, `Google Meet`,
@@ -54,6 +58,8 @@ export interface NotificationPayload {
   infoActions: NotificationInfoAction[]
   /** The `source-detected` variant's content; null for every other variant. */
   source: SourceCardPayload | null
+  /** The `course-recording` variant's content; null for every other variant. */
+  course: CourseCardPayload | null
 }
 
 /** A button on an `info` card. */

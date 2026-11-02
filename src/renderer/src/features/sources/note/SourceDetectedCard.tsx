@@ -40,6 +40,8 @@ function buttonsFor(s: SourceCardPayload): Button[] {
         { action: 'take-notes', label: 'Take notes', primary: true },
         { action: 'skip', label: 'Skip' }
       ]
+    default:
+      return []
   }
 }
 

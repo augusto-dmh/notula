@@ -18,6 +18,10 @@ import {
   SOURCES_LIMITS,
   type CanonicalKey,
   type CatalogItem,
+  type CatalogOrigin,
+  type CourseBehavior,
+  type CourseMatch,
+  type CourseView,
   type LessonOrigin,
   type LessonState,
   type NoteSource,
@@ -44,6 +48,7 @@ import type {
   NewSourceSeries,
   NewSourceSpan,
   NoteSourceUpdate,
+  CourseSeriesPatch,
   SourceMergeMoved,
   SourceMergeRecord,
   SourceNoteMatch,
@@ -52,9 +57,13 @@ import type {
 import { nowIso, parseJson } from './rows'
 import { clearDroppedPendingFlags } from './speaker-names-repo'
 import { checkpointVoice, deleteNoteVoiceRows, secureWrite } from './speaker-voice-repo'
-import { inTransaction, invalid, notFound, type StoreCtx } from './store'
+import { inTransaction, invalid, notFound, StoreError, type StoreCtx } from './store'
 
 type Row = Record<string, unknown>
+
+const ON_PLAY: readonly CourseBehavior['onPlay'][] = ['record', 'ask']
+const ON_END: readonly CourseBehavior['onEnd'][] = ['notes', 'button']
+export const CATALOG_ORIGINS: readonly CatalogOrigin[] = ['playlist', 'import', 'vault', 'manual']
 
 export const SOURCE_KINDS: readonly SourceKind[] = ['video', 'live', 'lesson', 'other']
 export const SOURCE_PROVIDERS: readonly SourceProvider[] = [
@@ -124,7 +133,8 @@ const SOURCE_COLS = [
   'updated_at'
 ] as const
 const SOURCE_SELECT = SOURCE_COLS.map((c) => `ns.${c}`).join(', ')
-const SERIES_COLS = 'id, workspace_id, owner_id, kind, provider, canonical_key, title, folder_id, state, created_at, updated_at'
+const SERIES_COLS =
+  'id, workspace_id, owner_id, kind, provider, canonical_key, title, folder_id, state, registered_at, on_play, on_end, match_json, catalog_origin, created_at, updated_at'
 const CATALOG_COLS = 'id, workspace_id, owner_id, series_id, number, section, title, url, canonical_key, duration_ms, position'
 const SPAN_COLS = 'id, workspace_id, owner_id, note_id, wall_start, wall_end, pos_start_ms, pos_end_ms, rate'
 
@@ -185,6 +195,11 @@ function toSeries(r: Row): SourceSeries {
     title: String(r['title'] ?? ''),
     folder_id: str(r['folder_id']),
     state: pick(r['state'], SERIES_STATES, 'paused'),
+    registered_at: str(r['registered_at']),
+    on_play: pick(r['on_play'], ON_PLAY, 'record'),
+    on_end: pick(r['on_end'], ON_END, 'notes'),
+    match: parseJson<CourseMatch | null>(r['match_json'], null),
+    catalog_origin: CATALOG_ORIGINS.includes(r['catalog_origin'] as CatalogOrigin) ? (r['catalog_origin'] as CatalogOrigin) : null,
     created_at: String(r['created_at']),
     updated_at: String(r['updated_at'])
   }
@@ -743,7 +758,10 @@ function seriesListItems(s: StoreCtx, seriesId: string | null): SeriesListItem[]
     noteCount: num(r['note_count']) ?? 0,
     catalogCount: num(r['catalog_count']) ?? 0,
     pendingCount: num(r['pending_count']) ?? 0,
-    lastWatchedAt: isoOfMs(num(r['last_wall']))
+    lastWatchedAt: isoOfMs(num(r['last_wall'])),
+    lessonsTotal: num(r['catalog_count']) ?? 0,
+    lessonsWithNotes: 0,
+    nextLesson: null
   }))
 }
 
@@ -817,9 +835,16 @@ export function getSeriesDetail(s: StoreCtx, seriesId: string): SeriesDetail | n
   for (const it of catalog) if (it.canonical_key) take(it.id, firstUnused(byKey, it.canonical_key))
   for (const it of catalog) if (it.url) take(it.id, firstUnused(byUrl, it.url))
   for (const it of catalog) if (it.number !== null) take(it.id, firstUnused(byNumber, it.number))
-  const lessonOf = (n: NoteSource): Pick<SeriesLesson, 'noteId' | 'lessonState' | 'watchedPercent' | 'lastWatchedAt'> => {
+  const lessonOf = (n: NoteSource): Pick<SeriesLesson, 'noteId' | 'lessonState' | 'watchedPercent' | 'lastWatchedAt' | 'finished'> => {
     const sp = spans.get(n.note_id) ?? []
-    return { noteId: n.note_id, lessonState: n.lesson_state, watchedPercent: watchedPercent(sp, n.duration_ms, n.live), lastWatchedAt: isoOfMs(lastWall(sp)) }
+    const percent = watchedPercent(sp, n.duration_ms, n.live)
+    return {
+      noteId: n.note_id,
+      lessonState: n.lesson_state,
+      watchedPercent: percent,
+      lastWatchedAt: isoOfMs(lastWall(sp)),
+      finished: percent !== null && percent >= SOURCES_LIMITS.finishedPercent
+    }
   }
   const lessons: SeriesLesson[] = catalog.map((it) => {
     const n = matched.get(it.id)
@@ -832,7 +857,7 @@ export function getSeriesDetail(s: StoreCtx, seriesId: string): SeriesDetail | n
       url: it.url ?? n?.url ?? null,
       canonicalKey: it.canonical_key ?? n?.canonical_key ?? null,
       durationMs: it.duration_ms ?? n?.duration_ms ?? null,
-      ...(n ? lessonOf(n) : { noteId: null, lessonState: null, watchedPercent: null, lastWatchedAt: null })
+      ...(n ? lessonOf(n) : { noteId: null, lessonState: null, watchedPercent: null, lastWatchedAt: null, finished: false })
     }
   })
   const rest = available().sort(
@@ -853,7 +878,63 @@ export function getSeriesDetail(s: StoreCtx, seriesId: string): SeriesDetail | n
       ...lessonOf(n)
     })
   }
-  return { series, lessons, duplicates }
+  return {
+    series,
+    lessons,
+    duplicates,
+    lessonsTotal: catalog.length,
+    lessonsWithNotes: lessons.filter((l) => l.catalogItemId !== null && l.noteId !== null).length,
+    nextLesson: null
+  }
+}
+
+// ---------- courses ----------
+// Signatures for Courses; the bodies are not written yet. Reads answer empty, writes refuse.
+
+function notYet(what: string): StoreError {
+  return new StoreError('internal', `${what}: not implemented`)
+}
+
+/** Marks the series as a course (`registered_at`), with its behavior and match. */
+export function registerCourse(_s: StoreCtx, _seriesId: string, _behavior: CourseBehavior, _match: CourseMatch): SourceSeries {
+  throw notYet('registerCourse')
+}
+
+/** Behavior and match only; `registered_at` is kept. */
+export function updateCourse(_s: StoreCtx, _seriesId: string, _patch: CourseSeriesPatch): SourceSeries {
+  throw notYet('updateCourse')
+}
+
+/** Back to a plain series: `registered_at` and the match cleared; notes, folder and catalog kept. */
+export function unregisterCourse(_s: StoreCtx, _seriesId: string): SourceSeries {
+  throw notYet('unregisterCourse')
+}
+
+/** Series in Courses, last watched first. */
+export function listCourses(_s: StoreCtx): SeriesListItem[] {
+  return []
+}
+
+/** A course page; null for an unknown series or one not in Courses. */
+export function getCourseView(_s: StoreCtx, _seriesId: string): CourseView | null {
+  return null
+}
+
+export function setCatalogOrigin(_s: StoreCtx, _seriesId: string, _origin: CatalogOrigin | null): SourceSeries {
+  throw notYet('setCatalogOrigin')
+}
+
+/**
+ * The picker: the note's lesson becomes the catalog item (`numbered`, with `origin`), or none
+ * (`itemId` null: the lesson is cleared). A manual number is never overwritten by another origin.
+ */
+export function setLessonForNote(_s: StoreCtx, _noteId: string, _itemId: string | null, _origin: LessonOrigin): NoteSource {
+  throw notYet('setLessonForNote')
+}
+
+/** A remembered pick: the item's key and URL are filled when empty. Null for an unknown item. */
+export function rememberLessonKey(_s: StoreCtx, _itemId: string, _key: CanonicalKey, _url: string | null): CatalogItem | null {
+  throw notYet('rememberLessonKey')
 }
 
 // ---------- catalog ----------

@@ -29,7 +29,7 @@ import type {
 import type { SecretId, SettingKey, Settings } from '@shared/types/settings'
 import type { CustomisableShortcutId, HookShortcutId } from '@shared/types/shortcuts'
 import type { HookEntry } from '@shared/types/dictation-bar'
-import type { SourceCardPayload } from '@shared/types/sources'
+import type { CourseCardPayload, SourceCardPayload } from '@shared/types/sources'
 import type { TranscriptChunk } from '@shared/types/transcript'
 import type { WindowMode, WindowModeReason } from '@shared/types/window-modes'
 import type { MainBus } from './bus'
@@ -213,6 +213,8 @@ export interface NotificationRequest {
   infoActions?: NotificationInfoAction[]
   /** Only with `variant: 'source-detected'`. Its clicks arrive as `source:<action>`. */
   source?: SourceCardPayload
+  /** Only with `variant: 'course-recording'`. Its clicks arrive as `course:<action>`. */
+  course?: CourseCardPayload
 }
 
 /** `registerNotify`. */

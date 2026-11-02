@@ -12,6 +12,7 @@ import zoomIcon from '../../../../../resources/join-zoom@2x.png'
 import { useSecondaryWindow } from '../bubble/secondary'
 import { LastTimeRecap } from '../recurring-recap'
 import { SourceDetectedCard } from '../sources'
+import { CourseRecordingCard } from '../sources/courses'
 import './notify.css'
 
 const SWIPE_DISMISS_PX = 100
@@ -205,6 +206,8 @@ export function NotificationCard(): JSX.Element | null {
             draws its own buttons and menu. */}
         {p.variant === 'source-detected' ? (
           <SourceDetectedCard payload={p} act={act} />
+        ) : p.variant === 'course-recording' ? (
+          <CourseRecordingCard payload={p} act={act} />
         ) : p.variant === 'info' ? (
           <div className="nt-note__actions">
             {p.infoActions.map((a) => (

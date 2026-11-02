@@ -27,7 +27,7 @@ import type { RecipeView } from './recipes'
 import type { AudioRetention } from './recordings'
 import type { RetentionHours } from './retention'
 import type { ImportFolderMode } from './imports-markdown'
-import type { SourceMute, SourcesOfferMode, SourcesYtDlpMode } from './sources'
+import type { SourceMute, SourcesNoCaptionsMode, SourcesOfferMode, SourcesYtDlpMode } from './sources'
 import type { TranscriptionRule } from './transcription-rules'
 import type { AsrProviderId, LocalAsrChoice, MeetSelectors } from './transcript'
 
@@ -379,6 +379,10 @@ export interface Settings {
   'sources.grantAsked': boolean
   /** Extra course hosts for the History read; known providers' hosts are built in. */
   'sources.courseHosts': string[]
+  /** Main-only (Add course, Course settings): the hosts whose History rows a course may read. */
+  'sources.historyHosts': string[]
+  /** A video outside Courses with no captions: ask in the note, always transcribe, or never. */
+  'sources.noCaptions': SourcesNoCaptionsMode
   'sources.ytDlp': SourcesYtDlpMode
   /** Acts only with lookups granted. */
   'sources.videoCaptions': boolean
@@ -628,6 +632,8 @@ export const DEFAULT_SETTINGS: Settings = {
   'sources.onlineLookups': false,
   'sources.grantAsked': false,
   'sources.courseHosts': [],
+  'sources.historyHosts': [],
+  'sources.noCaptions': 'ask',
   'sources.ytDlp': 'managed',
   'sources.videoCaptions': true,
   'sources.stampPositions': true,
@@ -703,6 +709,7 @@ export const MAIN_ONLY_SETTING_KEYS = [
   'sources.readHistory',
   'sources.onlineLookups',
   'sources.grantAsked',
+  'sources.historyHosts',
   'sources.videosFolder',
   'sources.dismissedHints',
   'sources.extension.enabled',

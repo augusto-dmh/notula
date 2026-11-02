@@ -82,6 +82,8 @@ export type CreationOrigin =
   | 'video_detected'
   /** Link source by hand, Recently played, or a mark with no note yet. */
   | 'source_linked'
+  /** A lesson of a course in Courses, created by recognition with no click. */
+  | 'course_auto'
   /** The Markdown importer. Its notes are written in one storage call, not through `notes:create`. */
   | 'markdown_import'
 

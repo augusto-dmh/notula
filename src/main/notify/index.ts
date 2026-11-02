@@ -12,7 +12,7 @@ import { app, ipcMain, screen, type BrowserWindow, type WebContents } from 'elec
 import type { InvokeChannel, InvokeRes, PushChannel, SendChannel, SendPayload } from '@shared/ipc'
 import type { LastTimeRecap, NotificationAction, NotificationPayload, NotificationVariant } from '@shared/types/notify'
 import { NOTIFICATION_GAP, NOTIFICATION_WIDTH, RECAP_LIMITS } from '@shared/types/notify'
-import { SOURCE_CARD_ACTIONS } from '@shared/types/sources'
+import { COURSE_CARD_ACTIONS, SOURCE_CARD_ACTIONS } from '@shared/types/sources'
 import type { MainContext, NotificationRequest, NotifyApi } from '../context'
 import { log } from '../log'
 import { keepTransparent, reapplyTransparent, watchMainWindow } from '../bubble/main-window'
@@ -85,7 +85,8 @@ function toPayload(id: string, req: NotificationRequest): NotificationPayload {
     // The recap arrives from a decorator; info cards carry at most 3 buttons.
     lastTime: null,
     infoActions: req.variant === 'info' ? (req.infoActions ?? []).slice(0, 3) : [],
-    source: req.variant === 'source-detected' ? (req.source ?? null) : null
+    source: req.variant === 'source-detected' ? (req.source ?? null) : null,
+    course: req.variant === 'course-recording' ? (req.course ?? null) : null
   }
 }
 
@@ -95,6 +96,9 @@ function isCardAction(e: { payload: NotificationPayload }, action: unknown): act
   if (action.startsWith('info:')) return e.payload.infoActions.some((a) => `info:${a.id}` === action)
   if (action.startsWith('source:')) {
     return e.payload.variant === 'source-detected' && (SOURCE_CARD_ACTIONS as readonly string[]).includes(action.slice('source:'.length))
+  }
+  if (action.startsWith('course:')) {
+    return e.payload.variant === 'course-recording' && (COURSE_CARD_ACTIONS as readonly string[]).includes(action.slice('course:'.length))
   }
   return (ACTIONS as readonly string[]).includes(action)
 }
@@ -226,7 +230,7 @@ export function registerNotify(ctx: MainContext): NotifyApi {
     if (req.calendarEventId && ctx.calendar.viewingEventId() === req.calendarEventId) return 'viewing-event'
     const s = await ctx.settings.getAll()
     // Source cards have their own gates (sources/offer.ts); the calendar-card mute doesn't apply.
-    if (req.variant === 'source-detected') return null
+    if (req.variant === 'source-detected' || req.variant === 'course-recording') return null
     if (req.variant !== 'detected-meeting' && s['notifications.scheduledBlocked']) return 'scheduled-blocked'
     if (req.variant === 'detected-meeting' && s['notifications.autoDetectedBlocked']) return 'auto-detected-blocked'
     return null

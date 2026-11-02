@@ -21,6 +21,7 @@ import { startNewNote } from '../features/new-note'
 import { WhatsNewCard } from '../features/nux'
 import { SidebarPeopleButtons } from '../features/people'
 import { SidebarSearchLink } from '../features/search'
+import { CoursesSection } from '../features/sources/courses'
 import { usePrefs } from '../features/settings/prefs-store'
 import { useSettingsSections } from '../features/settings/sections'
 import { SidebarTasksLink } from '../features/tasks'
@@ -121,6 +122,7 @@ function NotesList({ path }: { path: string }): JSX.Element {
         <Item label="Templates" icon={<IconLayout size={16} />} onPick={() => openTemplateGallery({ mode: 'manage' })} />
         <SidebarSearchLink />
       </div>
+      {prefs?.['sources.enabled'] ? <CoursesSection /> : null}
       <SidebarFolders />
       {/* The Customer calls view, null unless `customerCalls.enabled`. */}
       <SidebarCustomerCallsLink />

@@ -9,7 +9,7 @@ import type { MicApp } from '@shared/types/meetings'
 import type { OffRecordPrompt } from '@shared/types/off-record'
 import type { ExtCaptions, ExtensionSnapshot } from '@shared/types/extension-protocol'
 import type { SettingKey, Settings } from '@shared/types/settings'
-import type { CanonicalKey, MediaSession, Playback, PlaybackProviderId, SourceMark } from '@shared/types/sources'
+import type { CanonicalKey, CourseConfidence, LessonState, MediaSession, Playback, PlaybackProviderId, SourceMark } from '@shared/types/sources'
 import type { StorageStatus } from '@shared/types/storage'
 import type { AsrProviderId, TranscriptChanged } from '@shared/types/transcript'
 
@@ -88,6 +88,21 @@ export interface BusEvents {
   'sources:noted': { noteId: string; canonicalKey: CanonicalKey; playbackId: string | null; created: boolean }
   /** sources → the extension provider (desktop mode), capture (end of watching). Null = no source note bound. */
   'sources:feed': { noteId: string; canonicalKey: CanonicalKey; provider: PlaybackProviderId; tabKey: string | null } | null
+  /**
+   * sources (recognition and automatic start) → the course card, Undo. A lesson of a course
+   * started recording with no click; `created` false = a continued note.
+   */
+  'sources:auto-started': {
+    noteId: string
+    seriesId: string
+    playbackId: string
+    sessionId: string | null
+    created: boolean
+    confidence: CourseConfidence
+    lessonState: LessonState
+  }
+  /** sources (end of watching, the lesson finished) → lesson notes, the end strip. Once per finish. */
+  'sources:lesson-finished': { noteId: string; seriesId: string | null; watchedPercent: number | null; watchedMs: number }
 }
 
 export type BusEventName = keyof BusEvents

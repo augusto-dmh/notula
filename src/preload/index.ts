@@ -1481,6 +1481,26 @@ const api: NotulaApi = {
       return () => {
         ipcRenderer.removeListener('sources:mark' satisfies PushChannel, listener)
       }
+    },
+    addCourse: (req) => ipcRenderer.invoke('sources:add-course' satisfies InvokeChannel, req),
+    updateCourse: (req) => ipcRenderer.invoke('sources:update-course' satisfies InvokeChannel, req),
+    removeCourse: (req) => ipcRenderer.invoke('sources:remove-course' satisfies InvokeChannel, req),
+    courseCandidates: (req) => ipcRenderer.invoke('sources:course-candidates' satisfies InvokeChannel, req),
+    listCourses: () => ipcRenderer.invoke('sources:list-courses' satisfies InvokeChannel),
+    getCourse: (req) => ipcRenderer.invoke('sources:get-course' satisfies InvokeChannel, req),
+    setLesson: (req) => ipcRenderer.invoke('sources:set-lesson' satisfies InvokeChannel, req),
+    undoAuto: (req) => ipcRenderer.invoke('sources:undo-auto' satisfies InvokeChannel, req),
+    linkCapturingNote: (req) => ipcRenderer.invoke('sources:link-capturing-note' satisfies InvokeChannel, req),
+    seek: (req) => ipcRenderer.invoke('sources:seek' satisfies InvokeChannel, req),
+    exportSeries: (req) => ipcRenderer.invoke('sources:export-series' satisfies InvokeChannel, req),
+    refreshCatalog: (req) => ipcRenderer.invoke('sources:refresh-catalog' satisfies InvokeChannel, req),
+    openLesson: (req) => ipcRenderer.invoke('sources:open-lesson' satisfies InvokeChannel, req),
+    onCoursesChanged: (cb) => {
+      const listener = (_e: IpcRendererEvent, p: PushPayload<'sources:courses-changed'>): void => cb(p)
+      ipcRenderer.on('sources:courses-changed' satisfies PushChannel, listener)
+      return () => {
+        ipcRenderer.removeListener('sources:courses-changed' satisfies PushChannel, listener)
+      }
     }
   },
   extBridge: {

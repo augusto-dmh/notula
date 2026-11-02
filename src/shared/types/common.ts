@@ -30,6 +30,8 @@ export type StopReason =
   | 'recording_rule'
   /** A source note's video ended or stayed paused (content sources, end of watching). */
   | 'source_ended'
+  /** Undo on an automatic course note: the new session is removed (Courses). */
+  | 'auto_undo'
   /** The user chose to erase and pause after an off-the-record request. */
   | 'off_record'
 

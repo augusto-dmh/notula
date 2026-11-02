@@ -425,6 +425,8 @@ const VALIDATORS: { [K in SettingKey]: Validator } = {
   'sources.onlineLookups': bool,
   'sources.grantAsked': bool,
   'sources.courseHosts': lowerList(SOURCES_LIMITS.courseHosts, DOMAIN),
+  'sources.historyHosts': lowerList(SOURCES_LIMITS.historyHosts, DOMAIN),
+  'sources.noCaptions': oneOf('ask', 'always', 'never'),
   'sources.ytDlp': oneOf('managed', 'external', 'off'),
   'sources.videoCaptions': bool,
   'sources.stampPositions': bool,

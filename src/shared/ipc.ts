@@ -233,9 +233,15 @@ import type { RetentionHours, RetentionPreview, RetentionRun, RetentionState } f
 import type { ScratchpadDay, ScratchpadDaySummary } from './types/scratchpad'
 import type { SearchResponse } from './types/search'
 import type {
+  AddCourseRequest,
   BackfillPreview,
   CatalogImportResult,
   CatalogInput,
+  CourseCandidates,
+  CourseListItem,
+  CoursePatch,
+  CourseView,
+  ExportSeriesResult,
   Grant,
   MergeResult,
   NoteSource,
@@ -245,6 +251,9 @@ import type {
   SeriesDetail,
   SeriesListItem,
   SeriesState,
+  SeekRequest,
+  SeekResult,
+  SetLessonRequest,
   SourceDraft,
   SourceHint,
   SourceMark,
@@ -962,6 +971,32 @@ export interface InvokeChannels {
   /** Resolves at acceptance; progress arrives on `sources:tools-progress`. Refused in local-only mode. */
   'sources:tools-download': [{ confirmed: true }, ToolsStatus]
   'sources:dismiss-hint': [{ hint: SourceHint; key: string }, void]
+  // Courses (a course is a series in Courses)
+  /** Marks the series as a course, grants its host, fills the lesson list; records a playing lesson at once. */
+  'sources:add-course': [AddCourseRequest, CourseListItem]
+  /** Course settings; behavior changes apply from now on. */
+  'sources:update-course': [{ seriesId: string; patch: CoursePatch }, CourseListItem]
+  /** Stops automation and recognition; notes, folder and lesson list stay. */
+  'sources:remove-course': [{ seriesId: string }, void]
+  /** The Add course sheet: for a Recently played row, a link, or neither (unlinked courses only). */
+  'sources:course-candidates': [{ playbackId?: string | null; url?: string | null }, CourseCandidates]
+  /** Courses in the sidebar, last watched first. */
+  'sources:list-courses': [void, CourseListItem[]]
+  'sources:get-course': [{ seriesId: string }, CourseView | null]
+  /** The lesson picker: a lesson, Not a lesson (`itemId` null), or Another course (`seriesId`). */
+  'sources:set-lesson': [SetLessonRequest, NoteSource]
+  /** Undo on an automatic note: a new note is deleted, a continued one loses the new session and span. */
+  'sources:undo-auto': [{ noteId: string }, { deleted: boolean }]
+  /** The `link-capturing` card's Link this note: source, lesson and folder; capture goes video audio only. */
+  'sources:link-capturing-note': [{ noteId: string; playbackId: string }, NoteSource]
+  /** Seeks the playing session of the note's lesson; with none, opens the lesson and seeks when it plays. */
+  'sources:seek': [SeekRequest, SeekResult]
+  /** Export lessons: a new folder `<Course> <date>`, never overwriting. Null when cancelled. */
+  'sources:export-series': [{ seriesId: string }, ExportSeriesResult | null]
+  /** Refresh from playlist (playlist courses). Refused in local-only mode. */
+  'sources:refresh-catalog': [{ seriesId: string }, CatalogImportResult]
+  /** Open lesson and Next: in the course app when the course has one, else the default browser. */
+  'sources:open-lesson': [{ seriesId: string; catalogItemId: string }, { opened: 'app' | 'browser' | 'none' }]
   // The browser extension's bridge
   'ext-bridge:get-status': [void, ExtBridgeStatus]
   /** Writes (on) or removes (off) the host files and the two HKCU keys. */
@@ -1293,6 +1328,8 @@ export interface PushChannels {
   'sources:tools-progress': ToolsStatus
   /** Mark this moment: the main window appends an empty stamped paragraph to that note. */
   'sources:mark': SourceMark
+  /** A course was added, changed or removed, or its counts moved. */
+  'sources:courses-changed': { seriesIds: string[] }
   'ext-bridge:status-changed': ExtBridgeStatus
 
   // ---------- import notes ----------
@@ -2131,6 +2168,20 @@ export interface NotulaApi {
     onCaptionsProgress: PushMember<'sources:captions-progress'>
     onToolsProgress: PushMember<'sources:tools-progress'>
     onMark: PushMember<'sources:mark'>
+    addCourse: InvokeMember<'sources:add-course'>
+    updateCourse: InvokeMember<'sources:update-course'>
+    removeCourse: InvokeMember<'sources:remove-course'>
+    courseCandidates: InvokeMember<'sources:course-candidates'>
+    listCourses: InvokeMember<'sources:list-courses'>
+    getCourse: InvokeMember<'sources:get-course'>
+    setLesson: InvokeMember<'sources:set-lesson'>
+    undoAuto: InvokeMember<'sources:undo-auto'>
+    linkCapturingNote: InvokeMember<'sources:link-capturing-note'>
+    seek: InvokeMember<'sources:seek'>
+    exportSeries: InvokeMember<'sources:export-series'>
+    refreshCatalog: InvokeMember<'sources:refresh-catalog'>
+    openLesson: InvokeMember<'sources:open-lesson'>
+    onCoursesChanged: PushMember<'sources:courses-changed'>
   }
   extBridge: {
     getStatus: InvokeMember<'ext-bridge:get-status'>

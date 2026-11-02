@@ -45,6 +45,7 @@ import { eventStart, formatTime, isAllDay, noteTime } from '../home/grouping'
 import { SummaryFeedbackBanner } from '../summary-feedback'
 import { TemplateChip } from '../templates'
 import { SourceChip } from '../sources'
+import { EndStrip } from '../sources/courses'
 import { usePickMode } from '../speaker-profiles'
 import { SpeakerNameBanner, TranscriptPanel } from '../transcript'
 import { deletePermanently, IconRestore, IconTrash, restoreFromTrash } from '../trash'
@@ -556,6 +557,7 @@ function NoteView({ note, reveal: revealQuery }: { note: Note; reveal: string | 
                   <>
                     <NoteAttendees noteId={note.id} />
                     <SourceChip noteId={note.id} />
+                    <EndStrip noteId={note.id} />
                     <TemplateChip noteId={note.id} hasSummary={panels.length > 0} editor={notesEditor} />
                   </>
                 )}

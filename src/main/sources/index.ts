@@ -49,12 +49,14 @@ import { matchedFields } from '../media/match'
 import type { NoteSourceUpdate } from '../storage/api'
 import { egressBlocked } from '../privacy'
 import { registerBackfill } from './backfill'
+import { registerCourses } from './courses'
 import { registerSourcesExtension } from './extension'
 import { SourceFeed } from './feed'
 import { SourceFiling, seriesKeyOf } from './filing'
 import { identify, searchSources } from './identify'
 import { isGuessKey, SourceOffers } from './offer'
 import { choosePlan, registerTranscriptPlan } from './plan'
+import { registerSeek } from './seek'
 import { registerSeries } from './series'
 import { renderSourceTitle } from './titles'
 import { registerSourceTools, toolsStatus } from './tools'
@@ -141,12 +143,14 @@ function playbackOf(d: SourceDraft, noteId: string): Playback {
 }
 
 export function registerSources(ctx: MainContext): void {
-  // Each part's own channels: tools, transcript plan, series, backfill, extension.
+  // Each part's own channels: tools, transcript plan, series, backfill, extension, courses, seek.
   registerSourceTools(ctx)
   registerTranscriptPlan(ctx)
   registerSeries(ctx)
   registerBackfill(ctx)
   registerSourcesExtension(ctx)
+  registerCourses(ctx)
+  registerSeek(ctx)
 
   const { storage, bus } = ctx
   const supported = process.platform === 'win32'

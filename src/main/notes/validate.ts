@@ -44,6 +44,7 @@ const ORIGINS: readonly CreationOrigin[] = [
   // Content sources and the Markdown importer.
   'video_detected',
   'source_linked',
+  'course_auto',
   'markdown_import'
 ]
 const TAG_CATEGORIES: readonly TagCategory[] = ['meeting_kind', 'is_sensitive']
