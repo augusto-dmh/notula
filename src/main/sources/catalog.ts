@@ -318,3 +318,44 @@ export function lessonFor(
   if (guess !== null) return { number: guess, label: item?.section ?? null, state: 'guessed', fromCatalog: false }
   return { number: null, label: item?.section ?? null, state: 'pending', fromCatalog: false }
 }
+
+// ---------- playlists ----------
+
+/**
+ * `yt-dlp --flat-playlist -J <playlist url>` → a lesson list in playlist order, numbered 1…n, with
+ * each video's URL, key and duration. `total` counts every entry read, so a caller sees a list
+ * over its limit (it fills nothing then). Null for output it can't read.
+ */
+export function parsePlaylistItems(json: string): { id: string; title: string | null; items: ParsedCatalogItem[]; total: number } | null {
+  let o: unknown
+  try {
+    o = JSON.parse(json)
+  } catch {
+    return null
+  }
+  if (!o || typeof o !== 'object') return null
+  const rec = o as Record<string, unknown>
+  const id = typeof rec['id'] === 'string' ? rec['id'] : null
+  if (!id) return null
+  const entries = Array.isArray(rec['entries']) ? (rec['entries'] as unknown[]) : []
+  const items: ParsedCatalogItem[] = []
+  for (const e of entries) {
+    if (!e || typeof e !== 'object') continue
+    const entry = e as Record<string, unknown>
+    const videoId = typeof entry['id'] === 'string' ? entry['id'] : null
+    if (!videoId || !/^[\w-]{11}$/.test(videoId)) continue
+    const url = `https://www.youtube.com/watch?v=${videoId}&list=${id}`
+    const parsed = parseSourceUrl(url)
+    const raw = typeof entry['title'] === 'string' ? entry['title'].replace(/\s+/g, ' ').trim() : ''
+    const seconds = typeof entry['duration'] === 'number' && Number.isFinite(entry['duration']) && entry['duration'] > 0 ? entry['duration'] : null
+    items.push({
+      number: items.length + 1,
+      section: null,
+      title: clip(raw || url, MAX_TITLE),
+      url: parsed?.url ?? url,
+      canonical_key: parsed?.canonicalKey ?? `youtube:${videoId}`,
+      duration_ms: seconds !== null ? Math.round(seconds * 1_000) : null
+    })
+  }
+  return { id, title: typeof rec['title'] === 'string' ? rec['title'] : null, items, total: items.length }
+}

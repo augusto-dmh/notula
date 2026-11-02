@@ -6,6 +6,9 @@
 // lessons 29–32 (lesson 28 had no note), a lesson titled with no number at all, a catalog pasted
 // by hand with sections, and per-section numbering. The course names and titles are invented.
 //
+// It also checks lesson lists from a study-vault course folder (vault-list.ts, on the fixture
+// folder `fixtures/vault-course/`, placeholders only) and from a playlist's yt-dlp output.
+//
 // Run:  node scripts/dev/catalog-parse.mjs              every case; exits 1 on a failure
 //       node scripts/dev/catalog-parse.mjs <file.md>    parses a catalog file and prints counts
 //
@@ -33,6 +36,7 @@ registerHooks({
 const src = (p) => pathToFileURL(resolve(root, p)).href
 const C = await import(src('src/main/sources/catalog.ts'))
 const { renderSourceTitle, matchTitle } = await import(src('src/main/sources/titles.ts'))
+const V = await import(src('src/main/sources/vault-list.ts'))
 
 // ---------- a tiny runner ----------
 
@@ -343,6 +347,97 @@ test('titles: deterministic cleanup', () => {
   eq(t('   '), '', 'blank stays blank')
   eq(t('- YouTube'), '- YouTube', 'never empty: the raw title comes back')
   eq(t('Talk title - Community Hub', null, 'Community Hub'), 'Talk title', 'site label suffix')
+})
+
+// ---------- study-vault course folders ----------
+
+const VAULT = resolve(root, 'scripts/dev/fixtures/vault-course')
+
+test('vault: Meeting Title after the last " - Aula <n> - ", else the last " - "', () => {
+  eq(V.meetingTitle('Meeting Title: [Course] Example - Aula 28 - Event sourcing - the basics\n', 28), 'Event sourcing - the basics', 'after Aula n')
+  eq(V.meetingTitle('**Meeting Title:** Example Fundamentals - Setting up your tools', 2), 'Setting up your tools', 'after the last dash')
+  eq(V.meetingTitle('Meeting Title: First steps', 3), 'First steps', 'no dash: the whole text')
+  eq(V.meetingTitle('Date: 2026-01-01', 1), null, 'no line')
+  eq(V.slugTitle('event-sourcing-basics'), 'Event sourcing basics', 'from the slug')
+})
+
+test('vault: Class link only when it is a lesson URL', () => {
+  eq(V.classUrl('- Class - https://community.example.com/c/fundamentals/sections/1/lessons/101'), 'https://community.example.com/c/fundamentals/sections/1/lessons/101', 'Circle lesson')
+  eq(V.classUrl('Class - https://community.example.com/c/fundamentals'), null, 'Circle course root')
+  eq(V.classUrl('Class - [Open](https://app.hub.la/m/area-1/p/lesson-3)'), 'https://app.hub.la/m/area-1/p/lesson-3', 'Hubla lesson, Markdown link')
+  eq(V.classUrl('Class - https://app.hub.la/m/area-1'), null, 'Hubla member area')
+  eq(V.classUrl('Slides - https://courses.example.org/files/deck/1'), null, 'another kind of link')
+})
+
+const folderList = await V.readVaultCourse(VAULT)
+
+test('vault: the fixture folder, in number order, repeated numbers kept', () => {
+  eq(
+    folderList.items.map((i) => [i.number, i.title, i.url]),
+    [
+      [1, 'Welcome to the course', 'https://community.example.com/c/fundamentals/sections/1/lessons/101'],
+      [2, 'Setting up your tools', null],
+      [3, 'First steps', 'https://app.hub.la/m/area-1/p/lesson-3'],
+      [4, 'No files', null],
+      [28, 'Event sourcing - the basics', null],
+      [28, 'Event sourcing, part 2', null]
+    ],
+    'items'
+  )
+  eq(folderList.items[0].canonical_key, 'circle:community.example.com:101', 'Circle key')
+  eq(folderList.items[2].canonical_key, 'url:https://app.hub.la/m/area-1/p/lesson-3', 'Hubla key')
+  eq(folderList.repeated, [28], 'repeated numbers')
+  eq(folderList.outline, false, 'no outline')
+})
+
+test('vault: an outline wins for order and titles; folders add URLs; the rest follows', () => {
+  const folders = [
+    { name: '1-welcome', transcription: 'Meeting Title: X - Aula 1 - Welcome', hyperlinks: 'Class - https://community.example.com/c/fundamentals/sections/1/lessons/101' },
+    { name: '2-setup', transcription: null, hyperlinks: null },
+    { name: '9-bonus', transcription: 'Meeting Title: Bonus talk', hyperlinks: null }
+  ]
+  const outline = '# Module A\n1. Welcome and overview\n2. Setting up\n# Module B\n3. A lesson with no folder\n'
+  const v = V.vaultList(folders, outline)
+  eq(
+    v.items.map((i) => [i.number, i.section, i.title, i.url]),
+    [
+      [1, 'Module A', 'Welcome and overview', 'https://community.example.com/c/fundamentals/sections/1/lessons/101'],
+      [2, 'Module A', 'Setting up', null],
+      [3, 'Module B', 'A lesson with no folder', null],
+      [9, null, 'Bonus talk', null]
+    ],
+    'items'
+  )
+  eq(v.outline, true, 'outline used')
+})
+
+test('vault: handles: a folder handle, or the importer outline handle', () => {
+  const h = V.vaultFolderHandle(VAULT)
+  eq(V.vaultFolderOf(h, () => null), VAULT, 'folder handle')
+  eq(V.vaultFolderHandle(VAULT), h, 'stable')
+  eq(V.vaultFolderOf('outline', (x) => (x === 'outline' ? resolve(VAULT, 'CURRICULUM.md') : null)), VAULT, 'outline file handle → its folder')
+  eq(V.vaultFolderOf('other', (x) => (x === 'other' ? resolve(VAULT, 'README.md') : null)), null, 'another file is not a course folder')
+})
+
+// ---------- playlists ----------
+
+test('playlist: yt-dlp entries → a numbered lesson list', () => {
+  const json = JSON.stringify({
+    id: 'PLexample01',
+    title: 'Example playlist',
+    entries: [{ id: 'abcdefghijk', title: 'Part one', duration: 615 }, { id: 'bad id' }, { id: 'bcdefghijkl', title: '  Part   two ', duration: null }]
+  })
+  const p = C.parsePlaylistItems(json)
+  eq([p.id, p.title, p.total], ['PLexample01', 'Example playlist', 2], 'head')
+  eq(
+    p.items.map((i) => [i.number, i.title, i.canonical_key, i.duration_ms]),
+    [
+      [1, 'Part one', 'youtube:abcdefghijk', 615000],
+      [2, 'Part two', 'youtube:bcdefghijkl', null]
+    ],
+    'items'
+  )
+  eq(C.parsePlaylistItems('not json'), null, 'unreadable')
 })
 
 console.log(`\n${checks} checks, ${failures} failed`)

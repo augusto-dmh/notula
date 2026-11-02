@@ -11,6 +11,10 @@
 //   and `guessed` ones, and ones an earlier catalog numbered. Manual numbers are never touched, and
 //   neither are playlist or extension numbers. `dryRun` counts without writing.
 // - Delete catalog: the items go; lesson numbers stay as they are.
+// - Courses: a lesson list also comes from a study-vault folder (vault-list.ts) or a YouTube
+//   playlist; each records its `catalog_origin`. A playlist fills only an empty list (or refills one
+//   it filled, on Refresh), kind `playlist` only, up to 300 items; the lookup's own playlist fetch
+//   fills an empty list of a playlist in Courses. A list the user imported is never replaced.
 // - Update series: title, folder (never renamed, moved or deleted) and state.
 // - Merge and its undo: merge.ts.
 // While Sources is off (or off Windows) the reads answer empty and the writes reject.
@@ -21,13 +25,14 @@ import { readFile, stat } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { notulaError } from '@shared/errors'
 import type { InvokeChannel, InvokeRes } from '@shared/ipc'
-import type { CatalogImportResult, CatalogInput, LessonOrigin, LessonState, SeriesState, SourceDraft } from '@shared/types/sources'
+import type { CatalogImportResult, CatalogInput, CatalogOrigin, LessonOrigin, LessonState, SeriesState, SourceDraft, SourceSeries } from '@shared/types/sources'
 import { SOURCES_LIMITS } from '@shared/types/sources'
 import type { MainContext } from '../context'
 import { log } from '../log'
 import { id, object } from '../notes/validate'
 import type { SourceSeriesPatch } from '../storage/api'
-import { draftLesson, parseCatalog, renumberRows } from './catalog'
+import { draftLesson, parseCatalog, parsePlaylistItems, renumberRows, type ParsedCatalogItem } from './catalog'
+import { onPlaylistFetched } from './identify'
 import { mergeNotes, undoMerge } from './merge'
 import { seriesIdRequest } from './validate'
 
@@ -64,6 +69,11 @@ export function catalogFileHandle(path: string): string {
   const handle = randomUUID()
   catalogFiles.set(handle, path)
   return handle
+}
+
+/** The path of a handle `catalogFileHandle` gave, or null. */
+export function catalogFilePath(handle: string): string | null {
+  return catalogFiles.get(handle) ?? null
 }
 
 async function catalogText(input: CatalogInput): Promise<string> {
@@ -141,6 +151,28 @@ function mergeIdRequest(v: unknown): { mergeId: string } {
 
 // ---------- import ----------
 
+/**
+ * Replaces a series' catalog with `items`, then renumbers its lessons (`pending`, `guessed`, and
+ * numbers an earlier catalog gave; manual numbers never). With `origin`, records where the list
+ * came from. `dryRun` counts without writing.
+ */
+export async function fillCatalog(
+  ctx: MainContext,
+  seriesId: string,
+  items: ParsedCatalogItem[],
+  opts: { dryRun?: boolean; origin?: CatalogOrigin } = {}
+): Promise<{ numbered: number }> {
+  const sources = await ctx.storage.listNoteSources({ seriesId })
+  const rows = renumberRows(sources, items)
+  if (opts.dryRun) return { numbered: rows.unsettled.length + rows.fromCatalog.length }
+  await ctx.storage.replaceCatalog(seriesId, items)
+  let numbered = 0
+  if (rows.unsettled.length) numbered += await ctx.storage.applyLessonNumbers(rows.unsettled)
+  if (rows.fromCatalog.length) numbered += await ctx.storage.applyLessonNumbers(rows.fromCatalog, { onlyUnsettled: false })
+  if (opts.origin) await ctx.storage.setCatalogOrigin(seriesId, opts.origin)
+  return { numbered }
+}
+
 async function importCatalog(ctx: MainContext, raw: unknown): Promise<CatalogImportResult> {
   const { seriesId, input, dryRun } = catalogRequest(raw)
   const series = await ctx.storage.getSeries(seriesId)
@@ -148,15 +180,8 @@ async function importCatalog(ctx: MainContext, raw: unknown): Promise<CatalogImp
   const parsed = parseCatalog(await catalogText(input))
   if (parsed.overLimit) throw bad(`A catalog can have up to ${SOURCES_LIMITS.catalogItems.toLocaleString('en-US')} lessons. Split the list and import the part you need.`)
   if (parsed.items.length === 0) throw bad('No lessons found. Put one lesson per line, with an optional number, duration and link.')
-  const sources = await ctx.storage.listNoteSources({ seriesId })
-  const rows = renumberRows(sources, parsed.items)
-  let numbered = rows.unsettled.length + rows.fromCatalog.length
-  if (!dryRun) {
-    await ctx.storage.replaceCatalog(seriesId, parsed.items)
-    numbered = 0
-    if (rows.unsettled.length) numbered += await ctx.storage.applyLessonNumbers(rows.unsettled)
-    if (rows.fromCatalog.length) numbered += await ctx.storage.applyLessonNumbers(rows.fromCatalog, { onlyUnsettled: false })
-  }
+  // A list the user imports is theirs: a playlist never replaces it.
+  const { numbered } = await fillCatalog(ctx, seriesId, parsed.items, { dryRun, origin: 'import' })
   log('info', 'sources:catalog-imported', {
     dryRun,
     items: parsed.items.length,
@@ -168,6 +193,42 @@ async function importCatalog(ctx: MainContext, raw: unknown): Promise<CatalogImp
   return { items: parsed.items.length, sections: parsed.sections, numbered, skippedLines: parsed.skippedLines, dryRun }
 }
 
+// ---------- playlists ----------
+
+export type PlaylistFill = { filled: true; items: number; numbered: number } | { filled: false; reason: 'not-playlist' | 'not-empty' | 'too-long' | 'unreadable' | 'empty' }
+
+/**
+ * Fills a playlist course's lesson list from `yt-dlp --flat-playlist -J` output: only kind
+ * `playlist`, only up to 300 items, and only an empty list, or (`refresh`) one a playlist filled.
+ */
+export async function fillFromPlaylist(ctx: MainContext, series: SourceSeries, json: string, opts: { refresh?: boolean } = {}): Promise<PlaylistFill> {
+  if (series.kind !== 'playlist' || series.provider !== 'youtube') return { filled: false, reason: 'not-playlist' }
+  const parsed = parsePlaylistItems(json)
+  if (!parsed) return { filled: false, reason: 'unreadable' }
+  if (parsed.total > SOURCES_LIMITS.playlistAutoFill) return { filled: false, reason: 'too-long' }
+  if (parsed.items.length === 0) return { filled: false, reason: 'empty' }
+  const current = await ctx.storage.listCatalog(series.id)
+  const ours = opts.refresh && series.catalog_origin === 'playlist'
+  if (current.length > 0 && !ours) return { filled: false, reason: 'not-empty' }
+  const { numbered } = await fillCatalog(ctx, series.id, parsed.items, { origin: 'playlist' })
+  log('info', 'sources:playlist-filled', { items: parsed.items.length, numbered, refresh: !!opts.refresh })
+  return { filled: true, items: parsed.items.length, numbered }
+}
+
+/** The lookup fetched a playlist: an empty lesson list of that playlist, in Courses, fills from it. */
+function autoFillPlaylists(ctx: MainContext): void {
+  onPlaylistFetched((listId, json) => {
+    void (async () => {
+      const courses = await ctx.storage.listCourses()
+      const key = `youtube:playlist:${listId}`
+      const row = courses.find((c) => c.kind === 'playlist' && c.provider === 'youtube' && c.canonical_key === key)
+      if (!row || row.catalogCount > 0) return
+      const series = await ctx.storage.getSeries(row.id)
+      if (series) await fillFromPlaylist(ctx, series, json)
+    })().catch((err: unknown) => log('warn', 'sources:playlist-fill-failed', { err }))
+  })
+}
+
 // ---------- IPC ----------
 
 /**
@@ -176,6 +237,7 @@ async function importCatalog(ctx: MainContext, raw: unknown): Promise<CatalogImp
  */
 export function registerSeries(ctx: MainContext): void {
   const active = async (): Promise<boolean> => process.platform === 'win32' && (await ctx.settings.get('sources.enabled'))
+  autoFillPlaylists(ctx)
   const requireActive = async (): Promise<void> => {
     if (!(await active())) throw bad('Sources is off')
   }

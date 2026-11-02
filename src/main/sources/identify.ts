@@ -2,16 +2,21 @@
 // Identification of a playback.
 //
 // Stage `local` runs before the offer and uses local signals only: the tab strip, the address
-// bar, a filtered temp copy of the browser History (when `sources.readHistory` is on), then the
+// bar, a filtered temp copy of the browser History (for the granted hosts only), then the
 // title-and-site fallback. Stage `lookup` runs after Take notes, Continue, the Link dialog or
 // backfill, with `sources.onlineLookups` on and egress allowed: yt-dlp search, oEmbed, enrichment.
 // Logs carry step names and counts only.
 //
 // - History: only for a window known to be normal (never InPrivate/Incognito or unknown), and
 //   only the playing window's profile (its title's profile name mapped through the browser's
-//   `Local State`, or the only profile listed; otherwise skipped, never `Default` by guess).
-//   Copied into `<userData>/tmp/source-history/`, queried for YouTube and course-host rows of
-//   the last 24 h (`url`, `title`, `visit_time` as text), then deleted. The folder is swept at
+//   `Local State`, or the only profile listed; otherwise skipped, never `Default` by guess). A
+//   course app reads the profile it maps to, in its own browser: a Chrome app reads Chrome's
+//   History, and Edge rows imported from another browser are never used.
+//   Hosts, per grant: YouTube while `sources.readHistory` is on, and course hosts only when they
+//   are in `sources.historyHosts` (granted at Add course); the built-in course hosts are no
+//   longer read without a grant. The log counts the hosts left out, never names them.
+//   Copied into `<userData>/tmp/source-history/`, queried for rows of those hosts in the last
+//   24 h (`url`, `title`, `visit_time` as text), then deleted. The folder is swept at
 //   startup. Retried every 1 s for 15 s while no row matches (rows land 0–3 s late), on the same
 //   copy unless the source's size or mtime changed. A locked or unreadable copy skips History
 //   for 60 s.
@@ -24,7 +29,7 @@ import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { copyFile, mkdir, readFile, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
-import { cleanTitle, parseSourceUrl, titleKey, type ParsedSourceUrl } from '@shared/lib/source-key'
+import { cleanTitle, hostIs, parseSourceUrl, titleKey, type ParsedSourceUrl } from '@shared/lib/source-key'
 import type { BrowserId, IdentifyStep, Playback, SourceDraft, SourceEnrichment } from '@shared/types/sources'
 import { SOURCES_LIMITS } from '@shared/types/sources'
 import type { MainContext } from '../context'
@@ -35,13 +40,17 @@ import { locateTab } from '../media/locate'
 import {
   draftFromUrl,
   guessDraft,
+  historyHostOk,
   historyHosts,
+  historyLikePatterns,
   matchHistory,
   parseOEmbed,
   parsePlaylist,
   parseSearch,
   parseVideoMeta,
   profileDirFor,
+  chromiumToMs,
+  msToChromium,
   queryHistoryRows,
   sameName,
   verifySearchHit,
@@ -52,6 +61,7 @@ import {
 } from '../media/match'
 import { egressFetch } from '../net/egress'
 import { egressBlocked } from '../privacy'
+import { pickLessonVisit } from './recognize'
 import { runYtDlp } from './tools'
 
 export interface IdentifyOptions {
@@ -197,13 +207,13 @@ interface HistoryCopy {
 }
 
 /**
- * One temp copy of a profile's History for one playback's History step. `rows()` copies again
- * only when the source's size or mtime changed since the last copy, else re-queries the copy it
- * has. `dispose()` deletes it. The copy is opened read-write on purpose: a copied hot journal is
- * then rolled back into the copy (never the live file), which gives a consistent snapshot; a
- * read-only open would refuse such a copy.
+ * One temp copy of a profile's History for one History read. `rows()` copies again only when the
+ * source's size or mtime changed since the last copy, else re-queries the copy it has.
+ * `dispose()` deletes it. The copy is opened read-write on purpose: a copied hot journal is then
+ * rolled back into the copy (never the live file), which gives a consistent snapshot; a read-only
+ * open would refuse such a copy.
  */
-function historyCopy(ctx: MainContext, source: string, hosts: readonly string[]): HistoryCopy {
+function historyCopy(ctx: MainContext, source: string, query: (path: string) => Promise<HistoryRow[]>): HistoryCopy {
   const dir = historyTempDir(ctx)
   let base: string | null = null
   let signature: string | null = null
@@ -223,7 +233,7 @@ function historyCopy(ctx: MainContext, source: string, hosts: readonly string[])
           signature = now
           copies++
         }
-        return await queryHistory(base, hosts)
+        return await query(base)
       } catch (err) {
         // Locked, being written, or not a database: skip History for a while; never read the live file.
         historySkipUntil = Date.now() + HISTORY_LOCKED_SKIP_MS
@@ -239,15 +249,91 @@ function historyCopy(ctx: MainContext, source: string, hosts: readonly string[])
   }
 }
 
-/** The query on a copy (`queryHistoryRows`), the last 24 h. */
-async function queryHistory(path: string, hosts: readonly string[]): Promise<HistoryRow[]> {
+/** Chromium's `VisitSource`: 3 and up are rows imported from another browser. */
+const IMPORTED_SOURCE_MIN = 3
+
+function toRows(rows: readonly Record<string, unknown>[]): HistoryRow[] {
+  const out: HistoryRow[] = []
+  for (const r of rows) {
+    const visitMs = typeof r['vt'] === 'string' ? chromiumToMs(r['vt']) : null
+    if (typeof r['url'] === 'string' && visitMs !== null) out.push({ url: r['url'], title: typeof r['title'] === 'string' ? r['title'] : '', visitMs })
+  }
+  return out
+}
+
+/**
+ * The query on a copy: rows of `hosts` only (`queryHistoryRows`'s filter), visited after
+ * `sinceMs` (default the last 24 h), newest first. Edge leaves out the rows it imported from
+ * another browser: a Chrome app's lessons are read from Chrome's own History.
+ */
+async function queryHistory(path: string, hosts: readonly string[], opts: { sinceMs?: number; browser?: BrowserId } = {}): Promise<HistoryRow[]> {
   const { DatabaseSync } = await import('node:sqlite')
   const db = new DatabaseSync(path, { timeout: 1_000 })
+  const sinceMs = opts.sinceMs ?? Date.now() - HISTORY_WINDOW_MS
   try {
-    return queryHistoryRows(db, hosts, Date.now() - HISTORY_WINDOW_MS, HISTORY_ROW_LIMIT)
+    const sourced = opts.browser === 'edge' && !!db.prepare(`SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'visit_source'`).get()
+    if (!sourced) return queryHistoryRows(db, hosts, sinceMs, HISTORY_ROW_LIMIT)
+    db.function('host_ok', { deterministic: true }, (u) => (typeof u === 'string' && historyHostOk(u, hosts) ? 1 : 0))
+    const patterns = historyLikePatterns(hosts)
+    const rows = db
+      .prepare(
+        `SELECT u.url AS url, u.title AS title, CAST(v.visit_time AS TEXT) AS vt
+         FROM visits v JOIN urls u ON u.id = v.url
+         WHERE v.visit_time > ? AND (${patterns.map(() => 'u.url LIKE ?').join(' OR ')}) AND host_ok(u.url) = 1
+           AND NOT EXISTS (SELECT 1 FROM visit_source s WHERE s.id = v.id AND s.source >= ${IMPORTED_SOURCE_MIN})
+         ORDER BY v.visit_time DESC LIMIT ${HISTORY_ROW_LIMIT}`
+      )
+      .all(msToChromium(sinceMs), ...patterns)
+    return toRows(rows)
   } finally {
     db.close()
   }
+}
+
+const YOUTUBE_HOSTS: readonly string[] = ['youtube.com', 'youtu.be']
+const VALID_HOST = /^[a-z0-9.-]{1,253}$/
+
+/**
+ * The hosts History may be read for: YouTube while `sources.readHistory` is on, and the course
+ * hosts granted at Add course (`sources.historyHosts`). `excluded` counts the known course hosts
+ * (built-in and the user's) left out for want of a grant, for the log.
+ */
+export async function historyGrant(ctx: MainContext): Promise<{ hosts: string[]; courseHosts: string[]; excluded: number }> {
+  const [readHistory, granted, userHosts] = await Promise.all([
+    ctx.settings.get('sources.readHistory'),
+    ctx.settings.get('sources.historyHosts'),
+    ctx.settings.get('sources.courseHosts')
+  ])
+  const courseHosts = [...new Set(granted.map((h) => h.toLowerCase().replace(/^www\./, '')).filter((h) => VALID_HOST.test(h)))]
+  const hosts = [...(readHistory ? YOUTUBE_HOSTS : []), ...courseHosts]
+  const known = historyHosts(userHosts).filter((h) => !YOUTUBE_HOSTS.includes(h))
+  const excluded = known.filter((h) => !courseHosts.some((g) => hostIs(h, g) || hostIs(g, h))).length
+  return { hosts, courseHosts, excluded }
+}
+
+/** A profile folder as a course app's mapping gives it (`--profile-directory`). */
+const PROFILE_DIR = /^(Default|Profile \d{1,3})$/
+
+/** Where a playback's History lives: the browser, and the profile folder (course app) or name (window). */
+export interface HistoryProfile {
+  browser: BrowserId
+  /** A course app's mapped profile folder. */
+  dir: string | null
+  /** A browser window's profile name, mapped through `Local State`. */
+  name: string | null
+}
+
+/** The History file of that profile; null when the profile can't be mapped (never another one). */
+async function historyFile(profile: HistoryProfile): Promise<string | null> {
+  const root = userDataDir(profile.browser)
+  if (!root) return null
+  const dir = profile.dir !== null ? (PROFILE_DIR.test(profile.dir) ? profile.dir : null) : await profileDir(root, profile.name)
+  if (!dir) {
+    log('info', 'sources:history', { mapped: false, skipped: 'profile-unknown' })
+    return null
+  }
+  const source = join(root, dir, 'History')
+  return existsSync(source) ? source : null
 }
 
 async function historyStep(
@@ -258,38 +344,126 @@ async function historyStep(
   signal?: AbortSignal
 ): Promise<HistoryMatch | null> {
   if (Date.now() < historySkipUntil) return null
-  const root = userDataDir(playback.browser)
-  if (!root) return null
-  const dir = await profileDir(root, profileName)
-  if (!dir) {
-    log('info', 'sources:history', { mapped: false, skipped: 'profile-unknown' })
+  const grant = await historyGrant(ctx)
+  if (grant.hosts.length === 0) {
+    log('info', 'sources:history', { hosts: 0, excluded: grant.excluded, skipped: 'no-grant' })
     return null
   }
-  const source = join(root, dir, 'History')
-  if (!existsSync(source)) return null
-  const courseHosts = await ctx.settings.get('sources.courseHosts')
-  const hosts = historyHosts(courseHosts)
+  const source = await historyFile({ browser: playback.browser, dir: null, name: profileName })
+  if (!source) return null
   const seenAtMs = playback.seenAt ?? Date.now() - playback.playedMs
   const until = Date.now() + HISTORY_RETRY_FOR_MS
   const t0 = Date.now()
-  const copy = historyCopy(ctx, source, hosts)
+  const copy = historyCopy(ctx, source, (path) => queryHistory(path, grant.hosts, { browser: playback.browser }))
   let attempts = 0
   try {
     for (;;) {
       attempts++
       const rows = await copy.rows()
       if (!rows) return null
-      const m = matchHistory(rows, { title: playback.title, site, seenAtMs, courseHosts })
-      if (m) {
-        log('info', 'sources:history', { rows: rows.length, attempts, copies: copy.copies(), how: m.how, ids: 1 + m.alternatives.length, mapped: true, ms: Date.now() - t0 })
+      const m = matchHistory(rows, { title: playback.title, site, seenAtMs, courseHosts: grant.courseHosts })
+      if (m || Date.now() + HISTORY_RETRY_MS > until || signal?.aborted) {
+        log('info', 'sources:history', {
+          rows: rows.length,
+          attempts,
+          copies: copy.copies(),
+          how: m?.how ?? null,
+          ids: m ? 1 + m.alternatives.length : 0,
+          mapped: true,
+          hosts: grant.hosts.length,
+          excluded: grant.excluded,
+          ms: Date.now() - t0
+        })
         return m
-      }
-      if (Date.now() + HISTORY_RETRY_MS > until || signal?.aborted) {
-        log('info', 'sources:history', { rows: rows.length, attempts, copies: copy.copies(), how: null, ids: 0, mapped: true, ms: Date.now() - t0 })
-        return null
       }
       await sleep(HISTORY_RETRY_MS, signal)
     }
+  } finally {
+    await copy.dispose()
+  }
+}
+
+// ---------- Courses: S5 and the Add course sheet's host lookup ----------
+
+/** How far back S5 reads (the rule itself keeps 120 s before to 5 s after the playback start). */
+const COURSE_HISTORY_SINCE_MS = 10 * 60_000
+
+/**
+ * S5: the newest lesson-URL visit of a granted course host, from 120 s before to 5 s after the
+ * playback was first seen, retried for 15 s. Only granted hosts are read (YouTube stays with the
+ * Sources step), only in the profile the app or window maps to. Null when nothing is granted or
+ * found.
+ */
+export async function courseHistory(
+  ctx: MainContext,
+  profile: HistoryProfile,
+  seenAtMs: number,
+  signal?: AbortSignal
+): Promise<{ url: string; canonicalKey: string } | null> {
+  if (Date.now() < historySkipUntil) return null
+  const grant = await historyGrant(ctx)
+  if (grant.courseHosts.length === 0) {
+    log('info', 'sources:course-history', { hosts: 0, excluded: grant.excluded, skipped: 'no-grant' })
+    return null
+  }
+  const source = await historyFile(profile)
+  if (!source) return null
+  const until = Date.now() + HISTORY_RETRY_FOR_MS
+  const t0 = Date.now()
+  const copy = historyCopy(ctx, source, (path) => queryHistory(path, grant.courseHosts, { sinceMs: seenAtMs - COURSE_HISTORY_SINCE_MS, browser: profile.browser }))
+  let attempts = 0
+  try {
+    for (;;) {
+      attempts++
+      const rows = await copy.rows()
+      if (!rows) return null
+      const hit = pickLessonVisit(rows, seenAtMs)
+      if (hit || Date.now() + HISTORY_RETRY_MS > until || signal?.aborted) {
+        log('info', 'sources:course-history', { rows: rows.length, attempts, copies: copy.copies(), found: !!hit, hosts: grant.courseHosts.length, excluded: grant.excluded, ms: Date.now() - t0 })
+        return hit
+      }
+      await sleep(HISTORY_RETRY_MS, signal)
+    }
+  } finally {
+    await copy.dispose()
+  }
+}
+
+const APP_ADDRESS_WINDOW_MS = 2 * 60_000
+
+/**
+ * The Add course sheet's one-time lookup for a Chrome app whose id carries no host: Chrome's
+ * History of that profile only, the last 2 minutes only, rows whose title equals the app window's
+ * page title only (compared in SQL, so no other row reaches memory). The newest row's address, for
+ * the user to confirm; nothing is stored here.
+ */
+export async function findAppAddress(ctx: MainContext, profileDirName: string, pageTitle: string): Promise<string | null> {
+  const title = pageTitle.trim()
+  if (!title || Date.now() < historySkipUntil) return null
+  const source = await historyFile({ browser: 'chrome', dir: profileDirName, name: null })
+  if (!source) return null
+  const copy = historyCopy(ctx, source, async (path) => {
+    const { DatabaseSync } = await import('node:sqlite')
+    const db = new DatabaseSync(path, { timeout: 1_000 })
+    try {
+      const rows = db
+        .prepare(
+          `SELECT u.url AS url, u.title AS title, CAST(v.visit_time AS TEXT) AS vt
+           FROM visits v JOIN urls u ON u.id = v.url
+           WHERE v.visit_time > ? AND u.title = ?
+           ORDER BY v.visit_time DESC LIMIT 20`
+        )
+        .all(msToChromium(Date.now() - APP_ADDRESS_WINDOW_MS), title)
+      return toRows(rows)
+    } finally {
+      db.close()
+    }
+  })
+  try {
+    const rows = (await copy.rows()) ?? []
+    const hit = rows.find((r) => /^https?:\/\//i.test(r.url)) ?? null
+    log('info', 'sources:app-address-lookup', { rows: rows.length, found: !!hit })
+    return hit?.url ?? null
   } finally {
     await copy.dispose()
   }
@@ -388,7 +562,32 @@ async function ytPlaylist(ctx: MainContext, listId: string, videoId: string, sig
     args: ['-J', '--flat-playlist', '--no-warnings', '--playlist-end', String(PLAYLIST_MAX_ITEMS), `https://www.youtube.com/playlist?list=${listId}`],
     signal
   })
-  return r.ok ? parsePlaylist(r.stdout, videoId) : null
+  if (!r.ok) return null
+  for (const l of playlistListeners) l(listId, r.stdout)
+  return parsePlaylist(r.stdout, videoId)
+}
+
+type PlaylistListener = (listId: string, json: string) => void
+const playlistListeners = new Set<PlaylistListener>()
+
+/** Courses: every playlist the lookup fetches (`yt-dlp --flat-playlist -J`), to fill an empty lesson list. */
+export function onPlaylistFetched(l: PlaylistListener): () => void {
+  playlistListeners.add(l)
+  return () => playlistListeners.delete(l)
+}
+
+/**
+ * A playlist's items for a lesson list (Add course, Refresh from playlist): one more than
+ * `limit`, so the caller sees an over-long one. Null when lookups aren't allowed or it failed.
+ */
+export async function fetchPlaylist(ctx: MainContext, listId: string, limit: number, signal?: AbortSignal): Promise<string | null> {
+  if (!/^[\w-]{2,64}$/.test(listId) || !(await lookupsAllowed(ctx))) return null
+  const r = await runYtDlp(ctx, {
+    purpose: 'metadata',
+    args: ['-J', '--flat-playlist', '--no-warnings', '--playlist-end', String(limit + 1), `https://www.youtube.com/playlist?list=${listId}`],
+    signal
+  })
+  return r.ok ? r.stdout : null
 }
 
 // ---------- the stages ----------
@@ -417,7 +616,8 @@ async function identifyLocal(ctx: MainContext, playback: Playback, signal?: Abor
     if (parsed) return { draft: draftFromUrl(parsed, playback, 'exact', 'media-session', site), steps, enrichment: null }
   }
   // 3. History: only for a window known to be normal; an InPrivate or unknown window is never read.
-  if (privateWindow === false && (await ctx.settings.get('sources.readHistory'))) {
+  // The hosts it may read are per grant (`historyGrant`); with none granted it reads nothing.
+  if (privateWindow === false) {
     steps.push('history')
     const m = await historyStep(ctx, playback, site, tab?.profileName ?? null, signal)
     if (m) {
