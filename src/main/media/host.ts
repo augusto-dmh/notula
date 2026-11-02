@@ -6,17 +6,19 @@
 // - The worker restarts the PowerShell reader itself (1 s doubling, 5 tries). If the utility
 //   process itself dies while the reader is wanted, it is forked again once per 30 s; a second
 //   death within 30 s is `failed`.
-// - `locate` answers within 4 s, or with no matches.
+// - `locate` answers within 4 s, or with no matches. The Courses commands (`apps`, `window-title`,
+//   `lesson-read`, `seek`) answer within their own timeouts, or as if nothing was found.
 
 import { basename, dirname, join } from 'node:path'
 import { utilityProcess, type UtilityProcess } from 'electron'
-import type { DetectorState, DetectorStatus, MediaSession } from '@shared/types/sources'
+import { SOURCES_LIMITS, type DetectorState, type DetectorStatus, type LessonRead, type LessonReadSite } from '@shared/types/sources'
 import { resourcePath } from '../lifecycle/resources'
 import { log } from '../log'
-import { BROWSER_APPS, matchesFromRecord, sessionsFromRecord, type ReaderTabMatch } from './lines'
+import { BROWSER_APPS, matchesFromRecord, type ReaderTabMatch } from './lines'
 import { MEDIA_READER_LIMITS, type MainToMedia, type MediaToMain } from './protocol'
 
-type SessionsListener = (sessions: MediaSession[]) => void
+/** A raw `sessions` record: web apps need their mapping before it becomes sessions (index.ts). */
+type SessionsListener = (rec: Record<string, unknown>) => void
 type StatusListener = (s: DetectorStatus) => void
 
 /** out/main/media.js, from the main bundle (or a shared chunk next to it). */
@@ -29,8 +31,9 @@ class MediaReaderHost {
   private proc: UtilityProcess | null = null
   private wanted = false
   private lastForkAt = 0
-  private nextLocateId = 1
-  private readonly pending = new Map<number, { resolve: (m: ReaderTabMatch[] | null) => void; timer: NodeJS.Timeout }>()
+  private nextId = 1
+  /** Commands waiting for their answer, by id; null = no answer (timeout, reader gone). */
+  private readonly pending = new Map<number, { ev: string; resolve: (rec: Record<string, unknown> | null) => void; timer: NodeJS.Timeout }>()
   private readonly sessionListeners = new Set<SessionsListener>()
   private readonly statusListeners = new Set<StatusListener>()
   private current: DetectorStatus = { state: 'off', reason: null, lastStep: null }
@@ -79,17 +82,54 @@ class MediaReaderHost {
   }
 
   /** The tabs of a browser whose name starts with `title`; null when the reader isn't running. */
-  locate(process: string, title: string, address: boolean): Promise<ReaderTabMatch[] | null> {
+  async locate(process: string, title: string, address: boolean): Promise<ReaderTabMatch[] | null> {
+    const rec = await this.ask('locate', MEDIA_READER_LIMITS.locateTimeoutMs, (id) => ({ type: 'locate', id, process, title, address }))
+    if (!rec || rec['error'] === true) return null
+    return matchesFromRecord(rec)?.matches ?? null
+  }
+
+  /** The reader's `apps` record (browser app shortcuts and Web Applications folder names); null when unanswered. */
+  async apps(): Promise<Record<string, unknown> | null> {
+    const rec = await this.ask('apps', MEDIA_READER_LIMITS.appsTimeoutMs, (id) => ({ type: 'apps', id }))
+    return rec && rec['error'] !== true ? rec : null
+  }
+
+  /** A browser window's title by handle; null when unreadable or not a browser window. */
+  async windowTitle(hwnd: string): Promise<string | null> {
+    const rec = await this.ask('window-title', MEDIA_READER_LIMITS.windowTitleTimeoutMs, (id) => ({ type: 'window-title', id, hwnd }))
+    const t = rec?.['title']
+    return typeof t === 'string' ? t.slice(0, 2_000) : null
+  }
+
+  /** The window read: the lesson fields only (parsed in the worker), or why there are none. */
+  async lessonRead(hwnd: string, site: LessonReadSite): Promise<{ read: LessonRead | null; reason: string; reads: number; ms: number }> {
+    const t0 = Date.now()
+    const rec = await this.ask('lesson-read', SOURCES_LIMITS.windowReadBudgetMs + MEDIA_READER_LIMITS.lessonReadGraceMs, (id) => ({ type: 'lesson-read', id, hwnd, site }))
+    const read = rec?.['read']
+    const reads = typeof rec?.['reads'] === 'number' ? rec['reads'] : 0
+    const reason = typeof rec?.['reason'] === 'string' ? rec['reason'].slice(0, 30) : rec ? 'read' : 'no-answer'
+    return { read: read && typeof read === 'object' ? (read as LessonRead) : null, reason, reads, ms: Date.now() - t0 }
+  }
+
+  /** Seeks the session of an app id; `gone` when it isn't there (or the reader isn't running). */
+  async seek(app: string, ms: number): Promise<'ok' | 'refused' | 'gone'> {
+    const rec = await this.ask('seek', MEDIA_READER_LIMITS.seekTimeoutMs, (id) => ({ type: 'seek', id, app, ms }))
+    const r = rec?.['result']
+    return r === 'ok' || r === 'refused' ? r : 'gone'
+  }
+
+  /** One command and its answer (`ev` with the same id); null when the reader isn't running or is late. */
+  private ask(ev: string, timeoutMs: number, msg: (id: number) => MainToMedia): Promise<Record<string, unknown> | null> {
     if (!this.wanted || !this.proc || this.current.state !== 'running') return Promise.resolve(null)
-    const id = this.nextLocateId++
+    const id = this.nextId++
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.pending.delete(id)
-        log('debug', 'media:locate-timeout', {})
+        log('debug', 'media:command-timeout', { ev })
         resolve(null)
-      }, MEDIA_READER_LIMITS.locateTimeoutMs)
-      this.pending.set(id, { resolve, timer })
-      this.proc?.postMessage({ type: 'locate', id, process, title, address } satisfies MainToMedia)
+      }, timeoutMs)
+      this.pending.set(id, { ev, resolve, timer })
+      this.proc?.postMessage(msg(id))
     })
   }
 
@@ -157,19 +197,16 @@ class MediaReaderHost {
     }
     const rec = m.record
     if (rec['ev'] === 'sessions') {
-      const sessions = sessionsFromRecord(rec, Date.now())
-      if (sessions) for (const l of this.sessionListeners) l(sessions)
+      for (const l of this.sessionListeners) l(rec)
       return
     }
-    if (rec['ev'] === 'locate') {
-      const r = matchesFromRecord(rec)
-      if (!r) return
-      const p = this.pending.get(r.id)
-      if (!p) return
-      this.pending.delete(r.id)
-      clearTimeout(p.timer)
-      p.resolve(rec['error'] === true ? null : r.matches)
-    }
+    const id = rec['id']
+    if (typeof id !== 'number') return
+    const p = this.pending.get(id)
+    if (!p || p.ev !== rec['ev']) return
+    this.pending.delete(id)
+    clearTimeout(p.timer)
+    p.resolve(rec)
   }
 
   private failPending(): void {

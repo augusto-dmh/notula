@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Dev-only harness for the passive provider. Replays synthetic reader lines through
-// the pure state machine (debounce, eligibility, ad guard, spans, binding) and checks the pure
+// the pure state machine (debounce, eligibility, ad guard, spans, binding, course-app sessions),
+// maps synthetic installed web apps (app-map.ts), and checks the pure
 // identification rules (URL keys, tab and window facts, History matching, profiles and the host
 // filter on a synthetic in-memory History, search verification, yt-dlp parsing), plus two rules
 // outside the provider: superseded sessions at the transcript read, and when the
@@ -43,6 +44,7 @@ const src = (p) => pathToFileURL(resolve(root, p)).href
 const { SOURCES_LIMITS } = await import(src('src/shared/types/sources.ts'))
 const { createMachine, step, snapshot, feedSample, bindingOf } = await import(src('src/main/media/machine.ts'))
 const { sessionsFromRecord, tabFacts, windowFacts, siteFromLabel } = await import(src('src/main/media/lines.ts'))
+const A = await import(src('src/main/media/app-map.ts'))
 const M = await import(src('src/main/media/match.ts'))
 const { parseSourceUrl, guessKey, cleanTitle } = await import(src('src/shared/lib/source-key.ts'))
 const transcriptRepo = await import(src('src/main/storage/transcript-repo.ts'))
@@ -99,9 +101,9 @@ function sess(app, title, artist, status, posS, endS, extra = {}) {
 
 /**
  * Feeds events in time order with a tick every 250 ms; returns every effect with its time and the
- * snapshots published on `changed`.
+ * snapshots published on `changed`. `apps` maps web-app sessions (as main's mapping cache does).
  */
-function run(events, untilS, setup) {
+function run(events, untilS, setup, apps) {
   const m = createMachine(LIMITS)
   const log = []
   const snaps = []
@@ -118,7 +120,7 @@ function run(events, untilS, setup) {
       const e = queue.shift()
       if (e.line) {
         const rec = { ev: 'sessions', sessions: e.line.map((x) => ({ updated: e.upd ?? e.at, ...x })) }
-        apply({ type: 'sessions', sessions: sessionsFromRecord(rec, e.at) }, e.at)
+        apply({ type: 'sessions', sessions: sessionsFromRecord(rec, e.at, apps) }, e.at)
       } else if (e.input) apply(e.input, e.at)
       else if (e.fn) e.fn(m, apply, e.at)
     }
@@ -487,6 +489,148 @@ group('drop: a browser the extension covers is forgotten without an end', () => 
   const { log, snaps } = run([{ at: s(0), line: [v] }, { at: s(5), input: { type: 'drop', browsers: ['chrome'] } }], 10)
   eq(of(log, 'ended').length, 0, 'no ended')
   eq(lastList(snaps).length, 0, 'gone from the snapshot')
+})
+
+// ---------- course apps (browser web apps) ----------
+
+const CHROME_FULL = 'abcdefghijklmnopqrstuvwxyzabcdef'
+const CHROME_SHORT = 'abcdefghijqrstuvwxyzabcdef'
+const EDGE_FULL = 'ponmlkjihgfedcbaponmlkjihgfedcba'
+const EDGE_AUMID = 'courses.example.org-1a2b3c4d_5e6f7g8h9i0j!App'
+const OTHER_FULL = 'zyxwvutsrqponmlkjihgfedcbazyxwvu'
+const OTHER_SHORT = 'zyxwvutsrqjihgfedcbazyxwvu'
+
+const APPS_RECORD = {
+  ev: 'apps',
+  shortcuts: [
+    { name: 'Example Community', exe: 'chrome_proxy.exe', args: ` --profile-directory=Default --app-id=${CHROME_FULL}`, aumid: `Chrome._crx_${CHROME_SHORT}` },
+    {
+      name: 'Example Courses',
+      exe: 'msedge_proxy.exe',
+      args: ` --profile-directory="Profile 1" --app-id=${EDGE_FULL} --app-url=https://courses.example.org/m/abc123 --app-run-on-os-login-mode=windowed`,
+      aumid: EDGE_AUMID
+    },
+    { name: 'Notes', exe: 'notepad.exe', args: `--app-id=${CHROME_FULL}`, aumid: null },
+    { name: 'Plain browser', exe: 'chrome.exe', args: '--profile-directory=Default', aumid: null }
+  ],
+  folders: [
+    { browser: 'chrome', profile: 'Default', folder: `_crx_${CHROME_FULL}` },
+    { browser: 'edge', profile: 'Profile 1', folder: `_crx__${EDGE_FULL}` },
+    { browser: 'chrome', profile: 'Profile 2', folder: `_crx_${OTHER_FULL}` },
+    { browser: 'chrome', profile: 'Profile 2', folder: 'Manifest Resources' }
+  ]
+}
+const INV = A.inventoryFromRecord(APPS_RECORD)
+const appsOf = (inv) => (id) => A.mapFromInventory(inv, id)
+
+group('web apps: the inventory and the mapping of app ids', () => {
+  eq(INV.shortcuts.length, 2, 'only browser shortcuts with an --app-id')
+  eq(INV.folders.length, 3, 'only _crx_ folders')
+  const edge = INV.shortcuts.find((x) => x.browser === 'edge')
+  eq([edge?.profile, edge?.host, edge?.appId], ['Profile 1', 'courses.example.org', EDGE_FULL], 'Edge shortcut: quoted profile, the --app-url host only')
+  check(A.isShortenedOf(CHROME_SHORT, CHROME_FULL), 'one contiguous run removed')
+  check(A.isShortenedOf(CHROME_FULL, CHROME_FULL), 'the full id')
+  check(!A.isShortenedOf('abcdeghijqrstuvwxyzabcdef', CHROME_FULL), 'two runs removed: no match')
+  check(!A.isShortenedOf('abcdef', CHROME_FULL), 'too short to tell')
+
+  const exact = A.mapFromInventory(INV, `Chrome._crx_${CHROME_SHORT}`)
+  eq([exact.state, exact.browser, exact.appId, exact.profile, exact.name, exact.host], ['mapped', 'chrome', CHROME_FULL, 'Default', 'Example Community', null], 'Chrome: the shortcut that carries the id')
+  const byFolder = A.mapFromInventory(INV, `Chrome._crx_${OTHER_SHORT}`)
+  eq([byFolder.state, byFolder.appId, byFolder.profile, byFolder.name], ['mapped', OTHER_FULL, 'Profile 2', null], 'Chrome: a shortened id matched to the one folder that fits')
+  eq(A.mapFromInventory(INV, `Chrome._crx_${OTHER_SHORT}.Profile 2`).state, 'mapped', 'a profile part after the id')
+  const twoProfiles = A.inventoryFromRecord({ ...APPS_RECORD, folders: [...APPS_RECORD.folders, { browser: 'chrome', profile: 'Default', folder: `_crx_${OTHER_FULL}` }] })
+  eq(A.mapFromInventory(twoProfiles, `Chrome._crx_${OTHER_SHORT}`).state, 'unmapped', 'the app in two profiles: unmapped')
+  const twoApps = A.inventoryFromRecord({
+    ev: 'apps',
+    shortcuts: [],
+    folders: [
+      { browser: 'chrome', profile: 'Default', folder: '_crx_aaaaaaaaaaaaaaaabbbbbbbbbbbbbbbb' },
+      { browser: 'chrome', profile: 'Default', folder: '_crx_aaaaaaaaaaaaaaaaccccccccbbbbbbbb' }
+    ]
+  })
+  eq(A.mapFromInventory(twoApps, 'Chrome._crx_aaaaaaaaaaaaaaaabbbbbbbb').state, 'unmapped', 'two apps fit the shortened id: unmapped')
+  eq(A.mapFromInventory(INV, 'Chrome._crx_qqqqqqqqqqqqqqqqqqqq').state, 'unmapped', 'a Chrome app no folder holds: unmapped')
+
+  const e = A.mapFromInventory(INV, EDGE_AUMID)
+  eq([e.state, e.browser, e.appId, e.profile, e.name, e.host], ['mapped', 'edge', EDGE_FULL, 'Profile 1', 'Example Courses', 'courses.example.org'], 'Edge: the shortcut AppUserModel ID, host from the id')
+  const eShort = A.mapFromInventory(INV, 'MSEdge._crx__ponmlkjihgcbaponmlkjihgfedcba')
+  eq([eShort.state, eShort.appId, eShort.profile], ['mapped', EDGE_FULL, 'Profile 1'], 'Edge: a shortened MSEdge._crx__ id')
+  eq(A.hostFromAppId(EDGE_AUMID), 'courses.example.org', 'host from an Edge app id')
+  eq(A.hostFromAppId('Microsoft.App_8wekyb3d8bbwe!App'), null, 'no host in a packaged app id')
+  eq(A.mapFromInventory(INV, 'Spotify.exe').state, 'ignored', 'a player: ignored')
+  eq(A.mapFromInventory(INV, 'Chrome').state, 'ignored', 'the browser itself: ignored')
+  eq(A.listFromInventory(INV).map((x) => [x.appUserModelId, x.state]), [[`Chrome._crx_${CHROME_SHORT}`, 'mapped'], [EDGE_AUMID, 'mapped']], 'the installed apps')
+})
+
+/** A web-app session line as the reader prints it. */
+function appSess(app, web, title, status, posS, endS, extra = {}) {
+  return { ...sess(app, title, '', status, posS, endS, extra), web, hwnd: '4196402' }
+}
+
+group('web apps: an Edge app session reaches the snapshot with its app, trusted once eligible', () => {
+  const v = appSess(EDGE_AUMID, 'edge', 'Lesson one title', 'Playing', 0, 776.4)
+  const direct = sessionsFromRecord({ ev: 'sessions', sessions: [{ ...v, updated: s(0) }] }, s(0), appsOf(INV))
+  eq(direct.map((x) => [x.browser, x.appId, x.hwnd, x.app?.state]), [['edge', EDGE_AUMID, '4196402', 'mapped']], 'the session with its mapping and window')
+  const { log, snaps } = run([{ at: s(0), line: [v] }], 30, null, appsOf(INV))
+  eq(of(log, 'locate').length, 0, 'no tab-strip read for an app')
+  const cand = of(log, 'candidate')
+  eq(cand.length, 1, 'one candidate')
+  check(cand[0] && cand[0].at >= s(20) && cand[0].at <= s(22), 'eligible after 20 s played')
+  const p = lastList(snaps)[0]
+  eq([p?.state, p?.browser, p?.privateWindow, p?.site, p?.ad], ['candidate', 'edge', false, 'courses.example.org', false], 'site from the app, never private')
+  eq(p?.app, { appUserModelId: EDGE_AUMID, name: 'Example Courses' }, 'the playback carries its app')
+})
+
+group('web apps: no ad guard; a title change is a new playback, as a tab change is', () => {
+  const app = `Chrome._crx_${CHROME_SHORT}`
+  const a = appSess(app, 'chrome', 'Space one | Example Community', 'Playing', 0, 7635.9)
+  const short = appSess(app, 'chrome', 'Space two | Example Community', 'Playing', 0, 30)
+  const r1 = run([{ at: s(0), line: [a] }, { at: s(10), line: [short] }], 40, null, appsOf(INV))
+  eq(of(r1.log, 'ended').map((e) => e.reason), ['replaced'], 'a title played 10 s is replaced, not discarded')
+  check(r1.snaps.every((x) => x.list.every((p) => !p.ad)), 'a short next item is never an ad')
+  eq(r1.snaps.flatMap((x) => x.list.filter((p) => p.state === 'ended')).length, 1, 'the first playback is reported ended once')
+  const b = appSess(app, 'chrome', 'Space two | Example Community', 'Playing', 0, 5000)
+  const r2 = run([{ at: s(0), line: [a] }, { at: s(40), line: [b] }], 70, null, appsOf(INV))
+  eq(of(r2.log, 'ended').map((e) => e.reason), ['replaced'], 'the first lesson is replaced')
+  eq(of(r2.log, 'candidate').length, 2, 'both are candidates')
+  const ids = new Set(r2.snaps.flatMap((x) => x.list.map((p) => p.id)))
+  eq(ids.size, 2, 'a new playback id for the new title')
+  eq(lastList(r2.snaps)[0]?.title, 'Space two | Example Community', 'the new title is current')
+})
+
+group('web apps: a media player, an ignored or an unmapped-yet app id never comes through', () => {
+  const rec = (x) => ({ ev: 'sessions', sessions: [{ ...x, updated: s(0) }] })
+  eq(sessionsFromRecord(rec(sess('Spotify.exe', 'Song', 'Band', 'Playing', 1, 200)), s(0), appsOf(INV)).length, 0, 'a player without the web field')
+  const ignored = appSess('Example.Player_abc!App', 'edge', 'Song', 'Playing', 1, 200)
+  eq(sessionsFromRecord(rec(ignored), s(0), appsOf(INV)).length, 0, 'an app id no browser app carries (ignored)')
+  const v = appSess(EDGE_AUMID, 'edge', 'Lesson', 'Playing', 1, 900)
+  eq(sessionsFromRecord(rec(v), s(0), () => undefined).length, 0, 'waits for its mapping')
+  eq(sessionsFromRecord(rec(v), s(0)).length, 0, 'no mapping cache: left out')
+  const unmapped = appSess('Chrome._crx_qqqqqqqqqqqqqqqqqqqq', 'chrome', 'Lesson', 'Playing', 1, 900)
+  eq(sessionsFromRecord(rec(unmapped), s(0), appsOf(INV)).map((x) => x.app?.state), ['unmapped'], 'an unmapped Chrome app still comes through')
+})
+
+group('web apps: a tab and an app of one browser are two playbacks; drop keeps the app', () => {
+  const tab = sess('Chrome', 'Tab video', 'Chan', 'Playing', 0, 900)
+  const app = appSess(`Chrome._crx_${CHROME_SHORT}`, 'chrome', 'Space one | Example Community', 'Playing', 0, 7635.9)
+  const { log, snaps } = run([{ at: s(0), line: [tab, { ...app, cur: false }] }, { at: s(25), input: { type: 'drop', browsers: ['chrome'] } }], 30, null, appsOf(INV))
+  eq(of(log, 'candidate').length, 2, 'two candidates')
+  eq(lastList(snaps).map((p) => p.app?.name ?? null), ['Example Community'], 'the extension covers the tab, not the app')
+})
+
+group('a browser tab on a course site: no ad guard once the site is known', () => {
+  const lesson = sess('Chrome', 'Aula 3 - Example', '', 'Playing', 0, 2400)
+  const next = sess('Chrome', 'Aula 4 - Example', '', 'Playing', 0, 40)
+  const { log, snaps } = run(
+    [
+      { at: s(0), line: [lesson] },
+      { at: s(3), fn: (mm, apply, at) => apply({ type: 'window', playbackId: snapshot(mm, at)[0].id, privateWindow: false, site: 'courses.example.org', url: null, short: false }, at) },
+      { at: s(40), line: [next] }
+    ],
+    60
+  )
+  eq(of(log, 'ended').map((e) => e.reason), ['replaced'], 'replaced, not suspended as a mid-roll')
+  check(snaps.every((x) => x.list.every((p) => !p.ad)), 'never an ad')
 })
 
 // ---------- identification rules ----------

@@ -1,0 +1,17 @@
+{
+  "about": "Another site: one player group, named with an en dash and in lower case.",
+  "site": "generic",
+  "nodes": [
+    [5, "Text", "PRIVATE page text that is never returned"],
+    [6, "Group", "video player – Example talk"],
+    [7, "Button", "Play"],
+    [6, "Text", "Example talk"]
+  ],
+  "expect": {
+    "heading": "Example talk",
+    "course": null,
+    "breadcrumb": [],
+    "section": null,
+    "item": null
+  }
+}

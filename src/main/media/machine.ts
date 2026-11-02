@@ -1,17 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
 // The passive provider's playback engine: a pure state machine fed with
 // the reader's session snapshots, the tab-strip results and the note binding. No Electron, no
-// timers and type-only imports (the pattern of dictation's chord machine), so the dev harness
+// timers, and only pure imports (the pattern of dictation's chord machine), so the dev harness
 // (scripts/dev/media-replay.mjs) replays reader lines through it directly.
 //
-// - One playback per browser (the OS keeps one media session per app). A new title or artist is
-//   a new playback with a new id; a session that is gone for less than the debounce and comes
-//   back with the same title is the same playback (start-up flaps).
+// - One playback per OS app id (the OS keeps one media session per app): one per browser, and one
+//   per browser web app (a course app). A new title or artist is a new playback with a new id; a
+//   session that is gone for less than the debounce and comes back with the same title is the
+//   same playback (start-up flaps).
 // - Debounce: a playback is `seen` until it has been present and unchanged for 1.5 s, then
 //   `provisional` (the `locate` effect asks for the tab strip), then `candidate` once eligible:
-//   ≥ 20 s played, longer than 120 s or live, not a Short, not muted.
-// - Ad guard: a title replaced within its first 30 s played is discarded. A mid-playback change
-//   to an item ≤ 60 s long suspends the playing item; if its title comes back, the short item
+//   ≥ 20 s played, longer than 120 s or live, not a Short, not muted. A web app's playback has no
+//   tab strip: it is never private, its site is its app's host, and it needs no `locate`.
+// - Ad guard, only for a browser tab whose site is YouTube-like or not known yet (course apps and
+//   course sites have no ads, so their playbacks are trusted once eligible): a title replaced
+//   within its first 30 s played is discarded. A mid-playback change to an item ≤ 60 s long
+//   suspends the playing item; if its title comes back, the short item
 //   was an ad and the suspended playback resumes under its own id. While suspended it is
 //   reported with `ad: true` and the short item is hidden. Later items of the same pod may run
 //   up to the 120 s floor (a 79.7 s second ad was recorded, active-2026-10.jsonl).
@@ -21,7 +25,8 @@
 //   watched span and opens the next; spans under 2 s merge into the next one. A different
 //   title never stamps the note: the binding goes `lost` until the owner binds again.
 
-import type { BrowserId, CanonicalKey, MediaSession, Playback, PlaybackState, PlaybackStatus, SourcePosition } from '@shared/types/sources'
+import type { BrowserId, CanonicalKey, MediaSession, Playback, PlaybackApp, PlaybackState, PlaybackStatus, SourcePosition } from '@shared/types/sources'
+import { isVideoSite } from './lines'
 
 export interface MachineLimits {
   debounceMs: number
@@ -61,7 +66,7 @@ export type MachineInput =
   | { type: 'hold'; on: boolean }
   /** `sources.muted` (`channel:<name>`, `site:<host>`). */
   | { type: 'mutes'; mutes: readonly string[] }
-  /** Browsers the extension covers: forgotten without an `ended`. */
+  /** Browsers the extension covers: their tabs' playbacks are forgotten without an `ended` (web apps stay). */
   | { type: 'drop'; browsers: readonly BrowserId[] }
 
 export type MachineEffect =
@@ -74,7 +79,11 @@ export type MachineEffect =
 
 interface Track {
   id: string
+  /** The OS app id: one playback per app id. */
+  slot: string
   browser: BrowserId
+  /** The web app it plays in; null for a browser tab. */
+  app: PlaybackApp | null
   ident: string
   title: string
   artist: string | null
@@ -113,9 +122,10 @@ export interface MediaMachine {
   limits: MachineLimits
   mutes: string[]
   seq: number
-  tracks: Map<BrowserId, Track>
-  /** A playback interrupted by a possible ad, by browser. `adAt`: when the current ad began. */
-  suspended: Map<BrowserId, { track: Track; at: number; ad: Track; adAt: number }>
+  /** By OS app id. */
+  tracks: Map<string, Track>
+  /** A playback interrupted by a possible ad, by OS app id. `adAt`: when the current ad began. */
+  suspended: Map<string, { track: Track; at: number; ad: Track; adAt: number }>
   /** Ended since the last snapshot (reported once). */
   ended: Track[]
   binding: Binding | null
@@ -129,6 +139,15 @@ export function createMachine(limits: MachineLimits): MediaMachine {
 
 function identOf(s: MediaSession): string {
   return `${s.title}\u0000${s.artist ?? ''}`
+}
+
+/** The ad guard applies: a browser tab on a YouTube-like site, or one whose site isn't known yet. */
+function guarded(t: Track): boolean {
+  return !t.app && (t.site === null || isVideoSite(t.site))
+}
+
+function appOf(s: MediaSession): PlaybackApp | null {
+  return s.app ? { appUserModelId: s.app.appUserModelId, name: s.app.name } : null
 }
 
 function isLive(t: Track): boolean {
@@ -172,9 +191,12 @@ function findTrack(m: MediaMachine, id: string | null): { track: Track; suspende
 
 function newTrack(m: MediaMachine, s: MediaSession, now: number): Track {
   m.seq++
+  const app = appOf(s)
   return {
     id: `${s.browser}-${m.seq}`,
+    slot: s.appId,
     browser: s.browser,
+    app,
     ident: identOf(s),
     title: s.title,
     artist: s.artist,
@@ -190,9 +212,10 @@ function newTrack(m: MediaMachine, s: MediaSession, now: number): Track {
     state: 'seen',
     ad: false,
     goneAt: null,
-    privateWindow: 'unknown',
+    // Web apps don't open in InPrivate or Incognito windows.
+    privateWindow: app ? false : 'unknown',
     url: null,
-    site: null,
+    site: app ? (s.app?.host ?? null) : null,
     short: false,
     endReason: null
   }
@@ -210,7 +233,7 @@ function isPodItem(m: MediaMachine, s: MediaSession): boolean {
 
 /** The ad item standing in for a suspended playback. */
 function isAdOf(m: MediaMachine, t: Track): boolean {
-  return m.suspended.get(t.browser)?.ad === t
+  return m.suspended.get(t.slot)?.ad === t
 }
 
 // ---------- spans and binding ----------
@@ -269,7 +292,7 @@ function releaseBinding(m: MediaMachine, t: Track, at: number, state: 'lost' | '
 
 function finish(m: MediaMachine, t: Track, at: number, reason: EndReason, fx: MachineEffect[]): void {
   accumulate(t, at)
-  if (m.tracks.get(t.browser) === t) m.tracks.delete(t.browser)
+  if (m.tracks.get(t.slot) === t) m.tracks.delete(t.slot)
   t.state = 'ended'
   t.endReason = reason
   m.ended.push(t)
@@ -301,6 +324,11 @@ function updateSample(m: MediaMachine, t: Track, s: MediaSession, now: number, f
     closeSpan(m, b, at, posEnd, fx)
   }
   const changed = statusChange || seek || rateChange || freshSample || (s.endMs !== null && s.endMs !== t.endMs)
+  // A web app's mapping can be refreshed while it plays.
+  if (t.app && s.app) {
+    t.app = appOf(s)
+    t.site = s.app.host ?? t.site
+  }
   t.status = s.status
   t.rate = s.rate
   if (s.endMs !== null) t.endMs = s.endMs
@@ -316,7 +344,8 @@ function updateSample(m: MediaMachine, t: Track, s: MediaSession, now: number, f
 }
 
 function applySession(m: MediaMachine, s: MediaSession, now: number, fx: MachineEffect[]): void {
-  const cur = m.tracks.get(s.browser)
+  const slot = s.appId
+  const cur = m.tracks.get(slot)
   const ident = identOf(s)
   if (cur && cur.ident === ident) {
     accumulate(cur, now)
@@ -328,13 +357,13 @@ function applySession(m: MediaMachine, s: MediaSession, now: number, fx: Machine
     updateSample(m, cur, s, now, fx)
     return
   }
-  const sus = m.suspended.get(s.browser)
+  const sus = m.suspended.get(slot)
   if (sus && sus.track.ident === ident) {
     // The interrupted title came back: the short item was an ad.
-    m.suspended.delete(s.browser)
+    m.suspended.delete(slot)
     if (cur) finish(m, cur, now, 'ad', fx)
     const t = sus.track
-    m.tracks.set(s.browser, t)
+    m.tracks.set(slot, t)
     t.goneAt = null
     t.ad = false
     t.accumAt = now
@@ -354,15 +383,20 @@ function applySession(m: MediaMachine, s: MediaSession, now: number, fx: Machine
       // The next ad of a pod.
       const t = newTrack(m, s, now)
       t.ad = true
-      m.tracks.set(s.browser, t)
+      m.tracks.set(slot, t)
       sus.ad = t
       sus.adAt = now
       fx.push({ type: 'changed' })
       return
     }
     // A long new title instead of the interrupted one: the user moved on.
-    m.suspended.delete(s.browser)
+    m.suspended.delete(slot)
     finish(m, sus.track, sus.at, 'replaced', fx)
+  } else if (cur && !guarded(cur)) {
+    // No ads here: a new title is a new playback, whatever the old one played. A title that was
+    // never stable for the debounce (a page still loading) was never a playback.
+    accumulate(cur, now)
+    finish(m, cur, cur.goneAt ?? now, cur.state === 'seen' ? 'discarded' : cur.goneAt !== null ? 'gone' : 'replaced', fx)
   } else if (cur) {
     accumulate(cur, now)
     if (cur.goneAt !== null) {
@@ -372,7 +406,7 @@ function applySession(m: MediaMachine, s: MediaSession, now: number, fx: Machine
       finish(m, cur, now, 'discarded', fx)
     } else if (isShortItem(s)) {
       // Possibly a mid-roll: keep the playing item aside until its title returns.
-      m.tracks.delete(s.browser)
+      m.tracks.delete(slot)
       const b = m.binding
       if (b && b.playbackId === cur.id) {
         closeSpan(m, b, now, positionAt(cur, now), fx)
@@ -383,15 +417,15 @@ function applySession(m: MediaMachine, s: MediaSession, now: number, fx: Machine
       cur.changedAt = now
       const t = newTrack(m, s, now)
       t.ad = true
-      m.tracks.set(s.browser, t)
-      m.suspended.set(s.browser, { track: cur, at: now, ad: t, adAt: now })
+      m.tracks.set(slot, t)
+      m.suspended.set(slot, { track: cur, at: now, ad: t, adAt: now })
       fx.push({ type: 'changed' })
       return
     } else {
       finish(m, cur, now, 'replaced', fx)
     }
   }
-  m.tracks.set(s.browser, newTrack(m, s, now))
+  m.tracks.set(slot, newTrack(m, s, now))
   fx.push({ type: 'changed' })
 }
 
@@ -406,7 +440,8 @@ function advance(m: MediaMachine, now: number, fx: MachineEffect[]): void {
     if (t.state === 'seen' && now - t.seenAt >= m.limits.debounceMs) {
       t.state = 'provisional'
       t.changedAt = now
-      fx.push({ type: 'locate', playbackId: t.id, browser: t.browser, title: t.title })
+      // A web app has no tab strip to read: its window facts came with its mapping.
+      if (!t.app) fx.push({ type: 'locate', playbackId: t.id, browser: t.browser, title: t.title })
       fx.push({ type: 'changed' })
     }
     if (t.state === 'provisional' && eligible(m, t)) {
@@ -416,10 +451,10 @@ function advance(m: MediaMachine, now: number, fx: MachineEffect[]): void {
       fx.push({ type: 'changed' })
     }
   }
-  for (const [browser, sus] of [...m.suspended]) {
+  for (const [slot, sus] of [...m.suspended]) {
     if (now - sus.adAt < AD_RETURN_MS) continue
     // Not an ad after all: the interrupted item has ended, the short one is real.
-    m.suspended.delete(browser)
+    m.suspended.delete(slot)
     sus.ad.ad = false
     finish(m, sus.track, sus.at, 'gone', fx)
   }
@@ -431,15 +466,15 @@ export function step(m: MediaMachine, input: MachineInput, now: number): Machine
   const fx: MachineEffect[] = []
   switch (input.type) {
     case 'sessions': {
-      const present = new Set<BrowserId>()
+      const present = new Set<string>()
       for (const s of input.sessions) {
         // A session without a title (page start) counts as absent.
-        if (!s.title || present.has(s.browser)) continue
-        present.add(s.browser)
+        if (!s.title || present.has(s.appId)) continue
+        present.add(s.appId)
         applySession(m, s, now, fx)
       }
       for (const t of m.tracks.values()) {
-        if (present.has(t.browser) || t.goneAt !== null) continue
+        if (present.has(t.slot) || t.goneAt !== null) continue
         accumulate(t, now)
         t.goneAt = now
       }
@@ -500,16 +535,21 @@ export function step(m: MediaMachine, input: MachineInput, now: number): Machine
         }
       }
       break
-    case 'drop':
-      for (const browser of input.browsers) {
-        const t = m.tracks.get(browser)
-        const sus = m.suspended.get(browser)
-        m.tracks.delete(browser)
-        m.suspended.delete(browser)
+    case 'drop': {
+      const tab = (t: Track): boolean => !t.app && input.browsers.includes(t.browser)
+      const slots = new Set<string>()
+      for (const t of m.tracks.values()) if (tab(t)) slots.add(t.slot)
+      for (const [slot, sus] of m.suspended) if (tab(sus.track)) slots.add(slot)
+      for (const slot of slots) {
+        const t = m.tracks.get(slot)
+        const sus = m.suspended.get(slot)
+        m.tracks.delete(slot)
+        m.suspended.delete(slot)
         for (const x of [t, sus?.track]) if (x) releaseBinding(m, x, now, 'lost', fx)
-        if (t || sus) fx.push({ type: 'changed' })
+        fx.push({ type: 'changed' })
       }
       break
+    }
   }
   advance(m, now, fx)
   return dedupeChanged(fx)
@@ -553,7 +593,8 @@ function toPlayback(t: Track, now: number, suspended: boolean): Playback {
     site: t.site,
     state: t.state,
     playedMs: Math.round(t.playedMs),
-    seenAt: t.seenAt
+    seenAt: t.seenAt,
+    ...(t.app ? { app: t.app } : {})
   }
 }
 
@@ -565,7 +606,7 @@ function toPlayback(t: Track, now: number, suspended: boolean): Playback {
 export function snapshot(m: MediaMachine, now: number): Playback[] {
   const out: { at: number; p: Playback }[] = []
   for (const t of m.tracks.values()) {
-    const sus = m.suspended.get(t.browser)
+    const sus = m.suspended.get(t.slot)
     if (sus && sus.ad === t) continue
     out.push({ at: t.changedAt, p: toPlayback(t, now, false) })
   }

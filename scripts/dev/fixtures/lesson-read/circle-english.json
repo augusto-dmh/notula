@@ -1,0 +1,23 @@
+{
+  "about": "A Circle lesson page, English account; the current lesson is the first row of its section, and the course name sits before the buttons.",
+  "site": "circle",
+  "nodes": [
+    [7, "Text", "Example Course Two"],
+    [7, "Button", "Previous lesson"],
+    [7, "Button", "Next lesson"],
+    [10, "Button", "Hide transcript"],
+    [10, "Text", "Lesson 1: Getting started"],
+    [11, "Text", "PRIVATE transcript line that is never returned"],
+    [8, "Text", "Getting started"],
+    [8, "Text", "2 lessons"],
+    [8, "Group", "Lesson 1: Getting started"],
+    [8, "Button", "Lesson 2: Tools"]
+  ],
+  "expect": {
+    "heading": "Lesson 1: Getting started",
+    "course": "Example Course Two",
+    "breadcrumb": [],
+    "section": "Getting started",
+    "item": { "label": "Lesson 1: Getting started", "index": 1 }
+  }
+}

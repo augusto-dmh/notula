@@ -1,0 +1,10 @@
+{
+  "about": "Another site without a named player: a heading alone isn't enough.",
+  "site": "generic",
+  "nodes": [
+    [6, "Text", "Example heading"],
+    [6, "Group", "Player"],
+    [7, "Button", "Play"]
+  ],
+  "expect": null
+}

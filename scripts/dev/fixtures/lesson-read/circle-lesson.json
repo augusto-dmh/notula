@@ -1,0 +1,42 @@
+{
+  "about": "A Circle community lesson page, Portuguese account. Placeholder names. The comment and description must never come back.",
+  "site": "circle",
+  "nodes": [
+    [5, "Hyperlink", "Example Community"],
+    [6, "Text", "Example Community"],
+    [8, "Button", "aula anterior"],
+    [9, "Text", "aula anterior"],
+    [8, "Text", "Fundamentals of Example"],
+    [8, "Button", "Próximo aula"],
+    [9, "Text", "Próximo aula"],
+    [10, "Group", ""],
+    [11, "Button", "Mostrar transcrição"],
+    [11, "Text", "Aula 06 - Example heading"],
+    [11, "Text", "PRIVATE description text that is never returned"],
+    [12, "Text", "PRIVATE comment that is never returned"],
+    [8, "Text", "Module one"],
+    [8, "Text", "3 aulas"],
+    [8, "Button", "Aula 01 - Introduction"],
+    [9, "Text", "Aula 01 - Introduction"],
+    [8, "Button", "Aula 02 - Setup"],
+    [8, "Button", "Aula 03 - First steps"],
+    [8, "Text", "Module two"],
+    [8, "Text", "4 aulas"],
+    [8, "Button", "Aula 04 - Example topic"],
+    [8, "Button", "Aula 05 - Another topic"],
+    [8, "Group", ""],
+    [9, "Text", "Aula 06 - Example heading"],
+    [9, "Text", "12:40"],
+    [8, "Button", "Aula 07 - Next topic"],
+    [8, "Text", "Bonus"],
+    [8, "Text", "1 aula"],
+    [8, "Button", "Aula 08 - Bonus"]
+  ],
+  "expect": {
+    "heading": "Aula 06 - Example heading",
+    "course": "Fundamentals of Example",
+    "breadcrumb": [],
+    "section": "Module two",
+    "item": { "label": "Aula 06 - Example heading", "index": 3 }
+  }
+}

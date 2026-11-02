@@ -4,11 +4,12 @@
 // (site, audio marker, InPrivate/Incognito, profile). No Electron and type-only imports, so the
 // dev harness (scripts/dev/media-replay.mjs) loads it directly.
 
-import type { BrowserId, MediaSession, PlaybackStatus } from '../../shared/types/sources'
+import type { AppMapping, BrowserId, MediaSession, PlaybackStatus } from '../../shared/types/sources'
 
 /**
  * Measured browser app ids only. Brave, Firefox and Arc join this
- * table after a measurement, not before. Media apps and PWAs with their own ids are ignored.
+ * table after a measurement, not before. Media apps are ignored; browser web apps (course apps)
+ * arrive with a `web` field (see `sessionsFromRecord`).
  */
 export const BROWSER_APPS: Readonly<Record<string, BrowserId>> = { MSEdge: 'edge', Chrome: 'chrome' }
 
@@ -28,7 +29,14 @@ export interface ReaderSession {
   rate: number | null
   /** Epoch ms of the OS timeline sample. */
   updated: number
+  /** A browser web app's session: its browser. */
+  web?: 'chrome' | 'edge'
+  /** A web app's window handle (decimal), when the reader found it. */
+  hwnd?: string | null
 }
+
+/** A web app's mapping for a session; undefined = not known yet (the session waits for it). */
+export type AppResolver = (appUserModelId: string) => AppMapping | undefined
 
 /** One window's match of a `locate` command. */
 export interface ReaderTabMatch {
@@ -62,23 +70,30 @@ function status(s: string): PlaybackStatus {
 const WITHHELD_TITLES: ReadonlySet<string> = new Set(['A site is playing media'])
 
 /**
- * A `sessions` record → the measured browsers' sessions. A session whose metadata the browser
+ * A `sessions` record → the measured browsers' sessions, one per app id. A session whose metadata the browser
  * withheld (an Incognito tab) is dropped, so that browser's next session can stand for it. `now` stands in for a missing or
  * implausible OS timestamp (more than a day away). Null for any other record.
+ *
+ * Web-app sessions (`web`) carry their mapping from `apps`: one not mapped yet is left out of
+ * this snapshot, and one that isn't a browser app (`ignored`) never comes through. Without
+ * `apps`, every web-app session is left out.
  */
-export function sessionsFromRecord(rec: Record<string, unknown>, now: number): MediaSession[] | null {
+export function sessionsFromRecord(rec: Record<string, unknown>, now: number, apps?: AppResolver): MediaSession[] | null {
   if (rec['ev'] !== 'sessions' || !Array.isArray(rec['sessions'])) return null
   const out: MediaSession[] = []
-  const seen = new Set<BrowserId>()
+  const seen = new Set<string>()
   // The current session first, so a second session of one browser never wins over it.
   const raw = (rec['sessions'] as unknown[]).filter((x): x is Record<string, unknown> => !!x && typeof x === 'object')
   raw.sort((a, b) => Number(b['cur'] === true) - Number(a['cur'] === true))
   for (const s of raw) {
     const appId = str(s['app'], 200)
-    const browser = BROWSER_APPS[appId]
-    if (!browser || seen.has(browser)) continue
+    const web = s['web'] === 'chrome' || s['web'] === 'edge' ? s['web'] : null
+    const app = web && !BROWSER_APPS[appId] ? apps?.(appId) : undefined
+    const browser: BrowserId | undefined = BROWSER_APPS[appId] ?? (app && app.state !== 'ignored' ? web ?? undefined : undefined)
+    if (!browser || seen.has(appId)) continue
     if (WITHHELD_TITLES.has(str(s['title']).trim()) && !str(s['artist']).trim()) continue
-    seen.add(browser)
+    seen.add(appId)
+    const hwnd = typeof s['hwnd'] === 'string' && /^\d{1,20}$/.test(s['hwnd']) ? s['hwnd'] : null
     const st = str(s['status'], 40)
     // A closing session reports position 0, end 0 (which would read as live) and no timeline
     // time (seen at page start, soak-2026-10.jsonl): its timeline is unknown.
@@ -96,7 +111,8 @@ export function sessionsFromRecord(rec: Record<string, unknown>, now: number): M
       positionMs: closed ? null : num(s['posMs']),
       endMs: end,
       rate: rate !== null && rate > 0 && rate <= 16 ? rate : 1,
-      lastUpdatedAt: updated !== null && Math.abs(updated - now) < 86_400_000 ? updated : now
+      lastUpdatedAt: updated !== null && Math.abs(updated - now) < 86_400_000 ? updated : now,
+      ...(app ? { app, hwnd } : {})
     })
   }
   return out

@@ -1,0 +1,27 @@
+{
+  "about": "A Hubla member-area lesson. Placeholder names.",
+  "site": "hubla",
+  "nodes": [
+    [6, "Group", "breadcrumb"],
+    [7, "Hyperlink", "Example Product"],
+    [8, "Text", "Example Product"],
+    [7, "Text", "›"],
+    [7, "Hyperlink", "Queues (Example)"],
+    [8, "Text", "Queues (Example)"],
+    [7, "Text", "›"],
+    [7, "Hyperlink", "message queue example"],
+    [8, "Text", "message queue example"],
+    [6, "Group", "Video Player - message queue example"],
+    [7, "Button", "Play"],
+    [6, "Text", "Queues (Example) • Conteúdo 3"],
+    [6, "Text", "PRIVATE lesson description that is never returned"],
+    [6, "Hyperlink", "Another product"]
+  ],
+  "expect": {
+    "heading": "message queue example",
+    "course": "Example Product",
+    "breadcrumb": ["Example Product", "Queues (Example)", "message queue example"],
+    "section": "Queues (Example)",
+    "item": { "label": "message queue example", "index": 3 }
+  }
+}

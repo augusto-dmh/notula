@@ -14,6 +14,8 @@
 // - `mediaFeed` is the seam for the sources core: bind a note to a playback, read the
 //   position feed, receive watched spans and binding changes. Nothing here stores anything.
 // - Startup sweeps History copies a crash may have left (identify.ts), whatever the settings.
+// - Course apps: a browser web app's session waits for its mapping (`apps.ts`) before it reaches
+//   the bus; one that isn't a browser app never does. Web apps aren't covered by the extension.
 
 import type {
   BrowserId,
@@ -30,7 +32,9 @@ import { parseSourceUrl } from '@shared/lib/source-key'
 import type { MainContext } from '../context'
 import { log } from '../log'
 import { sweepHistoryCopies } from '../sources/identify'
+import { cachedMapping, mapApp } from './apps'
 import { mediaReader } from './host'
+import { sessionsFromRecord } from './lines'
 import { locateTab } from './locate'
 import {
   bindingOf,
@@ -47,6 +51,8 @@ import {
 } from './machine'
 
 const TICK_MS = 1_000
+/** The IPC hop from the worker, which keeps the 3 s budget itself. */
+const MEDIA_READ_SLACK_MS = 250
 
 type SpanListener = (e: { noteId: string; span: SpanRecord }) => void
 type BindingListener = (e: { noteId: string; state: BindingState; playbackId: string | null }) => void
@@ -55,6 +61,9 @@ let machine: MediaMachine = newMachine()
 let ctxRef: MainContext | null = null
 let tickTimer: NodeJS.Timeout | null = null
 let lastSessions: MediaSession[] = []
+/** The last `sessions` record, kept to publish again once a web app's mapping arrives. */
+let lastRecord: Record<string, unknown> | null = null
+const mapping = new Set<string>()
 let lastPlaybacks: Playback[] = []
 let covered = new Set<BrowserId>()
 let running = false
@@ -137,14 +146,34 @@ function scheduleTicks(): void {
   }
 }
 
+/** A web app's mapping, or undefined while `mapApp` runs (the session is published when it answers). */
+function resolveApp(appUserModelId: string): ReturnType<typeof cachedMapping> {
+  const hit = cachedMapping(appUserModelId)
+  if (hit || mapping.has(appUserModelId)) return hit
+  mapping.add(appUserModelId)
+  void mapApp(appUserModelId)
+    .catch((err: unknown) => log('warn', 'media:app-map-failed', { err }))
+    .finally(() => {
+      mapping.delete(appUserModelId)
+      if (running && lastRecord) onRecord(lastRecord)
+    })
+  return undefined
+}
+
+function onRecord(rec: Record<string, unknown>): void {
+  lastRecord = rec
+  const sessions = sessionsFromRecord(rec, Date.now(), resolveApp)
+  if (sessions) onSessions(sessions)
+}
+
 function onSessions(sessions: MediaSession[]): void {
   const ctx = ctxRef
   if (!ctx || !running) return
   const previous = lastSessions
   lastSessions = sessions
   ctx.bus.emit('media:sessions', { sessions, previous })
-  // Browsers the extension covers skip the passive pipeline.
-  apply({ type: 'sessions', sessions: sessions.filter((s) => !covered.has(s.browser)) })
+  // Browser tabs the extension covers skip the passive pipeline; web apps never do.
+  apply({ type: 'sessions', sessions: sessions.filter((s) => !!s.app || !covered.has(s.browser)) })
 }
 
 async function reconcile(ctx: MainContext): Promise<void> {
@@ -161,6 +190,7 @@ async function reconcile(ctx: MainContext): Promise<void> {
   handle(step(machine, { type: 'unbind' }, Date.now()))
   machine = newMachine()
   lastSessions = []
+  lastRecord = null
   scheduleTicks()
   publish()
 }
@@ -169,7 +199,7 @@ export function registerMedia(ctx: MainContext): void {
   ctxRef = ctx
   void sweepHistoryCopies(ctx)
   if (process.platform !== 'win32') return
-  mediaReader.onSessions(onSessions)
+  mediaReader.onSessions(onRecord)
   ctx.bus.on('settings:changed', ({ keys, settings }) => {
     if (keys.includes('sources.enabled') || keys.includes('sources.detect')) {
       void reconcile(ctx).catch((err: unknown) => log('error', 'media:reconcile-failed', { err }))
@@ -233,12 +263,13 @@ export const mediaFeed = {
 }
 
 // ---------- Courses: reader commands ----------
-// Final signatures; the reader commands behind them (`window-title`, `lesson-read`, `seek`) are
-// not written yet, so each answers as if the read found nothing.
+// By window handle (`MediaSession.hwnd`) or app id, with no focus change. Logs carry outcomes,
+// counts and timings only: never a title or anything a window read returns.
 
 /** The window title of a course app or browser window, by handle; null when unreadable. */
-export async function windowTitle(_hwnd: string): Promise<string | null> {
-  return null
+export async function windowTitle(hwnd: string): Promise<string | null> {
+  if (!/^\d{1,20}$/.test(hwnd)) return null
+  return mediaReader.windowTitle(hwnd)
 }
 
 /**
@@ -246,11 +277,17 @@ export async function windowTitle(_hwnd: string): Promise<string | null> {
  * marker, by window handle with no focus and no clicks, within `SOURCES_LIMITS.windowReadBudgetMs`.
  * `skipped` when over budget, sparse, or no reader fits the site.
  */
-export async function lessonRead(_hwnd: string, _site: LessonReadSite): Promise<LessonRead | 'skipped'> {
-  return 'skipped'
+export async function lessonRead(hwnd: string, site: LessonReadSite): Promise<LessonRead | 'skipped'> {
+  if (!/^\d{1,20}$/.test(hwnd)) return 'skipped'
+  const r = await mediaReader.lessonRead(hwnd, site)
+  log('debug', 'media:lesson-read', { site, state: r.read ? 'read' : 'skipped', reason: r.read ? null : r.reason, reads: r.reads, ms: r.ms })
+  return r.read && r.ms <= SOURCES_LIMITS.windowReadBudgetMs + MEDIA_READ_SLACK_MS ? r.read : 'skipped'
 }
 
-/** Seeks the session of this app id through the media session. */
-export async function seek(_appUserModelId: string, _ms: number): Promise<'ok' | 'refused' | 'gone'> {
-  return 'gone'
+/** Seeks the session of this app id through the media session. It never starts a paused player. */
+export async function seek(appUserModelId: string, ms: number): Promise<'ok' | 'refused' | 'gone'> {
+  if (!Number.isFinite(ms) || ms < 0) return 'refused'
+  const r = await mediaReader.seek(appUserModelId, ms)
+  log('debug', 'media:seek', { result: r })
+  return r
 }

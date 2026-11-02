@@ -1,0 +1,34 @@
+{
+  "about": "Measured shape: Chromium 156 (Chrome) page tree of a throwaway --app window with a synthetic Circle-like page, as the reader sent it on the second read.",
+  "site": "circle",
+  "nodes": [
+    [9, "Group", ""],
+    [10, "Button", "aula anterior"],
+    [10, "Text", "Probe Course Name"],
+    [10, "Button", "Próximo aula"],
+    [9, "Group", ""],
+    [10, "Group", "Video Player - Probe lesson title"],
+    [10, "Button", "Mostrar transcrição"],
+    [10, "Group", ""],
+    [11, "Text", "Probe lesson heading"],
+    [9, "Group", ""],
+    [10, "Text", "Probe section one"],
+    [10, "Text", "2 aulas"],
+    [10, "Button", "Probe row A"],
+    [10, "Group", ""],
+    [11, "Text", "Probe row B"],
+    [10, "Text", "Probe section two"],
+    [10, "Text", "1 aula"],
+    [10, "Button", "Probe row C"]
+  ],
+  "expect": {
+    "heading": "Probe lesson heading",
+    "course": "Probe Course Name",
+    "breadcrumb": [],
+    "section": "Probe section one",
+    "item": {
+      "label": "Probe row B",
+      "index": 2
+    }
+  }
+}

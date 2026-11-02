@@ -1,0 +1,9 @@
+{
+  "about": "The first read of a window whose page tree Chromium hasn't built: the Document is there, empty. Nothing to return (the worker reads again, then answers skipped).",
+  "site": "circle",
+  "nodes": [
+    [3, "Group", ""],
+    [4, "Group", ""]
+  ],
+  "expect": null
+}

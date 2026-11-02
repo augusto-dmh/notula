@@ -1,0 +1,21 @@
+{
+  "about": "A Hubla lesson read before the player loads: the breadcrumb only, its last item plain text.",
+  "site": "hubla",
+  "nodes": [
+    [5, "Group", "Breadcrumb"],
+    [6, "Hyperlink", "Example Product"],
+    [6, "Text", "/"],
+    [6, "Hyperlink", ""],
+    [7, "Text", "Module (Example)"],
+    [6, "Text", "/"],
+    [6, "Text", "Lesson in a module"],
+    [5, "Text", "PRIVATE comment that is never returned"]
+  ],
+  "expect": {
+    "heading": "Lesson in a module",
+    "course": "Example Product",
+    "breadcrumb": ["Example Product", "Module (Example)", "Lesson in a module"],
+    "section": "Module (Example)",
+    "item": null
+  }
+}

@@ -8,7 +8,10 @@
 //   itself when this process is gone (Windows does not end children with their parent).
 // - Lines: each stdout line is parsed as JSON and forwarded as a `record`; a line that is not
 //   JSON is counted and skipped (never logged: it could carry a title).
-// - Commands: `locate` is written to the script's stdin as one tab-separated line.
+// - Commands: `locate`, `apps`, `window-title`, `seek` and `lesson-read` are written to the
+//   script's stdin as one tab-separated line each. A window read's nodes are parsed here
+//   (`lesson-read.ts`), read again once if the first answer was sparse, and only the lesson fields
+//   go on to main, within the 3 s budget.
 // - Restarts: on a spawn error or an exit while the reader is wanted, a restart after 1 s,
 //   doubling, at most 5; the count resets once the last launch is 30 s old; then `failed`.
 // - Unavailable: PowerShell missing, blocked by policy, or the script's own `unavailable` (exit
@@ -19,6 +22,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { join } from 'node:path'
+import { SOURCES_LIMITS, type LessonRead, type LessonReadSite } from '@shared/types/sources'
+import { nodesFromRecord, parseLessonRead } from './lesson-read'
 import { MEDIA_READER_LIMITS, restartDelay, type MainToMedia, type MediaReaderArgs, type MediaReaderState, type MediaToMain } from './protocol'
 
 /** By full path: a bare name is searched in the current directory before PATH. */
@@ -112,6 +117,8 @@ function launch(): void {
       log('info', 'media:reader-ready', { msCompile: rec['msCompile'], ms: rec['ms'] })
       state('running', null)
     }
+    // A window read's raw nodes stay in this process.
+    if (rec['ev'] === 'lesson-read') return onLessonNodes(rec)
     send({ type: 'record', record: rec })
   })
   child.stderr.on('data', (b: Buffer) => {
@@ -130,6 +137,7 @@ function onGone(child: ChildProcessWithoutNullStreams | null, why: string, code?
   if (child && r.child !== child) return
   if (r.child === null && child !== null) return
   r.child = null
+  for (const id of [...lessonReads.keys()]) finishLessonRead(id, null, 'no-reader')
   if (r.killTimer) clearTimeout(r.killTimer)
   r.killTimer = null
   const stopped = r.stopping
@@ -193,6 +201,100 @@ function stop(): void {
   }, MEDIA_READER_LIMITS.killGraceMs)
 }
 
+/** One command line to the reader; false when it can't be written. */
+function write(line: string): boolean {
+  const child = r.child
+  if (!child || !child.stdin.writable) return false
+  try {
+    child.stdin.write(`${line}\n`)
+    return true
+  } catch {
+    return false
+  }
+}
+
+const HWND = /^\d{1,20}$/
+/** App ids as the reader prints them: no tabs, line breaks or other control characters. */
+const APP_ID = /^[^\u0000-\u001f\u007f]{1,200}$/
+
+function command(m: Extract<MainToMedia, { type: 'apps' | 'window-title' | 'seek' }>): void {
+  let line: string | null = null
+  let fail: Record<string, unknown> = {}
+  if (m.type === 'apps') {
+    line = `apps\t${m.id}`
+    fail = { ev: 'apps', id: m.id, shortcuts: [], folders: [], error: true }
+  } else if (m.type === 'window-title') {
+    if (HWND.test(m.hwnd)) line = `window-title\t${m.id}\t${m.hwnd}`
+    fail = { ev: 'window-title', id: m.id, title: null }
+  } else {
+    if (APP_ID.test(m.app) && Number.isFinite(m.ms) && m.ms >= 0) line = `seek\t${m.id}\t${m.app}\t${Math.round(m.ms)}`
+    fail = { ev: 'seek', id: m.id, result: 'gone' }
+  }
+  if (!line || !write(line)) send({ type: 'record', record: fail })
+}
+
+// ---------- the window read ----------
+// The reader returns the page's nodes; they are parsed here and only the lesson fields go on to
+// main. Nothing of a read is logged: counts, timings and the outcome only.
+
+interface LessonReadJob {
+  hwnd: string
+  site: LessonReadSite
+  startedAt: number
+  reads: number
+  timer: NodeJS.Timeout | null
+  budget: NodeJS.Timeout
+}
+
+const lessonReads = new Map<number, LessonReadJob>()
+
+function finishLessonRead(id: number, read: LessonRead | null, reason: string | null): void {
+  const job = lessonReads.get(id)
+  if (!job) return
+  lessonReads.delete(id)
+  clearTimeout(job.budget)
+  if (job.timer) clearTimeout(job.timer)
+  send({ type: 'record', record: { ev: 'lesson-read', id, read, reason, reads: job.reads, ms: Date.now() - job.startedAt } })
+}
+
+function sendLessonRead(id: number): void {
+  const job = lessonReads.get(id)
+  if (!job) return
+  job.timer = null
+  const left = SOURCES_LIMITS.windowReadBudgetMs - (Date.now() - job.startedAt)
+  if (left < 100) return finishLessonRead(id, null, 'over-budget')
+  job.reads++
+  if (!write(`lesson-read\t${id}\t${job.hwnd}\t${left}`)) finishLessonRead(id, null, 'no-reader')
+}
+
+function startLessonRead(m: Extract<MainToMedia, { type: 'lesson-read' }>): void {
+  if (!HWND.test(m.hwnd) || lessonReads.has(m.id)) {
+    send({ type: 'record', record: { ev: 'lesson-read', id: m.id, read: null, reason: 'invalid', reads: 0, ms: 0 } })
+    return
+  }
+  const budget = setTimeout(() => finishLessonRead(m.id, null, 'over-budget'), SOURCES_LIMITS.windowReadBudgetMs)
+  lessonReads.set(m.id, { hwnd: m.hwnd, site: m.site, startedAt: Date.now(), reads: 0, timer: null, budget })
+  sendLessonRead(m.id)
+}
+
+/** The reader's answer: parse it, read again once if the page was still sparse, or finish. */
+function onLessonNodes(rec: Record<string, unknown>): void {
+  const id = typeof rec['id'] === 'number' ? rec['id'] : -1
+  const job = lessonReads.get(id)
+  if (!job) return
+  const nodes = nodesFromRecord(rec['nodes'])
+  const read = nodes ? parseLessonRead(job.site, nodes) : null
+  if (read) return finishLessonRead(id, read, null)
+  const reason = typeof rec['reason'] === 'string' ? rec['reason'].slice(0, 30) : 'sparse'
+  // Chromium builds a page's tree once a client asks: the first read can come back sparse.
+  const retryAt = job.startedAt + MEDIA_READER_LIMITS.lessonReadRetryMs
+  if (job.reads === 1 && reason !== 'not-browser' && reason !== 'busy' && retryAt < job.startedAt + SOURCES_LIMITS.windowReadBudgetMs - 100) {
+    job.timer = setTimeout(() => sendLessonRead(id), Math.max(0, retryAt - Date.now()))
+    return
+  }
+  finishLessonRead(id, null, nodes ? 'sparse' : reason)
+}
+
 function locate(m: Extract<MainToMedia, { type: 'locate' }>): void {
   const child = r.child
   const reply = (): void => send({ type: 'record', record: { ev: 'locate', id: m.id, matches: [], windows: 0, ms: 0, error: true } })
@@ -221,4 +323,6 @@ port.on('message', (e) => {
   }
   if (m.type === 'stop') stop()
   else if (m.type === 'locate') locate(m)
+  else if (m.type === 'lesson-read') startLessonRead(m)
+  else if (m.type === 'apps' || m.type === 'window-title' || m.type === 'seek') command(m)
 })

@@ -1,0 +1,10 @@
+{
+  "about": "Another site with two different players: no single heading, so nothing.",
+  "site": "generic",
+  "nodes": [
+    [6, "Group", "Video Player - First example"],
+    [6, "Group", "Video Player - Second example"],
+    [6, "Text", "First example"]
+  ],
+  "expect": null
+}
