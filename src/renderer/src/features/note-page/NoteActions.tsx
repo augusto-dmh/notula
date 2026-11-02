@@ -17,6 +17,7 @@ import { openFollowUpComposer } from '../follow-up'
 import { usePrefs } from '../settings/prefs-store'
 import { IconCopy, IconMore, IconPlay, IconStop, IconTrash, trashNotes } from '../trash'
 import { RunDispatcherMenuItem } from '../dispatch'
+import { useCopyAsMarkdownEntries } from '../enhance/copy-markdown'
 import { ActionMenu, type ActionMenuAnchor, type ActionMenuEntry } from './ActionMenu'
 import { copyEnhancedNotes, copyTranscript, hasCopyableTranscript, hasFinishedPanel } from './copy-actions'
 
@@ -89,6 +90,7 @@ export function NoteActions({
   const own = isOwnNote(note)
   const transcribingThis = capture.transcribingNoteId === note.id
   const transcribingOther = capture.transcribingNoteId !== null && !transcribingThis
+  const copyMarkdown = useCopyAsMarkdownEntries(note, panels, <IconCopy size={16} />)
 
   const open = async (): Promise<void> => {
     const rect = buttonRef.current?.getBoundingClientRect()
@@ -165,6 +167,7 @@ export function NoteActions({
   }
   // Follow-up drafts and meeting audio (`recordings:list`, `recordings:export`).
   const extras: ActionMenuEntry[] = [
+    ...copyMarkdown,
     ...(prefs?.['followUpEmail.enabled'] === true && own
       ? [{ kind: 'item', id: 'follow-up', label: 'Draft follow-up email', icon: <IconMailSmall />, onSelect: () => openFollowUpComposer({ noteId: note.id }) } satisfies ActionMenuEntry]
       : []),

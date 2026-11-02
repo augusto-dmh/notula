@@ -163,6 +163,30 @@
   box-shadow: inset 0 0 0 2px var(--nt-tr-mark-active);
 }
 
+/* A source note: the line at the video's position, lines outside the watched part, jump times. */
+.nt-tr-current {
+  background: color-mix(in srgb, var(--nt-tr-accent) 10%, transparent);
+  box-shadow: inset 2px 0 0 var(--nt-tr-accent);
+}
+
+.nt-tr-unwatched {
+  opacity: 0.55;
+}
+
+.nt-tr-time--jump {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.nt-tr-time--jump:hover,
+.nt-tr-time--jump:focus-visible {
+  color: var(--nt-tr-accent);
+  text-decoration: underline;
+}
+
 .nt-tr-selected {
   box-shadow: inset 0 0 0 2px var(--nt-tr-accent);
 }
@@ -264,6 +288,22 @@
   cursor: pointer;
 }
 
+.nt-tr-follow {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 12px;
+  border: 1px solid var(--nt-tr-line);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  box-shadow: var(--shadow);
+  cursor: pointer;
+}
+
 .nt-tr-pill {
   position: absolute;
   bottom: 14px;
@@ -297,6 +337,7 @@
 }
 
 .nt-tr:not(.nt-tr--bubble) .nt-tr-jump,
+.nt-tr:not(.nt-tr--bubble) .nt-tr-follow,
 .nt-tr:not(.nt-tr--bubble) .nt-tr-pill {
   bottom: 56px;
 }

@@ -7,6 +7,8 @@
 //   generated markdown; its projection saves through `panels:update`;
 // - failed (or timed out): the failure copy and, for the owner, a retry into the panel;
 // - idle: generates into this panel on open, for the owner.
+// On a course note, completed notes end with the scope footer, and a `[mm:ss]` citation seeks the
+// lesson's player (lesson-scope.tsx).
 
 import {
   useCallback,
@@ -30,6 +32,7 @@ import { NotulaEditor, roomIdFor, type EditorHandle } from '../../editor'
 import { findTurnForQuote, groupTurns } from '../transcript/turns'
 import { useLiveTranscript } from '../transcript/live-transcript'
 import { IconTranscript } from './icons'
+import { LessonNotesFooter, useCitationJump } from './lesson-scope'
 import { liveNotesMarkdown } from './regenerate'
 import { StreamingNotes } from './StreamingNotes'
 import { useGeneration, useNote, usePanelsSnapshot, type Generation } from './store'
@@ -159,6 +162,7 @@ function RevealHost({
 }): JSX.Element {
   const { chunks } = useLiveTranscript(noteId)
   const turns = useMemo(() => groupTurns(chunks), [chunks])
+  const jump = useCitationJump(noteId)
   const hostRef = useRef<HTMLDivElement>(null)
   const [target, setTarget] = useState<{ top: number; text: string } | null>(null)
   const backed = useRef(new Map<string, boolean>())
@@ -192,7 +196,7 @@ function RevealHost({
   }
 
   return (
-    <div className="enh-reveal-host" ref={hostRef} onMouseMove={onMove} onMouseLeave={() => setTarget(null)}>
+    <div className="enh-reveal-host" ref={hostRef} onMouseMove={onMove} onMouseLeave={() => setTarget(null)} {...(jump ? { onClickCapture: jump } : {})}>
       {children}
       {target ? (
         <span className="n-tooltip n-tooltip--end enh-reveal" style={{ top: target.top }} data-tooltip="Show in transcript">
@@ -255,6 +259,7 @@ function PanelView({ noteId, panelId, onSelectPanel, onShowInTranscript, onEdito
     return (
       <RevealHost noteId={noteId} onShowInTranscript={onShowInTranscript}>
         <Completed panel={panel} gen={gen} own={own} {...hooks} />
+        <LessonNotesFooter noteId={noteId} />
       </RevealHost>
     )
   }

@@ -991,6 +991,29 @@ export interface InvokeChannels {
   'sources:link-capturing-note': [{ noteId: string; playbackId: string }, NoteSource]
   /** Seeks the playing session of the note's lesson; with none, opens the lesson and seeks when it plays. */
   'sources:seek': [SeekRequest, SeekResult]
+  /**
+   * The watched scope Generate notes would use (the scope picker, the footer, the budget warning).
+   * `choice` sets the note's pick (in memory, until restart); positions are video ms.
+   */
+  'sources:lesson-notes-scope': [
+    { noteId: string; choice?: 'watched' | 'whole' },
+    {
+      startMs: number | null
+      endMs: number | null
+      totalMs: number | null
+      noteCount: number
+      /** Where the model's budget cuts the scoped transcript; null when it fits. */
+      cutAtMs: number | null
+      choice: 'watched' | 'whole'
+      /** The automatic pick: the whole video when watched ≥ 85 % or there are no spans. */
+      defaultChoice: 'watched' | 'whole'
+      watchedMs: number
+      /** The watched spans' positions, merged, without the margin. */
+      ranges: [number, number][]
+      /** Where the most recent span ended: the last watched position. */
+      lastMs: number | null
+    } | null
+  ]
   /** Export lessons: a new folder `<Course> <date>`, never overwriting. Null when cancelled. */
   'sources:export-series': [{ seriesId: string }, ExportSeriesResult | null]
   /** Refresh from playlist (playlist courses). Refused in local-only mode. */
@@ -2183,6 +2206,7 @@ export interface NotulaApi {
     linkCapturingNote: InvokeMember<'sources:link-capturing-note'>
     seek: InvokeMember<'sources:seek'>
     exportSeries: InvokeMember<'sources:export-series'>
+    lessonNotesScope: InvokeMember<'sources:lesson-notes-scope'>
     refreshCatalog: InvokeMember<'sources:refresh-catalog'>
     openLesson: InvokeMember<'sources:open-lesson'>
     pickVaultFolder: InvokeMember<'sources:pick-vault-folder'>

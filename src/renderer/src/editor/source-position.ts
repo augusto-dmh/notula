@@ -9,7 +9,11 @@
 //   the feed holds stamping, or with `sources.stampPositions` off.
 // - Re-stamp: a span the position store closes with a measured rate that differs from the one
 //   the stamps used has its paragraphs recomputed from their wall times.
-// - Chips: a stamped paragraph shows `[mm:ss]`; a click opens the source at that time.
+// - Chips: a stamped paragraph shows `[mm:ss]`; a click seeks the playing session of the lesson
+//   (`sources:seek`: the player, else the lesson opens and seeks once it plays), Shift-click opens
+//   the link at that time. `jumpToPosition` is the same jump for transcript times and citations.
+// - Copy (Ctrl+C) of stamped paragraphs puts `[mm:ss](link)` before each, in the text and the
+//   HTML flavours (`stampedCopyFlavors`, called by the editor's copy handler).
 // - `Ctrl+Alt+T` inserts a linked `[mm:ss]` at the caret; a mark (`sources:mark`) appends an
 //   empty stamped paragraph at the end of the note.
 // - The stamped Markdown: each stamped paragraph prefixed `[mm:ss](url&t=)`, through the one
@@ -38,6 +42,7 @@ import {
   type SpanCorrection
 } from '../features/sources/note/source-store'
 import { getPrefs, startPrefs } from '../features/settings/prefs-store'
+import { copyFlavors, type CopyFlavors, type CopyHeader } from './copy'
 import { htmlToMarkdown, renderFragment } from './markdown'
 import { PASTE_TIMESTAMP } from './paste'
 
@@ -134,30 +139,81 @@ function openAt(url: string, ms: number): void {
   window.open(positionLink(url, ms), '_blank', 'noopener')
 }
 
-function chip(ms: number, url: string | null): HTMLElement {
+/**
+ * Jumps to a video position of a source note: Shift opens the link at that time in a new tab;
+ * otherwise main seeks the lesson's player (bringing it forward from the main window) or opens
+ * the lesson and seeks once it plays. A toast says which. Without Sources in main, the link opens.
+ */
+export async function jumpToPosition(noteId: string, url: string | null, ms: number, opts: { newTab?: boolean } = {}): Promise<void> {
   const label = formatPosition(ms)
-  if (!url) {
-    const span = document.createElement('span')
-    span.className = 'ne-stamp ne-stamp--static'
-    span.contentEditable = 'false'
-    span.textContent = label
-    span.setAttribute('aria-label', `Video position ${label}`)
-    return span
+  if (opts.newTab) {
+    if (url) openAt(url, ms)
+    return
   }
+  const result = await trySources('sources:seek-failed', () => window.notula.sources.seek({ noteId, positionMs: Math.max(0, Math.round(ms)), bringForward: true }))
+  if (result === 'ok') showToast({ id: 'source-jump', title: `Jumped to ${label}` })
+  else if (result === 'opened' || result === 'gone') showToast({ id: 'source-jump', title: 'Opened the lesson' })
+  else if (result === 'refused') showToast({ id: 'source-jump', title: `Opened the lesson at ${label}`, description: 'The player didn’t accept the jump.' })
+  else if (url) openAt(url, ms)
+  else showToast({ id: 'source-jump', kind: 'error', title: 'Couldn’t jump there', description: 'Play the lesson, then try again.' })
+}
+
+function chip(ms: number, a: ActiveSource): HTMLElement {
+  const label = formatPosition(ms)
   const button = document.createElement('button')
   button.type = 'button'
   button.className = 'ne-stamp'
   button.contentEditable = 'false'
   button.textContent = label
-  button.title = `Open the video at ${label}`
-  button.setAttribute('aria-label', `Open the video at ${label}`)
+  button.title = a.url ? `Jump to ${label} (Shift: open the link)` : `Jump to ${label}`
+  button.setAttribute('aria-label', `Jump to ${label} in the video`)
   // Keep the caret where it is.
   button.addEventListener('mousedown', (e) => e.preventDefault())
   button.addEventListener('click', (e) => {
     e.preventDefault()
-    openAt(url, ms)
+    void jumpToPosition(a.noteId, a.url, ms, { newTab: e.shiftKey })
   })
   return button
+}
+
+/**
+ * Ctrl+C on the note's stamped paragraphs: both flavours with `[mm:ss](link)` (or `[mm:ss]`
+ * without a link) before each. Null when the editor isn't the active source note's or nothing
+ * copied is stamped; the editor's own copy then runs unchanged.
+ */
+export function stampedCopyFlavors(view: EditorView, html: string, header: CopyHeader | null): CopyFlavors | null {
+  const a = binding(view)
+  if (!a || !/data-source-position=/.test(html)) return null
+  const tokens: string[] = []
+  const prefixed = (forText: boolean): string => {
+    const host = document.createElement('div')
+    host.innerHTML = html
+    let any = false
+    for (const p of Array.from(host.querySelectorAll<HTMLElement>('p[data-source-position]'))) {
+      const ms = readNumber(p, 'data-source-position')
+      if (ms === null || (p.textContent ?? '').trim() === '') continue
+      const label = `[${formatPosition(ms)}]`
+      let prefix: Node
+      if (forText) {
+        // The text flavour drops link targets, so the stamp goes in as a token and comes back after.
+        prefix = document.createTextNode(`NOTULASTAMP${tokens.length}X`)
+        tokens.push(a.url ? `${label}(${positionLink(a.url, ms)})` : label)
+      } else if (a.url) {
+        const link = document.createElement('a')
+        link.setAttribute('href', positionLink(a.url, ms))
+        link.textContent = label
+        prefix = link
+      } else prefix = document.createTextNode(label)
+      p.insertBefore(document.createTextNode(' '), p.firstChild)
+      p.insertBefore(prefix, p.firstChild)
+      any = true
+    }
+    return any ? host.innerHTML : ''
+  }
+  const forHtml = prefixed(false)
+  if (!forHtml) return null
+  const text = copyFlavors(prefixed(true), header).text.replace(/NOTULASTAMP(\d+)X/g, (m, i: string) => tokens[Number(i)] ?? m)
+  return { html: copyFlavors(forHtml, header).html, text }
 }
 
 function buildDecorations(doc: PmNode, a: ActiveSource | null): DecorationSet {
@@ -168,10 +224,10 @@ function buildDecorations(doc: PmNode, a: ActiveSource | null): DecorationSet {
     const ms = stampOf(node)
     if (ms !== null) {
       decos.push(
-        Decoration.widget(pos + 1, () => chip(ms, a.url), {
+        Decoration.widget(pos + 1, () => chip(ms, a), {
           side: -1,
           ignoreSelection: true,
-          key: `stamp:${ms}:${a.url ?? ''}`,
+          key: `stamp:${ms}:${a.noteId}:${a.url ?? ''}`,
           stopEvent: () => true
         })
       )

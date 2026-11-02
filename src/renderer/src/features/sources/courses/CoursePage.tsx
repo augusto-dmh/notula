@@ -3,7 +3,7 @@
 // Needs a lesson, Duplicates and Merge.
 //
 // - Drawn from one `sources:get-course` (the course view): no call per row.
-// - The menu: Course settings, Refresh from playlist (playlist courses), Remove from Courses.
+// - The menu: Course settings, Export lessons…, Refresh from playlist (playlist courses), Remove from Courses.
 //   Remove keeps notes, folder and lesson list, and its toast offers Undo.
 // - A lesson row with a note opens the note; one without opens the lesson (in its course app
 //   when the course has one).
@@ -21,6 +21,7 @@ import { ActionMenu, type ActionMenuAnchor, type ActionMenuEntry } from '../../n
 import { Duplicates } from '../series/SeriesFolderPanel'
 import { ImportCatalogDialog, MergeDialog, type MergeCandidate } from '../series/series-dialogs'
 import { AddCourseSheet } from './AddCourseSheet'
+import { exportLessons } from './export-lessons'
 import { failure, lessonLabel, openLesson, plural, removeCourseWithUndo } from './helpers'
 import { LessonPicker } from './LessonPicker'
 import './courses.css'
@@ -197,7 +198,7 @@ export function CoursePage({ seriesId }: { seriesId: string }): JSX.Element | nu
 
   const entries: ActionMenuEntry[] = [
     { kind: 'item', id: 'course-settings', label: 'Course settings', onSelect: () => setDialog({ kind: 'settings' }) },
-    // Export lessons… joins here.
+    { kind: 'item', id: 'course-export', label: 'Export lessons…', onSelect: () => void exportLessons(seriesId) },
     ...(series.kind === 'playlist'
       ? [{ kind: 'item' as const, id: 'course-refresh', label: 'Refresh from playlist', onSelect: () => void refreshList() }]
       : []),

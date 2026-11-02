@@ -9,7 +9,13 @@
 //
 // A source note (content sources) shows its transcript plan above the list, leaves out
 // superseded sessions, shows either the video's captions or the audio transcript, and labels
-// each turn with its video time instead of a speaker.
+// each turn with its video time instead of a speaker:
+// - the transcript follows the video: while the note is fed a position, the line at that position
+//   is highlighted and kept in view, until the user scrolls (Follow the video resumes it);
+// - lines outside the watched spans are dimmed (a course note's `sources:lesson-notes-scope`);
+// - a turn's time seeks the lesson's player (`jumpToPosition`); Shift-click opens the link;
+// - caption tracks are named as languages ("English, auto-generated");
+// - with no live playback, the panel opens at the last watched position, else the last stamp.
 //
 // Speaker profiles: a word-level turn's label is the speaker pill. While the
 // note's job runs, the top of the list says "Naming speakers…" and the pills don't open. In
@@ -21,9 +27,12 @@ import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type Keybo
 import { hasWordLabels, type IdentityTurn } from '@shared/lib/speakers'
 import { isUntimedChunk, sourceTranscriptChunks, sourceTranscriptViews, type SourceTranscriptView } from '@shared/lib/source-transcript'
 import { transcriptCopyText } from '@shared/lib/transcript-text'
+import type { InvokeRes } from '@shared/ipc'
 import type { Note } from '@shared/types/notes'
+import type { NoteSource, NoteSourceView } from '@shared/types/sources'
 import type { TranscriptChunk } from '@shared/types/transcript'
 import { showToast } from '../../app/toast'
+import { jumpToPosition } from '../../editor/source-position'
 import { AudioHealthBanner } from '../capture'
 import { useCaptureSnapshot } from '../capture/store'
 import { useNote } from '../enhance/store'
@@ -31,6 +40,7 @@ import { NuxTip } from '../nux'
 import { TranscriptDeletedNotice } from '../retention'
 import { TranscriptReportButton, TranscriptReportMenuItems, TranscriptSelectionActions } from '../transcript-reports'
 import { cancelPickMode, pickTurn, usePickMode } from '../speaker-profiles'
+import { positionNow, startPositionFeed, trySources } from '../sources/note/source-store'
 import type { TranscriptPanelProps } from './index'
 import { LanguageMenu } from './LanguageMenu'
 import { mediaTurns, positionLabel, SourcePlanBar, useNoteSource } from './SourcePlan'
@@ -48,6 +58,58 @@ const BOTTOM_TOLERANCE_PX = 48
 const COPIED_MS = 3_000
 const HIGHLIGHT_MS = 6_000
 const IS_MAC = typeof navigator !== 'undefined' && /Mac/i.test(navigator.userAgent)
+/** How often the panel reads the video position while following. */
+const FOLLOW_TICK_MS = 1_000
+/** How often a fed course note's watched spans are read again. */
+const SCOPE_REFRESH_MS = 30_000
+/** A source turn runs about this much video (SourcePlan's `mediaTurns`). */
+const SOURCE_TURN_MS = 15_000
+
+type LessonScope = InvokeRes<'sources:lesson-notes-scope'>
+
+/** A caption track as a language: "English", "English, auto-generated". */
+function trackName(lang: string, auto: boolean): string {
+  let name = lang
+  try {
+    name = new Intl.DisplayNames(['en'], { type: 'language' }).of(lang.replace(/-orig$/i, '')) ?? lang
+  } catch {
+    name = lang
+  }
+  return auto ? `${name}, auto-generated` : name
+}
+
+/** The source as the plan bar shows it: its caption track named as a language. */
+function namedTrack(view: NoteSourceView | null): NoteSourceView | null {
+  const s = view?.source
+  if (!view || !s?.track_language) return view
+  const lang = s.track_language
+  const track = s.enrichment?.captionTracks.find((t) => t.lang === lang)
+  const auto = track ? track.kind === 'asr' : /-orig$/i.test(lang)
+  const source: NoteSource = { ...s, track_language: trackName(lang, auto) }
+  return { ...view, source }
+}
+
+/** The last `[mm:ss]` (or `[h:mm:ss]`) stamp of the stamped projection, in ms. */
+function lastStampMs(stamped: string | null): number | null {
+  let last: number | null = null
+  for (const m of (stamped ?? '').matchAll(/\[(?:(\d+):)?(\d{1,2}):(\d{2})\]/g)) {
+    last = ((Number(m[1] ?? 0) * 60 + Number(m[2])) * 60 + Number(m[3])) * 1_000
+  }
+  return last
+}
+
+/** The turn at a video position: the one with the latest start at or before it, else the first. */
+function turnAt(turns: { positionMs: number | null }[], ms: number): number {
+  let idx = -1
+  let best = -Infinity
+  turns.forEach((t, i) => {
+    if (t.positionMs !== null && t.positionMs <= ms && t.positionMs >= best) {
+      best = t.positionMs
+      idx = i
+    }
+  })
+  return idx >= 0 ? idx : turns.findIndex((t) => t.positionMs !== null)
+}
 
 interface Match {
   turn: number
@@ -187,6 +249,8 @@ export function TranscriptPanel({ noteId, reveal, onClose, variant = 'note' }: T
   // An untimed import's turns show no time (its times are 1 s offsets).
   const untimed = useMemo(() => new Set(chunks.filter(isUntimedChunk).map((c) => c.id)), [chunks])
   const videoTimes = useMemo(() => new Map((sourceTurns ?? []).map((t) => [t.id, positionLabel(t.positionMs)])), [sourceTurns])
+  const videoPositions = useMemo(() => new Map((sourceTurns ?? []).map((t) => [t.id, t.positionMs])), [sourceTurns])
+  const planView = useMemo(() => namedTrack(sourceView), [sourceView])
   const bubble = variant === 'bubble'
   const scrollRef = useRef<HTMLDivElement>(null)
   const findRef = useRef<HTMLInputElement>(null)
@@ -202,6 +266,54 @@ export function TranscriptPanel({ noteId, reveal, onClose, variant = 'note' }: T
   const handledReveal = useRef<number | null>(null)
   // A purged transcript shows the retention notice instead of the empty state.
   const transcriptDeleted = !!useNote(noteId)?.transcript_purged_at
+
+  // Following the video: the fed position, the line at it, and whether the user scrolled away.
+  const sourceKey = source?.canonical_key ?? null
+  const [nowMs, setNowMs] = useState<number | null>(null)
+  useEffect(() => {
+    if (!sourceKey || bubble) {
+      setNowMs(null)
+      return
+    }
+    startPositionFeed()
+    const tick = (): void => setNowMs(positionNow(noteId, sourceKey)?.positionMs ?? null)
+    tick()
+    const t = window.setInterval(tick, FOLLOW_TICK_MS)
+    return () => clearInterval(t)
+  }, [noteId, sourceKey, bubble])
+  const fed = nowMs !== null
+  const [followPaused, setFollowPaused] = useState(false)
+  // A new playback follows again.
+  useEffect(() => {
+    if (!fed) setFollowPaused(false)
+  }, [fed])
+  const currentTurn = useMemo(() => (nowMs !== null && sourceTurns ? turnAt(sourceTurns, nowMs) : -1), [nowMs, sourceTurns])
+  // The watched spans (dimming) and the last watched position; undefined until read.
+  const [scope, setScope] = useState<LessonScope | undefined>(undefined)
+  useEffect(() => {
+    if (!sourceKey || bubble) {
+      setScope(null)
+      return
+    }
+    let alive = true
+    const load = (): void =>
+      void trySources('sources:lesson-notes-scope-failed', () => window.notula.sources.lessonNotesScope({ noteId })).then((r) => {
+        if (alive) setScope(r)
+      })
+    load()
+    const t = fed ? window.setInterval(load, SCOPE_REFRESH_MS) : undefined
+    return () => {
+      alive = false
+      clearInterval(t)
+    }
+  }, [noteId, sourceKey, bubble, fed])
+  const ranges = scope?.ranges ?? []
+  const outsideWatched = (pos: number | null | undefined): boolean =>
+    ranges.length > 0 && pos !== null && pos !== undefined && !ranges.some(([a, b]) => pos + SOURCE_TURN_MS >= a && pos <= b)
+  /** Set once a source note opened at its last watched position or stamp. */
+  const positioned = useRef(false)
+  const videoMode = useRef(false)
+  videoMode.current = !!source && (fed || positioned.current)
 
   const origin = turns[0]?.startMs ?? 0
   // Row 0 is the consent notice; the bubble panel has none, and nor does a source note (a video
@@ -251,8 +363,33 @@ export function TranscriptPanel({ noteId, reveal, onClose, variant = 'note' }: T
   // transcript reveal still to be handled wins: following would scroll its turn away.
   useEffect(() => {
     const revealPending = !!reveal && handledReveal.current !== reveal.nonce
-    if (atBottomRef.current && !highlight && !revealPending) scrollToLatest()
+    // A source note follows the video instead, or stays where it opened.
+    if (atBottomRef.current && !highlight && !revealPending && !videoMode.current) scrollToLatest()
   }, [chunks])
+
+  // The line at the video's position stays in view while the user doesn't scroll.
+  useEffect(() => {
+    if (!fed || followPaused || currentTurn < 0 || findOpen || highlight) return
+    virtualizer.scrollToIndex(currentTurn + lead, { align: 'center' })
+  }, [fed, followPaused, currentTurn, findOpen, highlight, virtualizer, lead])
+
+  // With no live playback, open at the last watched position, else the last stamp.
+  useEffect(() => {
+    if (positioned.current || !source || !sourceTurns?.length || !loaded || fed || scope === undefined) return
+    if (reveal && handledReveal.current !== reveal.nonce) return
+    const at = scope?.lastMs ?? lastStampMs(source.notes_md_stamped)
+    if (at === null) return
+    const idx = turnAt(sourceTurns, at)
+    if (idx < 0) return
+    positioned.current = true
+    videoMode.current = true
+    virtualizer.scrollToIndex(idx + lead, { align: 'center' })
+  }, [source, sourceTurns, loaded, fed, scope, reveal, virtualizer, lead])
+
+  /** A scroll the user made (wheel, touch, the scrollbar) stops following the video. */
+  const userScrolled = useCallback((): void => {
+    if (fed) setFollowPaused(true)
+  }, [fed])
 
   // Show in transcript: highlight the matching turn and centre it.
   useEffect(() => {
@@ -415,7 +552,7 @@ export function TranscriptPanel({ noteId, reveal, onClose, variant = 'note' }: T
       </header>
       )}
       {!bubble && sourceView && (
-        <SourcePlanBar noteId={noteId} view={sourceView} views={views} shown={shown} onShow={setShownPick} />
+        <SourcePlanBar noteId={noteId} view={planView ?? sourceView} views={views} shown={shown} onShow={setShownPick} />
       )}
       {!bubble && <AudioHealthBanner noteId={noteId} />}
       {/* The speaker-name suggestion card, top of the panel. */}
@@ -466,7 +603,17 @@ export function TranscriptPanel({ noteId, reveal, onClose, variant = 'note' }: T
         </div>
       )}
 
-      <div className="nt-tr-scroll" ref={scrollRef} onScroll={onScroll}>
+      <div
+        className="nt-tr-scroll"
+        ref={scrollRef}
+        onScroll={onScroll}
+        onWheel={userScrolled}
+        onTouchMove={userScrolled}
+        onMouseDown={(e) => {
+          // A press on the scrollbar itself.
+          if (e.target === e.currentTarget) userScrolled()
+        }}
+      >
         <div className="nt-tr-list" style={{ height: virtualizer.getTotalSize() }}>
           {items.map((item) => {
             const style = { transform: `translateY(${item.start}px)` }
@@ -495,6 +642,7 @@ export function TranscriptPanel({ noteId, reveal, onClose, variant = 'note' }: T
             const timeless = untimed.has(turn.chunkIds[0] ?? '')
             const elapsedAbove = !source && !timeless && !!prev && prev.chunkIds.length >= 2 && prev.source !== turn.source
             const videoTime = source ? videoTimes.get(turn.id) : null
+            const videoPos = source ? videoPositions.get(turn.id) : null
             const turnMatches = matches.filter((m) => m.turn === i)
             const isSelected = selected.has(turn.id)
             return (
@@ -506,7 +654,9 @@ export function TranscriptPanel({ noteId, reveal, onClose, variant = 'note' }: T
                     turn.source === 'microphone' ? 'nt-tr-me' : 'nt-tr-them',
                     highlight === turn.id ? 'nt-tr-highlight' : '',
                     isSelected ? 'nt-tr-selected' : '',
-                    turn.held ? 'nt-tr-held' : ''
+                    turn.held ? 'nt-tr-held' : '',
+                    fed && i === currentTurn ? 'nt-tr-current' : '',
+                    outsideWatched(videoPos) ? 'nt-tr-unwatched' : ''
                   ].join(' ')}
                   onClickCapture={
                     picking
@@ -542,7 +692,23 @@ export function TranscriptPanel({ noteId, reveal, onClose, variant = 'note' }: T
                       ) : (
                         turn.label && <span className="nt-tr-label">{turn.label}</span>
                       )}
-                      {!timeless && <span className="nt-tr-time">{videoTime ?? formatElapsed(turn.startMs - origin)}</span>}
+                      {!timeless &&
+                        (videoTime && videoPos !== null && videoPos !== undefined ? (
+                          <button
+                            type="button"
+                            className="nt-tr-time nt-tr-time--jump"
+                            title={source?.url ? `Jump to ${videoTime} (Shift: open the link)` : `Jump to ${videoTime}`}
+                            aria-label={`Jump to ${videoTime} in the video`}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              void jumpToPosition(noteId, source?.url ?? null, videoPos, { newTab: e.shiftKey })
+                            }}
+                          >
+                            {videoTime}
+                          </button>
+                        ) : (
+                          <span className="nt-tr-time">{videoTime ?? formatElapsed(turn.startMs - origin)}</span>
+                        ))}
                       {turn.held && <span className="nt-tr-held-mark">Held back</span>}
                     </div>
                     <div className="nt-tr-text">{highlighted(turn.text, turnMatches, active)}</div>
@@ -585,8 +751,13 @@ export function TranscriptPanel({ noteId, reveal, onClose, variant = 'note' }: T
             onClear={() => setSelected(new Set())}
           />
         </div>
+      ) : fed && followPaused ? (
+        <button type="button" className="nt-tr-follow" onClick={() => setFollowPaused(false)}>
+          Follow the video
+        </button>
       ) : (
         !atBottom &&
+        !fed &&
         turns.length > 0 && (
           <button type="button" className="nt-tr-jump" aria-label="Jump to the latest" title="Jump to the latest" onClick={scrollToLatest}>
             ↓

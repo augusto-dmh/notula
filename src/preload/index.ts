@@ -1493,6 +1493,7 @@ const api: NotulaApi = {
     linkCapturingNote: (req) => ipcRenderer.invoke('sources:link-capturing-note' satisfies InvokeChannel, req),
     seek: (req) => ipcRenderer.invoke('sources:seek' satisfies InvokeChannel, req),
     exportSeries: (req) => ipcRenderer.invoke('sources:export-series' satisfies InvokeChannel, req),
+    lessonNotesScope: (req) => ipcRenderer.invoke('sources:lesson-notes-scope' satisfies InvokeChannel, req),
     refreshCatalog: (req) => ipcRenderer.invoke('sources:refresh-catalog' satisfies InvokeChannel, req),
     openLesson: (req) => ipcRenderer.invoke('sources:open-lesson' satisfies InvokeChannel, req),
     pickVaultFolder: () => ipcRenderer.invoke('sources:pick-vault-folder' satisfies InvokeChannel),

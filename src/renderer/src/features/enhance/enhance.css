@@ -40,6 +40,50 @@
   animation: enh-rise var(--dur) var(--ease);
 }
 
+/* A course note: the scope picker beside Generate notes, the budget warning above them. */
+.enh-generate-group {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.enh-scope {
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  box-shadow: var(--shadow);
+  cursor: pointer;
+}
+
+.enh-scope-warning {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  width: max-content;
+  max-width: 420px;
+  margin: 0;
+  padding: 6px 10px;
+  transform: translateX(-50%);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg-2);
+  font-size: 12px;
+  box-shadow: var(--shadow);
+}
+
+/* The scope the generated notes describe. */
+.enh-scope-footer {
+  margin: 16px 0 0;
+  color: var(--fg-3);
+  font-size: 12px;
+}
+
 @keyframes enh-rise {
   from {
     opacity: 0;

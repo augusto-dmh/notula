@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // GenerateButton and the "Transcript
-// updated" toast after a stop, both for the open note.
+// updated" toast after a stop, both for the open note. On a course note it carries the scope
+// picker and the budget warning (lesson-scope.tsx).
 
 import { useEffect, useRef, useState, type JSX } from 'react'
 import { parseError } from '@shared/errors'
@@ -12,6 +13,7 @@ import { showToast } from '../../app/toast'
 import { useCaptureState } from '../capture'
 import { temporaryTemplateId } from '../templates'
 import { plainLength } from './EnhancedView'
+import { ScopePicker, ScopeWarning, useLessonScope } from './lesson-scope'
 import { registerNotesMarkdown, regenerateWith } from './regenerate'
 import { orderPanels, useNote, useNoteGenerating, usePanelsSnapshot, useTranscriptCount } from './store'
 import './enhance.css'
@@ -67,6 +69,18 @@ export function GenerateButton({ noteId, getNotesMarkdown }: GenerateButtonProps
   }, [visible, note?.notes_text])
 
   if (!visible) return null
+  return <GenerateControls noteId={noteId} getNotesMarkdown={getNotesMarkdown} notesChars={notesChars} onBusy={setBusy} />
+}
+
+/** The button, and on a course note the scope it will use. */
+function GenerateControls({
+  noteId,
+  getNotesMarkdown,
+  notesChars,
+  onBusy
+}: GenerateButtonProps & { notesChars: number; onBusy(busy: boolean): void }): JSX.Element {
+  const { scope, choose } = useLessonScope(noteId, true)
+  const setBusy = onBusy
   const label = notesChars > NOTES_CHARS_THRESHOLD ? 'Enhance notes' : 'Generate notes'
 
   const onClick = (): void => {
@@ -85,11 +99,19 @@ export function GenerateButton({ noteId, getNotesMarkdown }: GenerateButtonProps
       .finally(() => setBusy(false))
   }
 
-  return (
+  const button = (
     <button type="button" className="n-btn n-btn--primary enh-generate" onClick={onClick}>
       <IconSparkle size={16} />
       {label}
     </button>
+  )
+  if (!scope) return button
+  return (
+    <span className="enh-generate-group">
+      <ScopeWarning scope={scope} />
+      {button}
+      <ScopePicker scope={scope} onChoose={choose} />
+    </span>
   )
 }
 

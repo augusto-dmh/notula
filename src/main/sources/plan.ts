@@ -61,6 +61,7 @@ import { expected } from '../ipc-expected'
 import { log } from '../log'
 import { egressBlocked } from '../privacy'
 import { labelQueue, type ChunkFieldPatch } from '../speakers/label-queue'
+import { scopeChoice } from './lesson-scope'
 import { transcriptionControl } from '../transcription'
 import {
   extensionCues,
@@ -533,7 +534,8 @@ export async function sourcePromptInputs(
 /** The watched scope of a source note's (position-mapped) chunks. */
 async function scopeOf(ctx: MainContext, source: NoteSource, chunks: TranscriptChunk[]): Promise<{ chunks: TranscriptChunk[]; scope: WatchedScope }> {
   const [spans, note] = await Promise.all([ctx.storage.listSourceSpans(source.note_id), ctx.storage.getNote(source.note_id).catch(() => null)])
-  return watchedScope(chunks, spans, source.live ? null : source.duration_ms, noteCount(source.notes_md_stamped ?? note?.notes_md ?? ''))
+  // The scope picker's Whole video: no spans is the whole transcript.
+  return watchedScope(chunks, scopeChoice(source.note_id) === 'whole' ? [] : spans, source.live ? null : source.duration_ms, noteCount(source.notes_md_stamped ?? note?.notes_md ?? ''))
 }
 
 /** The user's notes as the footer counts them: non-empty paragraphs and list items. */

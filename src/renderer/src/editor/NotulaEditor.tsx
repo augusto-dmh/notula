@@ -23,6 +23,7 @@ import { highlightPassage, locatePassage, passagePlugin, replacePassage } from '
 import { NotulaPaste } from './paste'
 import { acquireRoom, releaseRoom, retryRoom, type Room, type Seed } from './room'
 import { configureMarked, MARKED_OPTIONS, schemaExtensions, type EditorKind } from './schema'
+import { stampedCopyFlavors } from './source-position'
 import { NuxTip } from '../features/nux'
 import { useEditorScope } from './scope'
 import { SuggestionMenu } from './SuggestionMenu'
@@ -346,7 +347,8 @@ function EditorCore({
             try {
               const html = renderFragment(view.state.schema, content).innerHTML
               const header = wholeDocumentSelected(view.state) ? headerRef.current : null
-              const flavors = copyFlavors(html, header)
+              // A source note's stamped paragraphs keep their `[mm:ss](link)` (source-position.ts).
+              const flavors = stampedCopyFlavors(view, html, header) ?? copyFlavors(html, header)
               event.clipboardData.setData('text/html', flavors.html)
               event.clipboardData.setData('text/plain', flavors.text)
               event.preventDefault()

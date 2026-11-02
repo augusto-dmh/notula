@@ -66,6 +66,7 @@ import { identify, searchSources } from './identify'
 import { onLessonFinished } from './lesson-notes'
 import { isGuessKey, SourceOffers } from './offer'
 import { choosePlan, registerTranscriptPlan } from './plan'
+import { registerLessonScope } from './lesson-scope'
 import { registerSeek } from './seek'
 import { registerSeries } from './series'
 import { renderSourceTitle } from './titles'
@@ -160,7 +161,9 @@ export function registerSources(ctx: MainContext): void {
   registerBackfill(ctx)
   registerSourcesExtension(ctx)
   registerCourses(ctx)
-  registerSeek(ctx)
+  // Late-bound: the offer and the automation are created below.
+  registerSeek(ctx, { tracks: () => offer.current(), openLesson: (seriesId, itemId) => course.openLesson(seriesId, itemId) })
+  registerLessonScope(ctx)
 
   const { storage, bus } = ctx
   const supported = process.platform === 'win32'

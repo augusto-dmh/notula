@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Content sources in the data export. Pure: no Electron,
 // no Node built-ins and no storage access, so the storage worker's export writer
-// (storage/export-repo.ts) uses it directly.
+// (storage/export-repo.ts) uses it directly, and so does the interface's Copy as Markdown.
 //
 // - Export format 2 (`notula_export_version: 2`), read back exactly by the importer:
 //   - `notula_sections` in the front-matter lists each body section (`notes` = My notes, `panel`
@@ -18,6 +18,8 @@
 //   `series`, `lesson`, `duration`, `watched`), which Markdown apps that read front-matter can sort and group.
 // - Markdown export layout: the note's Notula folders (two levels), one `<name>.md` per note and a
 //   sibling `<name>.transcript.md`. A lesson's name starts with its number (`12 - <title>`).
+// - Export lessons (`sources:export-series`, seek.ts): that layout for one course, in a new folder
+//   `<Course> <date>`. Copy as Markdown: the flat properties, My notes stamped, the sections.
 
 import { formatPosition } from '@shared/lib/position'
 import { speakerTurns } from '@shared/lib/speakers'
@@ -182,4 +184,63 @@ export function timedTranscriptText(input: {
 /** A Markdown export note's name: `<n> - <title>` for a numbered lesson, else `<date> <title>`. */
 export function markdownNoteName(title: string, date: string, lesson: number | null): string {
   return lesson !== null ? `${lesson} - ${title}` : `${date} ${title}`.trim()
+}
+
+// ---------- Export lessons and Copy as Markdown (Courses) ----------
+
+const FOLDER_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i
+const COURSE_FOLDER_MAX = 80
+
+/** Export lessons' folder: `<Course> <YYYY-MM-DD>`, safe on Windows; `n` ≥ 2 adds ` (n)`. */
+export function courseExportFolderName(course: string, at: Date, n = 1): string {
+  let name = course
+    .replace(/[\u0000-\u001f<>:"/\|?*]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, COURSE_FOLDER_MAX)
+    .replace(/[. ]+$/, '')
+  if (!name || FOLDER_RESERVED.test(name)) name = name ? `${name} course` : 'Course'
+  const date = `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, '0')}-${String(at.getDate()).padStart(2, '0')}`
+  return `${name} ${date}${n > 1 ? ` (${n})` : ''}`
+}
+
+/** Headings move one level down (h6 stays), outside code fences. */
+function lowerHeadings(markdown: string): string {
+  let fence: string | null = null
+  return markdown
+    .split(/\r?\n/)
+    .map((line) => {
+      const f = /^\s*(```+|~~~+)/.exec(line)
+      if (f) {
+        if (fence === null) fence = f[1]![0]!
+        else if (f[1]![0] === fence) fence = null
+        return line
+      }
+      return fence === null && /^#{1,5}\s/.test(line) ? `#${line}` : line
+    })
+    .join('\n')
+}
+
+/**
+ * Copy as Markdown on a source note: the Markdown export's flat source properties as
+ * front-matter, `# title`, then My notes (the stamped projection) and each lesson-notes section
+ * as `## <title>`. No transcript. Pure, so the interface builds it from what it already has.
+ */
+export function copyAsMarkdownText(input: {
+  title: string
+  view: NoteSourceView
+  /** The note's own Markdown, used when there is no stamped projection. */
+  notesMarkdown: string
+  sections: { title: string; markdown: string }[]
+}): string {
+  const lines = ['---', ...sourcePropertyLines(input.view), '---', '']
+  const title = input.title.trim()
+  if (title) lines.push(`# ${title}`, '')
+  const add = (heading: string, markdown: string): void => {
+    const body = markdown.trim()
+    if (body) lines.push(`## ${heading}`, '', lowerHeadings(body), '')
+  }
+  add('My notes', input.view.source.notes_md_stamped?.trim() || input.notesMarkdown)
+  for (const s of input.sections) add(s.title.trim() || 'Summary', s.markdown)
+  return `${lines.join('\n').trimEnd()}\n`
 }
