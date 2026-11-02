@@ -7,7 +7,11 @@
 // source note's system-only capture asks for `['system']`: the engine never opens the
 // microphone, its two states stay `inactive`, and no microphone pin reaches the engine. The
 // sources are fixed per capture run; a switch to a note that wants other sources reopens the
-// engine with them.
+// engine with them. One exception: `closeSource` drops a source from the running run (Courses:
+// Link this note turns a meeting capture into video audio), and the other source keeps flowing.
+//
+// Main may start a capture itself (`startFromMain`: a course lesson's automatic start). The
+// renderer's store adopts it from the system state it is pushed.
 
 import { app, powerSaveBlocker } from 'electron'
 import {
@@ -292,6 +296,56 @@ export class CaptureController {
     if (JSON.stringify(prev.keywords) !== JSON.stringify(desired.keywords)) {
       this.transcription.updateKeywords(desired.noteId, desired.keywords)
     }
+  }
+
+  /**
+   * A capture main starts with no renderer request (Courses' automatic start), through the same
+   * gates. Refused while another note captures, unless `switchFrom` names that note (the next
+   * lesson of the same automatic note's playback). The desired state is remembered, so the
+   * renderer's adopted state for the same note changes nothing.
+   */
+  startFromMain(
+    noteId: string,
+    opts: { language: string; keywords: string[]; asr: DesiredOn['asr']; audioSources: AudioSource[]; switchFrom?: string | null }
+  ): boolean {
+    if (this.pending) return false
+    if (this.running && this.running.noteId !== opts.switchFrom) return false
+    if (this.running?.noteId === noteId) return true
+    const desired: DesiredOn = {
+      capture: 'on',
+      noteId,
+      requestedAt: new Date().toISOString(),
+      language: opts.language,
+      keywords: opts.keywords.slice(0, 100),
+      asr: opts.asr,
+      audioSources: [...opts.audioSources]
+    }
+    this.mainStopGuard = null
+    this.lastDesired = JSON.stringify(desired)
+    log('info', 'capture:start-from-main', { noteId, switching: !!this.running })
+    this.gatedStart(desired, this.running ? 'switch' : 'start')
+    return true
+  }
+
+  /**
+   * Drops `source` from the running capture of `noteId`; the other source has no gap. Its
+   * buffers are dropped here at once, and the engine closes its stream. False when nothing changed.
+   */
+  closeSource(noteId: string, source: AudioSource): boolean {
+    const r = this.running
+    if (!r || r.noteId !== noteId || !r.sources.includes(source) || r.sources.length < 2) return false
+    r.sources = r.sources.filter((s) => s !== source)
+    r.desired = { ...r.desired, audioSources: [...r.sources] }
+    log('info', 'capture:source-closed', { noteId, source })
+    this.setStates(source === 'microphone' ? { microphoneCapture: 'inactive', microphoneTranscription: 'inactive' } : { systemCapture: 'inactive', systemTranscription: 'inactive' })
+    pushCommand(this.ctx.windows, { type: 'close-source', source })
+    if (source === 'microphone') {
+      pushActiveDevice(this.ctx.windows, { deviceId: null, label: null })
+      if (this.input.stateChanged(true)) pushInputState(this.ctx.windows, this.input.state(true))
+    }
+    // No second `capture:started`: the session is the same one. The caller tells the parts that care.
+    this.hooks.switched(noteId, r.sources)
+    return true
   }
 
   // ---------- start gates ----------
@@ -744,7 +798,8 @@ export class CaptureController {
       return
     }
     if (!r.sources.includes(source)) {
-      // Never expected: the engine opens only the requested sources. Dropped, never transcribed.
+      // The engine opens only the requested sources; a source closed mid-run may still send a
+      // last buffer or two. Dropped, never transcribed.
       if (!this.emptyLogged.has(source)) {
         this.emptyLogged.add(source)
         log('warn', 'capture:unrequested-source-buffer', { source })

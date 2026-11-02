@@ -19,6 +19,12 @@
 // - `sources:changed` follows storage changes of the source tables; a write of the stamped
 //   projection alone is not pushed back (the renderer wrote it, and it changes on every save).
 //
+// - Courses (course-auto.ts): a recognized lesson starts by itself, or its card asks; Undo
+//   (`sources:undo-auto`), Link this note (`sources:link-capturing-note`) and Open lesson
+//   (`sources:open-lesson`) are registered here. An automatic note is created with origin
+//   `course_auto` and the Lesson template, and no window moves. `sources:lesson-finished` runs
+//   lesson notes (lesson-notes.ts).
+//
 // Nothing runs while `sources.enabled` is off or off Windows. Each part registers its own
 // channels through the calls below; keep them. Logs: state names and counts only.
 
@@ -41,19 +47,23 @@ import type {
   SourceNoteRequest,
   SourcesStatus
 } from '@shared/types/sources'
+import { LESSON_TEMPLATE_ID } from '@shared/types/sources'
 import type { MainContext } from '../context'
 import { openSettingsSection, showMainWindow } from '../lifecycle'
 import { log } from '../log'
 import { detectorStatus, mediaFeed, onDetectorStatus } from '../media'
 import { matchedFields } from '../media/match'
 import type { NoteSourceUpdate } from '../storage/api'
+import { setNoteTemplate } from '../templates/pending'
 import { egressBlocked } from '../privacy'
 import { registerBackfill } from './backfill'
 import { registerCourses } from './courses'
+import { CourseAutomation, type CourseNoteRequest } from './course-auto'
 import { registerSourcesExtension } from './extension'
 import { SourceFeed } from './feed'
 import { SourceFiling, seriesKeyOf } from './filing'
 import { identify, searchSources } from './identify'
+import { onLessonFinished } from './lesson-notes'
 import { isGuessKey, SourceOffers } from './offer'
 import { choosePlan, registerTranscriptPlan } from './plan'
 import { registerSeek } from './seek'
@@ -211,7 +221,8 @@ export function registerSources(ctx: MainContext): void {
   const feed = new SourceFeed(ctx, {
     settings: current,
     tracks: () => offers?.current() ?? [],
-    watchingEnded: (noteId) => void offerGenerate(noteId).catch((err: unknown) => log('warn', 'sources:generate-offer-failed', { err }))
+    watchingEnded: (noteId) => void offerGenerate(noteId).catch((err: unknown) => log('warn', 'sources:generate-offer-failed', { err })),
+    resumed: (noteId, playbackId) => void course.resumed(noteId, playbackId).catch((err: unknown) => log('warn', 'sources:auto-continue-failed', { err }))
   })
   offers = new SourceOffers(ctx, {
     settings: current,
@@ -221,9 +232,18 @@ export function registerSources(ctx: MainContext): void {
     mute: (m: SourceMute) => addToList('sources.muted', m, 200),
     openSettings: () => openSettingsSection('sources', 'source-card'),
     seriesKeyOf,
-    pageOf: (p) => (p.tabKey && settings?.['sources.extension.coursePages'] ? (extensionPages.get(p.tabKey) ?? null) : null)
+    pageOf: (p) => (p.tabKey && settings?.['sources.extension.coursePages'] ? (extensionPages.get(p.tabKey) ?? null) : null),
+    courseGate: (t) => course.courseGate(t)
   })
   const offer = offers
+  const course: CourseAutomation = new CourseAutomation(ctx, {
+    settings: current,
+    offers: offer,
+    feed,
+    noteFor: (req) => courseNote(req),
+    linkNote: (noteId, req) => linkCourseNote(noteId, req),
+    requestNote
+  })
 
   /** The card's Take notes / Continue / Switch note: the renderer's sources branch takes it. */
   function requestNote(req: SourceNoteRequest): void {
@@ -294,6 +314,7 @@ export function registerSources(ctx: MainContext): void {
     log('info', 'sources:active', { on: want })
     offer.setActive(want)
     feed.setActive(want)
+    course.setActive(want)
     if (want) {
       void filing.start()
       // The provider may have published before we were on.
@@ -415,11 +436,12 @@ export function registerSources(ctx: MainContext): void {
     if (now?.transcript_plan === 'pending') await storage.updateNoteSource(noteId, { transcript_plan: decision.plan })
   }
 
-  function afterNoted(noteId: string, source: NoteSource, draft: SourceDraft, playbackId: string | null, created: boolean): void {
+  function afterNoted(noteId: string, source: NoteSource, draft: SourceDraft, playbackId: string | null, created: boolean, auto = false): void {
     if (playbackId) offer.noted(playbackId, noteId)
     feed.prefer(noteId, playbackId)
     bus.emit('sources:noted', { noteId, canonicalKey: source.canonical_key, playbackId, created })
-    if (playbackId) {
+    // An automatic start moves no window.
+    if (playbackId && !auto) {
       // Docked beside the browser, as the user's meeting placement allows.
       void ctx.windowModes.set('side', { focus: true, reason: 'join' }).catch((err: unknown) => log('warn', 'sources:dock-failed', { err }))
     }
@@ -464,6 +486,61 @@ export function registerSources(ctx: MainContext): void {
     log('info', 'sources:created', { kind: source.kind, confidence: source.confidence, series: row.series?.kind ?? null })
     afterNoted(note.id, source, draft, r.playbackId, true)
     return { noteId: note.id, source, created: true }
+  }
+
+  /** The course row of a lesson draft: the recognized lesson wins over the draft's own. */
+  async function courseRow(noteId: string, req: Omit<CourseNoteRequest, 'continueId'>, generatedTitle: string | null) {
+    const row = await sourceRow(noteId, normalizeDraft(req.draft), generatedTitle)
+    return { series: row.series ?? req.series, input: { ...row.input, series_id: row.series?.id ?? req.series.id, ...req.lesson } }
+  }
+
+  /** Courses' automatic start: continue the lesson's note, or create one; no window moves. */
+  async function courseNote(req: CourseNoteRequest): Promise<{ noteId: string; source: NoteSource; created: boolean }> {
+    requireActive()
+    const draft = normalizeDraft(req.draft)
+    if (req.continueId) {
+      const note = await storage.getNote(req.continueId)
+      const existing = note && !note.deleted_at ? await storage.getNoteSource(req.continueId) : null
+      if (note && !note.deleted_at) {
+        const source = existing ?? (await storage.createNoteSource((await courseRow(req.continueId, req, null)).input))
+        log('info', 'sources:continued', { confidence: source.confidence, auto: true })
+        afterNoted(req.continueId, source, draft, req.playbackId, false, true)
+        return { noteId: req.continueId, source, created: false }
+      }
+    }
+    const note = await storage.createNote({ origin: 'course_auto', title: req.title, created_via: creationSource() })
+    let source: NoteSource
+    let series: Awaited<ReturnType<typeof courseRow>>['series']
+    try {
+      const row = await courseRow(note.id, req, req.title)
+      series = row.series
+      source = await storage.createNoteSource(row.input)
+    } catch (err) {
+      await storage.trashNote(note.id).catch(() => undefined)
+      throw err
+    }
+    // The Lesson template, while `sources.lessonTemplate` is on (as the renderer's Take notes does).
+    if (current()['sources.lessonTemplate']) setNoteTemplate(note.id, LESSON_TEMPLATE_ID)
+    await fillPeople(note.id)
+    await filing.fileNote(note.id, series).catch((err: unknown) => log('warn', 'sources:filing-failed', { err }))
+    log('info', 'sources:created', { kind: source.kind, confidence: source.confidence, series: series.kind, auto: true })
+    afterNoted(note.id, source, draft, req.playbackId, true, true)
+    return { noteId: note.id, source, created: true }
+  }
+
+  /** Link this note: the capturing note takes the lesson; its title only while it is empty. */
+  async function linkCourseNote(noteId: string, req: Omit<CourseNoteRequest, 'continueId'>): Promise<NoteSource> {
+    requireActive()
+    const note = await storage.getNote(noteId)
+    if (!note || note.deleted_at) throw notulaError('not-found', 'That note is no longer there')
+    const takesTitle = !(note.title ?? '').trim()
+    const row = await courseRow(noteId, req, takesTitle ? req.title : null)
+    const source = await storage.createNoteSource(row.input)
+    if (takesTitle) await storage.updateNote(noteId, { title: req.title })
+    await filing.fileNote(noteId, row.series).catch((err: unknown) => log('warn', 'sources:filing-failed', { err }))
+    log('info', 'sources:linked', { replaced: false, confidence: source.confidence, capturing: true })
+    afterNoted(noteId, source, normalizeDraft(req.draft), req.playbackId, false, true)
+    return source
   }
 
   async function link(raw: unknown): Promise<InvokeRes<'sources:link'>> {
@@ -569,7 +646,32 @@ export function registerSources(ctx: MainContext): void {
     await addToList('sources.dismissedHints', `${hint}:${key}`, MAX_DISMISSED_HINTS)
   })
 
+  ipcMain.handle('sources:undo-auto' satisfies InvokeChannel, (_e, req: unknown): Promise<InvokeRes<'sources:undo-auto'>> => {
+    requireActive()
+    return course.undo(noteIdRequest(req).noteId)
+  })
+
+  ipcMain.handle('sources:link-capturing-note' satisfies InvokeChannel, (_e, req: unknown): Promise<InvokeRes<'sources:link-capturing-note'>> => {
+    requireActive()
+    const { noteId } = noteIdRequest(req)
+    const playbackId = (req as { playbackId?: unknown }).playbackId
+    if (typeof playbackId !== 'string' || !playbackId || playbackId.length > 300) throw notulaError('invalid-input', 'playbackId is required')
+    return course.link(noteId, playbackId)
+  })
+
+  ipcMain.handle('sources:open-lesson' satisfies InvokeChannel, (_e, req: unknown): Promise<InvokeRes<'sources:open-lesson'>> => {
+    requireActive()
+    const { seriesId } = seriesIdRequest(req)
+    const catalogItemId = (req as { catalogItemId?: unknown }).catalogItemId
+    if (typeof catalogItemId !== 'string' || !catalogItemId || catalogItemId.length > 200) throw notulaError('invalid-input', 'catalogItemId is required')
+    return course.openLesson(seriesId, catalogItemId)
+  })
+
   // ---------- bus and storage ----------
+
+  bus.on('sources:lesson-finished', ({ noteId }) => {
+    if (active) void onLessonFinished(ctx, noteId).catch((err: unknown) => log('warn', 'sources:lesson-notes-failed', { err }))
+  })
 
   bus.on('settings:changed', ({ keys, settings: s }) => {
     settings = s

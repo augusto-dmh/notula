@@ -29,6 +29,11 @@
 // - System-audio chunks get their video position (`providerDetails.sourcePositionMs`) mapped
 //   through the watched spans: after the capture stops and its speaker labels are final, and
 //   again when spans change while the note isn't capturing. Prompts map the rest on the fly.
+// - Course notes (Courses): `coursePlan` is the automatic start's plan. A YouTube course whose video
+//   has a track in its own language, with lookups on, gets `captions` (nothing records); otherwise
+//   video audio starts at once; with no transcription set up, or local-only mode with a cloud
+//   transcription provider, `none` with the reason for the card. Their prompts use the watched
+//   scope: the lines inside the note's spans ± 60 s, or the whole video once watched ≥ 85 %.
 //
 // Nothing runs while `sources.enabled` is off or off Windows. Logs carry states and counts only.
 
@@ -48,6 +53,7 @@ import { SOURCES_LIMITS } from '@shared/types/sources'
 import { DELETED_CHUNK_MARKER, type TranscriptChunk } from '@shared/types/transcript'
 import type { MainContext } from '../context'
 import type { SourceInputs } from '../enhance/inputs'
+import { watchedScope, type WatchedScope } from '../enhance/transcript'
 import { expected } from '../ipc-expected'
 import { log } from '../log'
 import { egressBlocked } from '../privacy'
@@ -129,6 +135,36 @@ export async function choosePlan(ctx: MainContext, source: NoteSource): Promise<
   }
   if (await transcriptionReady(ctx)) return { plan: 'system-audio', track: null }
   return { plan: 'none', track: null }
+}
+
+/** Why a course note's plan is `none`, for the card's line and Set up. */
+export type CoursePlanBlock = 'no-transcription' | 'local-only'
+
+/**
+ * The automatic start's plan. `captions` waits for the note's decision window (the enrichment
+ * may still list a track), so call it after `sources:noted`. Nothing is written here.
+ */
+export async function coursePlan(ctx: MainContext, noteId: string): Promise<{ plan: Exclude<TranscriptPlan, 'pending'>; blocked: CoursePlanBlock | null }> {
+  let source = await ctx.storage.getNoteSource(noteId)
+  if (!source) return { plan: 'none', blocked: null }
+  // A YouTube course may get captions: wait out the decision window.
+  const until = Date.now() + SOURCES_LIMITS.planDecideMs
+  while (source && source.provider === 'youtube' && source.transcript_plan === 'pending' && Date.now() < until) {
+    await sleep(ENRICHMENT_POLL_MS)
+    source = await ctx.storage.getNoteSource(noteId)
+  }
+  if (!source) return { plan: 'none', blocked: null }
+  if (source.transcript_plan === 'captions' || (await usableTrack(ctx, source))) return { plan: 'captions', blocked: null }
+  if (!(await transcriptionReady(ctx))) return { plan: 'none', blocked: 'no-transcription' }
+  // Local-only mode: video audio needs on-device transcription.
+  if (await egressBlocked(ctx, { kind: 'asr', provider: await ctx.settings.get('asr.provider') })) return { plan: 'none', blocked: 'local-only' }
+  return { plan: 'system-audio', blocked: null }
+}
+
+/** Link this note: the running capture of `noteId` became system audio only. */
+export function markSystemOnly(noteId: string): void {
+  const r = runs.get(noteId)
+  if (r) r.systemOnly = true
 }
 
 // ---------- pushes ----------
@@ -468,11 +504,39 @@ export async function sourcePromptInputs(
       const [spans, session] = await Promise.all([ctx.storage.listSourceSpans(noteId), ctx.storage.latestSession(noteId).catch(() => null)])
       used = withPositions(used, spans, session?.provider ?? 'local')
     }
+    // A course note's prompts read the part watched (lesson notes, and a click on Generate notes).
+    if (series?.registered_at) used = (await scopeOf(ctx, source, used)).chunks
     return { source: { source, series: series ? { kind: series.kind, title: series.title } : null }, chunks: used }
   } catch (err) {
     log('warn', 'sources:prompt-inputs-failed', { err })
     return { source: null, chunks }
   }
+}
+
+/** The watched scope of a source note's (position-mapped) chunks. */
+async function scopeOf(ctx: MainContext, source: NoteSource, chunks: TranscriptChunk[]): Promise<{ chunks: TranscriptChunk[]; scope: WatchedScope }> {
+  const [spans, note] = await Promise.all([ctx.storage.listSourceSpans(source.note_id), ctx.storage.getNote(source.note_id).catch(() => null)])
+  return watchedScope(chunks, spans, source.live ? null : source.duration_ms, noteCount(source.notes_md_stamped ?? note?.notes_md ?? ''))
+}
+
+/** The user's notes as the footer counts them: non-empty paragraphs and list items. */
+function noteCount(markdown: string): number {
+  return markdown.split('\n').filter((l) => l.replace(/^\s*(?:>\s*)*(?:[-*+]\s+|\d+[.)]\s+)?/, '').trim() && !/^\s*#/.test(l)).length
+}
+
+/**
+ * The scope lesson notes would use now (start, end, total, note count) and the scoped chunks,
+ * for the footer and the budget check. Null for a note without a source.
+ */
+export async function lessonScope(ctx: MainContext, noteId: string): Promise<{ chunks: TranscriptChunk[]; scope: WatchedScope } | null> {
+  const source = await ctx.storage.getNoteSource(noteId)
+  if (!source) return null
+  let used = sourceTranscriptChunks(await transcriptionControl(ctx).getTranscript(noteId), source)
+  if (used.some((c) => !isCaptionChunk(c) && chunkPositionMs(c) === null)) {
+    const [spans, session] = await Promise.all([ctx.storage.listSourceSpans(noteId), ctx.storage.latestSession(noteId).catch(() => null)])
+    used = withPositions(used, spans, session?.provider ?? 'local')
+  }
+  return scopeOf(ctx, source, used)
 }
 
 // ---------- registration ----------

@@ -43,6 +43,8 @@ const STOP_REASONS: readonly StopReason[] = [
   'recording_rule',
   // End of watching (content sources)
   'source_ended',
+  // Undo on an automatic course note
+  'auto_undo',
   // Erase and pause after an off-the-record request
   'off_record'
 ]
@@ -249,6 +251,11 @@ export function registerCapture(ctx: MainContext): CaptureQuery {
     isCapturing: () => controller.isCapturing(),
     currentNoteId: () => controller.currentNoteId(),
     stop: stopFromMain,
+    startFromMain: async (noteId, opts) => {
+      const [language, keywords, asr] = await Promise.all([ctx.settings.get('asr.language'), ctx.settings.get('asr.keywords'), ctx.settings.get('asr.provider')])
+      return controller.startFromMain(noteId, { language, keywords, asr, audioSources: opts.audioSources, switchFrom: opts.switchFrom ?? null })
+    },
+    closeSource: (noteId, source) => controller.closeSource(noteId, source),
     // start gates
     registerStartGate: (g) => controller.registerStartGate(g),
     heldStart: () => controller.heldStart(),

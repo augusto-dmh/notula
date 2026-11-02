@@ -105,6 +105,14 @@ function isCardAction(e: { payload: NotificationPayload }, action: unknown): act
 
 type Decorator = Parameters<NotifyApi['registerDecorator']>[0]
 
+/**
+ * The `course-recording` card is about the recording that is running, so a capture never
+ * silences it; it never shows during onboarding.
+ */
+function quietWhileRecording(req: NotificationRequest): boolean {
+  return req.variant !== 'course-recording' && req.quietWhileRecording
+}
+
 function eventStartMs(req: NotificationRequest): number | null {
   if (!req.eventStart) return null
   const t = Date.parse(req.eventStart)
@@ -203,7 +211,7 @@ export function registerNotify(ctx: MainContext): NotifyApi {
   /** The show-time checks (no sign-in rule: Notula has no accounts). Null = show. */
   async function blockedReason(e: Entry): Promise<string | null> {
     const { req } = e
-    if (ctx.ui.inOnboarding() && !req.allowDuringOnboarding) return 'onboarding'
+    if (ctx.ui.inOnboarding() && (!req.allowDuringOnboarding || req.variant === 'course-recording')) return 'onboarding'
     const start = eventStartMs(req)
     if (req.variant === 'scheduled-meeting' && req.calendarEventId && start !== null) {
       // `meeting_notification_skip_rescheduled_meetings` on: gone or moved → drop.
@@ -219,7 +227,7 @@ export function registerNotify(ctx: MainContext): NotifyApi {
     if (start !== null && Date.now() - start > STALE_MS) return 'stale'
     const capturing = ctx.capture.currentNoteId()
     if (capturing) {
-      if (req.quietWhileRecording) return 'transcribing'
+      if (quietWhileRecording(req)) return 'transcribing'
       if (req.calendarEventId) {
         const note = await ctx.storage.getNote(capturing)
         if (note?.linked_event?.id === req.calendarEventId) return 'transcribing-this-meeting'
@@ -240,7 +248,7 @@ export function registerNotify(ctx: MainContext): NotifyApi {
     e.queueTimer = null
     if (entries.get(e.id) !== e) return
     try {
-      if (e.req.quietWhileRecording && ctx.capture.isCapturing()) return drop(e, 'transcribing')
+      if (quietWhileRecording(e.req) && ctx.capture.isCapturing()) return drop(e, 'transcribing')
       if (e.req.lastMomentCheck && !(await e.req.lastMomentCheck())) return drop(e, 'last-moment-check')
       const reason = await blockedReason(e)
       if (entries.get(e.id) !== e) return

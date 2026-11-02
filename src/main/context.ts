@@ -124,6 +124,10 @@ export interface CaptureQuery {
    * resolves after the bus `capture:stopped` for that session. Resolves at once when idle.
    */
   stop(reason: StopReason): Promise<void>
+  /** Courses: main starts capture for a note (through the gates); false when refused. */
+  startFromMain(noteId: string, opts: { audioSources: AudioSource[]; switchFrom?: string | null }): Promise<boolean>
+  /** Courses: drops one source from the running capture of `noteId`, the other with no gap. */
+  closeSource(noteId: string, source: AudioSource): boolean
   /** Runs before a fresh start and before a switch to another note, in registration order. */
   registerStartGate(g: CaptureStartGate): () => void
   /** The start that a gate is holding, if any. */

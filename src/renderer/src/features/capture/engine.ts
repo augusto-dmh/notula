@@ -116,6 +116,9 @@ export class CaptureEngine {
         this.generation++
         this.enqueue(() => this.teardownAll(true))
         return
+      case 'close-source':
+        this.enqueue(async () => this.closeSource(cmd.source))
+        return
       case 'use-input-device':
         this.enqueue(async () => {
           this.desiredDeviceId = cmd.deviceId
@@ -233,6 +236,31 @@ export class CaptureEngine {
     this.send({ type: 'active-device', deviceId: null, label: null })
     await this.reportDevices()
     this.send({ type: 'stopped' })
+  }
+
+  /**
+   * Stops one source and leaves the context and the other source running, so the other has no
+   * gap. The source isn't reopened by device changes, pins or retries until the next start.
+   */
+  private async closeSource(source: AudioSource): Promise<void> {
+    if (!this.running || !this.sources.includes(source)) return
+    const rest = this.sources.filter((s) => s !== source)
+    // The last source closing is a stop.
+    if (rest.length === 0) {
+      this.generation++
+      return this.teardownAll(true)
+    }
+    this.sources = rest
+    this.unwire(source)
+    this.clearRetry(source)
+    this.reacquireAgain.delete(source)
+    const v = this.volume[source]
+    if (v.timer !== null) clearTimeout(v.timer)
+    v.timer = null
+    v.rms = 0
+    this.send({ type: 'volume', source, rms: 0 })
+    if (source === 'microphone') this.send({ type: 'active-device', deviceId: null, label: null })
+    this.log('info', 'source-closed', { source })
   }
 
   private onContextError(kind: string): void {

@@ -53,6 +53,8 @@ export type CaptureCommand =
       audioSources?: AudioSource[]
     }
   | { type: 'stop' }
+  /** Closes one source of the running capture; the other keeps flowing (Courses: Link this note). */
+  | { type: 'close-source'; source: AudioSource }
   | { type: 'use-input-device'; deviceId: string }
   | { type: 'release-input-device' }
   | { type: 'restart-system-audio' }

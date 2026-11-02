@@ -15,6 +15,13 @@
 //   plan; Transcribe audio next to captions keeps `captions`), its playback gone
 //   (ended or removed) for 3 min, or paused for 15 min, stops the capture with reason
 //   `source_ended`. Nothing is generated: the note offers Generate notes.
+// - Finished (Courses): when a source note's capture stops, its lesson counts as finished at a
+//   position ≥ 90 % of the duration, or a session that ended within the last 60 s of it; a live
+//   playback, ended after ≥ 10 min watched. Bus `sources:lesson-finished` then, once per finish
+//   (lesson notes and the end strip follow it).
+// - Continuing after a stop: a playback with the stopped note's key that plays again within
+//   `RESUME_WINDOW_MS` of an end-of-watching stop is reported (`resumed`); the sources core
+//   continues that note when its course records automatically.
 // - A mark (the extension's shortcut, the global shortcut) appends a stamped paragraph to the fed
 //   note through the `sources:mark` push.
 // Logs carry states and counts only.
@@ -29,10 +36,16 @@ import { log } from '../log'
 import { mediaFeed } from '../media'
 import type { BindingState } from '../media/machine'
 import type { FeedView, Track } from './offer'
+import { watchedMsOf } from '../enhance/transcript'
+import { isFinished } from './automation'
 import { isSystemOnlyCapture } from './plan'
 import { SpanWriter } from './spans'
 
 const TICK_MS = 1_000
+/** A note stopped at the end of watching continues when its video plays again within this. */
+const RESUME_WINDOW_MS = 2 * 60 * 60_000
+/** A captions note's finish is checked at most this often (a lost binding binds again). */
+const CAPTION_FINISH_QUIET_MS = 10 * 60_000
 
 interface FedNote {
   noteId: string
@@ -56,6 +69,13 @@ interface Watch {
   goneSince: number | null
   pausedSince: number | null
   stopped: boolean
+  /** The newest position and duration seen during this capture (finished detection). */
+  positionMs: number | null
+  durationMs: number | null
+  live: boolean
+  seriesId: string | null
+  /** The playback was gone (ended or removed), not paused, at the last check. */
+  ended: boolean
 }
 
 export interface FeedHooks {
@@ -64,6 +84,8 @@ export interface FeedHooks {
   tracks(): Track[]
   /** The capture of a source note stopped at the end of watching: offer Generate notes. */
   watchingEnded(noteId: string): void
+  /** A note stopped at the end of watching: its video plays again. */
+  resumed(noteId: string, playbackId: string): void
 }
 
 export class SourceFeed implements FeedView {
@@ -82,6 +104,12 @@ export class SourceFeed implements FeedView {
   private lastEnd: { at: number; browser: string } | null = null
   private held = false
   private watch: Watch | null = null
+  /** The note the end of watching stopped, until its video plays again or the window passes. */
+  private lastStopped: { noteId: string; key: CanonicalKey; at: number } | null = null
+  /** The fed note's newest known position (a captions note's finish). */
+  private fedLast: { noteId: string; positionMs: number } | null = null
+  /** When a captions note's finish was last checked. */
+  private readonly captionFinishes = new Map<string, number>()
   private timer: NodeJS.Timeout | null = null
   private selecting: Promise<void> = Promise.resolve()
   private readonly sources = new Map<string, NoteSource | null>()
@@ -114,6 +142,7 @@ export class SourceFeed implements FeedView {
     this.preferred = null
     this.preferredShown = false
     this.watch = null
+    this.lastStopped = null
     this.sources.clear()
     this.stopTimer()
     void this.writer.flush()
@@ -242,6 +271,7 @@ export class SourceFeed implements FeedView {
     if ((state === 'ended' || state === 'lost') && prev) {
       // Next item: a new candidate of the same series in this browser within 30 s.
       if (wasFollowing) this.lastEnd = { at: Date.now(), browser: prev.browser }
+      if (wasFollowing) void this.fedFinishCheck(noteId, state === 'ended').catch((err: unknown) => log('warn', 'sources:finish-check-failed', { err }))
       this.bound = null
       if (this.note) this.note.playbackHint = null
       this.emitFeed()
@@ -345,7 +375,7 @@ export class SourceFeed implements FeedView {
   // ---------- the tick ----------
 
   private syncTimer(): void {
-    const want = this.active && (this.note !== null || this.watch !== null || this.ctx.capture.isCapturing())
+    const want = this.active && (this.note !== null || this.watch !== null || this.lastStopped !== null || this.ctx.capture.isCapturing())
     if (want && !this.timer) {
       this.timer = setInterval(() => this.tick(), TICK_MS)
       this.timer.unref()
@@ -368,6 +398,7 @@ export class SourceFeed implements FeedView {
   private tick(): void {
     if (!this.active) return
     const p = this.position()
+    if (p && p.positionMs !== null && !p.ad) this.fedLast = { noteId: p.noteId, positionMs: p.positionMs }
     if (p) for (const wc of this.ctx.windows.targets()) wc.send('sources:position' satisfies PushChannel, p)
     void this.checkWatching().catch((err: unknown) => log('warn', 'sources:watch-check-failed', { err }))
     this.syncTimer()
@@ -413,8 +444,14 @@ export class SourceFeed implements FeedView {
 
   private async checkWatching(): Promise<void> {
     const capturing = this.ctx.capture.currentNoteId()
-    if (!capturing) {
+    const prev = this.watch
+    if (prev && prev.noteId !== capturing) {
+      // That capture stopped (any reason) or moved to another note: was the lesson finished?
       this.watch = null
+      void this.finishCheck(prev).catch((err: unknown) => log('warn', 'sources:finish-check-failed', { err }))
+    }
+    if (!capturing) {
+      this.checkResume()
       return
     }
     const source = await this.sourceOf(capturing)
@@ -422,7 +459,21 @@ export class SourceFeed implements FeedView {
       this.watch = null
       return
     }
-    if (this.watch?.noteId !== capturing) this.watch = { noteId: capturing, seen: false, goneSince: null, pausedSince: null, stopped: false }
+    if (this.watch?.noteId !== capturing) {
+      this.watch = {
+        noteId: capturing,
+        seen: false,
+        goneSince: null,
+        pausedSince: null,
+        stopped: false,
+        positionMs: null,
+        durationMs: source.live ? null : source.duration_ms,
+        live: source.live,
+        seriesId: source.series_id,
+        ended: false
+      }
+      if (this.lastStopped?.noteId === capturing) this.lastStopped = null
+    }
     const w = this.watch
     if (w.stopped) return
     const now = Date.now()
@@ -430,6 +481,14 @@ export class SourceFeed implements FeedView {
     // A mid-roll ad suspends the playback (paused, `ad`): that isn't the user pausing.
     const playing = tracks.some((t) => t.playback.status === 'playing' || t.playback.ad)
     const paused = !playing && tracks.some((t) => t.playback.status === 'paused')
+    const sample = tracks.find((t) => !t.playback.ad && t.playback.positionMs !== null)?.playback
+    if (sample && sample.positionMs !== null) {
+      const live = sample.status === 'playing' ? sample.positionMs + Math.max(0, now - sample.updatedAt) * sample.rate : sample.positionMs
+      w.positionMs = Math.round(live)
+      if (sample.durationMs !== null && sample.durationMs > 0 && !sample.live) w.durationMs = sample.durationMs
+      w.live = w.live || sample.live
+    }
+    w.ended = !playing && !paused && w.seen
     if (playing) {
       w.seen = true
       w.goneSince = null
@@ -451,7 +510,67 @@ export class SourceFeed implements FeedView {
     if (!gone && !pausedLong) return
     w.stopped = true
     log('info', 'sources:watching-ended', { reason: gone ? 'gone' : 'paused' })
+    this.lastStopped = { noteId: capturing, key: source.canonical_key, at: now }
     await this.ctx.capture.stop('source_ended')
     this.hooks.watchingEnded(capturing)
+  }
+
+  /** After a capture of a source note stopped: `sources:lesson-finished` when the lesson finished. */
+  private async finishCheck(w: Watch): Promise<void> {
+    if (!w.seen) return
+    const spans = await this.ctx.storage.listSourceSpans(w.noteId).catch(() => [])
+    const watchedMs = watchedMsOf(spans)
+    const finished = isFinished({ durationMs: w.durationMs, live: w.live, positionMs: w.positionMs, ended: w.ended, watchedMs })
+    const watchedPercent = w.durationMs && !w.live ? Math.min(100, Math.round((watchedMs / w.durationMs) * 100)) : null
+    log('info', 'sources:finish-checked', { finished, watchedPercent, live: w.live })
+    if (finished) this.ctx.bus.emit('sources:lesson-finished', { noteId: w.noteId, seriesId: w.seriesId, watchedPercent, watchedMs })
+  }
+
+  /**
+   * A captions note records nothing, so its finish is read when its playback ends instead: the
+   * fed note's last position against its duration.
+   */
+  private async fedFinishCheck(noteId: string, ended: boolean): Promise<void> {
+    if (this.ctx.capture.currentNoteId() === noteId) return
+    const source = await this.sourceOf(noteId)
+    const last = this.fedLast?.noteId === noteId ? this.fedLast.positionMs : null
+    if (!source || source.transcript_plan !== 'captions' || last === null) return
+    const at = this.captionFinishes.get(noteId)
+    if (at !== undefined && Date.now() - at < CAPTION_FINISH_QUIET_MS) return
+    const w: Watch = {
+      noteId,
+      seen: true,
+      goneSince: null,
+      pausedSince: null,
+      stopped: true,
+      positionMs: last,
+      durationMs: source.live ? null : source.duration_ms,
+      live: source.live,
+      seriesId: source.series_id,
+      ended
+    }
+    this.captionFinishes.set(noteId, Date.now())
+    if (this.captionFinishes.size > 100) this.captionFinishes.delete(this.captionFinishes.keys().next().value as string)
+    await this.finishCheck(w)
+  }
+
+  /** The note the end of watching stopped: its video plays again. */
+  private checkResume(): void {
+    const l = this.lastStopped
+    if (!l) return
+    if (Date.now() - l.at > RESUME_WINDOW_MS) {
+      this.lastStopped = null
+      return
+    }
+    const t = this.hooks.tracks().find((x) => x.draft?.canonicalKey === l.key && x.playback.status === 'playing' && !x.playback.ad)
+    if (!t) return
+    this.lastStopped = null
+    log('info', 'sources:watching-resumed', {})
+    this.hooks.resumed(l.noteId, t.playback.id)
+  }
+
+  /** A Stop or an Undo: that note never continues by itself. */
+  forgetStopped(noteId: string): void {
+    if (this.lastStopped?.noteId === noteId) this.lastStopped = null
   }
 }

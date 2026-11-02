@@ -347,6 +347,8 @@ function placeholderCapture(): CaptureQuery {
     isCapturing: () => false,
     currentNoteId: () => null,
     stop: async () => undefined,
+    startFromMain: async () => false,
+    closeSource: () => false,
     registerStartGate: () => () => undefined,
     heldStart: () => null,
     releaseHeldStart: () => undefined,

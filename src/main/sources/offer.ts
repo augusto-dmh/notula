@@ -15,6 +15,12 @@
 // - Next item: the feed's playback ended and a candidate of the same series starts in the same
 //   browser within 30 s: a `next` card, exempt from the 120 s gap and the 12 h key rule, while
 //   the feed holds stamping until it is answered or gone.
+// - Courses: today's offer waits for the playback's course recognition (`courseGate`), and
+//   skips a playback the course flow handles. The course modes (`courseCard`): `course` (Record
+//   this lesson?), `which-course`, `link-capturing` and `add-course`. The first three are exempt
+//   from the 120 s gap and the 12 h key rule (they answer a course the user added, or the capture
+//   running now); `add-course` replaces today's offer and keeps its gates. One card at a time;
+//   a course card waits while another shows.
 // Logs carry states and counts only, never titles, channels or URLs.
 
 import type { PushChannel } from '@shared/ipc'
@@ -27,6 +33,7 @@ import type {
   PlaybackProviderId,
   PlayingItem,
   SourceCardAction,
+  SourceCardMode,
   SourceCardPayload,
   SourceDraft,
   SourceMute,
@@ -90,6 +97,33 @@ export interface OfferHooks {
   seriesKeyOf(draft: SourceDraft): CanonicalKey | null
   /** The extension's course-page facts for an extension playback's tab, when Course pages is on. */
   pageOf(playback: Playback): ExtPage | null
+  /**
+   * Courses: `wait` while the playback's recognition may still come, `skip` when the course flow
+   * handles it (a course, an ambiguous one, or a course-like playback), `go` for today's offer.
+   */
+  courseGate(t: Track): 'wait' | 'skip' | 'go'
+}
+
+/** A course-mode card the course flow asked for. */
+export interface CourseCardRequest {
+  playbackId: string
+  mode: CourseCardMode
+  title: string
+  course: string | null
+  lesson: string | null
+  candidates: { seriesId: string; title: string }[]
+  /** The key the 12 h rule counts (`add-course` only). */
+  key: CanonicalKey
+  onAnswer(action: SourceCardAction): void
+}
+
+export type CourseCardMode = Extract<SourceCardMode, 'course' | 'add-course' | 'link-capturing' | 'which-course'>
+
+const COURSE_QUESTIONS: Record<CourseCardMode, string> = {
+  course: 'Record this lesson?',
+  'add-course': 'Take notes on this lesson?',
+  'link-capturing': 'Link this note to the lesson?',
+  'which-course': 'Which course is this?'
 }
 
 interface ActiveCard {
@@ -98,6 +132,8 @@ interface ActiveCard {
   playbackId: string
   mode: SourceCardPayload['mode']
   until: number
+  /** A course-mode card (`courseCard`). */
+  course?: boolean
 }
 
 export class SourceOffers {
@@ -110,6 +146,8 @@ export class SourceOffers {
   private card: ActiveCard | null = null
   private retry: NodeJS.Timeout | null = null
   private active = false
+  /** Course cards waiting for a gate (one card at a time), by playback. */
+  private readonly courseQueue = new Map<string, CourseCardRequest>()
 
   constructor(
     private readonly ctx: MainContext,
@@ -129,6 +167,7 @@ export class SourceOffers {
     this.tracks.clear()
     this.recent = []
     this.offeredAt.clear()
+    this.courseQueue.clear()
     this.stopRetry()
     this.pushPlaying()
   }
@@ -300,6 +339,13 @@ export class SourceOffers {
     if (t.playback.state === 'muted' || this.muted(t, s)) return done('muted')
     if (this.hooks.feed.busyKeys().has(key)) return done('already-noting')
     if (t.playback.status === 'stopped') return done('stopped')
+    // Courses: a lesson of a course (or a course-like playback) gets the course flow instead.
+    const course = this.hooks.courseGate(t)
+    if (course === 'skip') return done('course')
+    if (course === 'wait') {
+      t.offer = 'waiting'
+      return this.armRetry()
+    }
 
     // Next item: it started in the same browser within 30 s of the fed note's playback ending.
     const next = this.hooks.feed.nextContext()
@@ -384,6 +430,104 @@ export class SourceOffers {
     log('info', 'sources:card-queued', { mode: payload.mode, confidence: draft.confidence, firstUse: payload.firstUse })
   }
 
+  // ---------- the course modes ----------
+
+  /** Asks for a course card; it waits while another card shows or a gate is closed. */
+  courseCard(req: CourseCardRequest): void {
+    if (!this.active) return
+    this.courseQueue.set(req.playbackId, req)
+    this.tryCourseCards()
+  }
+
+  /** The course flow no longer wants a card for this playback (an Undo, a new title). */
+  dropCourseCard(playbackId: string): void {
+    this.courseQueue.delete(playbackId)
+    if (this.card?.playbackId === playbackId && this.card.course) {
+      this.ctx.notify.hide(this.card.id)
+      this.clearCard(this.card.id)
+    }
+  }
+
+  private tryCourseCards(): void {
+    for (const [playbackId, req] of [...this.courseQueue]) {
+      const t = this.tracks.get(playbackId)
+      if (!t || t.playback.status === 'stopped') {
+        this.courseQueue.delete(playbackId)
+        continue
+      }
+      const now = Date.now()
+      if (this.ctx.ui.inOnboarding() || this.cardShowing(now)) return this.armRetry()
+      if (req.mode === 'add-course') {
+        if (this.hooks.settings()['sources.offer'] !== 'ask' || this.muted(t, this.hooks.settings())) {
+          this.courseQueue.delete(playbackId)
+          continue
+        }
+        if (now - (this.offeredAt.get(req.key) ?? 0) < SOURCES_LIMITS.cardPerKeyMs) {
+          this.courseQueue.delete(playbackId)
+          continue
+        }
+        if (now - this.lastCardAt < SOURCES_LIMITS.cardGapMs) return this.armRetry()
+      }
+      this.courseQueue.delete(playbackId)
+      this.showCourse(req, now)
+      return
+    }
+  }
+
+  private showCourse(req: CourseCardRequest, now: number): void {
+    const payload: SourceCardPayload = {
+      mode: req.mode,
+      title: req.title,
+      channel: null,
+      site: null,
+      guess: false,
+      noteTitle: null,
+      lastPositionMs: null,
+      firstUse: false,
+      course: req.course,
+      lesson: req.lesson,
+      ...(req.mode === 'which-course' ? { candidates: req.candidates.slice(0, SOURCES_LIMITS.courseCandidates) } : {})
+    }
+    const title = req.mode === 'link-capturing' && req.lesson && req.course ? `Is this ${req.lesson} · ${req.course}?` : COURSE_QUESTIONS[req.mode]
+    const { playbackId, key } = req
+    let id = ''
+    id = this.ctx.notify.show({
+      variant: 'source-detected',
+      title,
+      body: '',
+      source: payload,
+      showDelayMs: 0,
+      hideAfterMs: SOURCES_LIMITS.cardLifetimeMs,
+      // A capturing note doesn't silence a card about it (Link this note).
+      quietWhileRecording: false,
+      allowDuringOnboarding: false,
+      lastMomentCheck: async () => {
+        const t = this.tracks.get(playbackId)
+        if (!this.active || this.ctx.ui.inOnboarding() || !t || t.playback.status === 'stopped') {
+          this.clearCard(id)
+          return false
+        }
+        const at = Date.now()
+        // Only `add-course` counts toward the gap and the 12 h rule.
+        if (req.mode === 'add-course') {
+          this.lastCardAt = at
+          this.offeredAt.set(key, at)
+          this.pruneOffered(at)
+        }
+        return true
+      },
+      onAction: (action) => {
+        if (!action.startsWith('source:')) return
+        const a = action.slice('source:'.length) as SourceCardAction
+        log('info', 'sources:card-action', { action: a.startsWith('pick-course:') ? 'pick-course' : a, mode: req.mode })
+        this.clearCard(id)
+        req.onAnswer(a)
+      }
+    })
+    this.card = { id, key, playbackId, mode: req.mode, until: now + SOURCES_LIMITS.cardLifetimeMs + CARD_GRACE_MS, course: true }
+    log('info', 'sources:card-queued', { mode: req.mode, candidates: payload.candidates?.length ?? 0 })
+  }
+
   /** The playback still plays (or is paused), and no meeting note started capturing. */
   private async lastMomentCheck(playbackId: string, key: CanonicalKey): Promise<boolean> {
     if (!this.active || this.ctx.ui.inOnboarding()) return false
@@ -452,7 +596,8 @@ export class SourceOffers {
     if (this.retry) return
     this.retry = setTimeout(() => {
       this.retry = null
-      let waiting = false
+      let waiting = this.courseQueue.size > 0
+      if (waiting) this.tryCourseCards()
       for (const t of this.tracks.values()) {
         if (t.offer !== 'waiting') continue
         waiting = true

@@ -258,6 +258,21 @@ async function resolveSystemOnly(noteId: string): Promise<void> {
   }
 }
 
+/**
+ * A capture main started itself (a course lesson's automatic start, or its next lesson): the
+ * store follows it, with the sources main opened. Only on a change of main's note, so a state
+ * still in flight after the user's own stop never restarts capture.
+ */
+function adoptMainStart(prevNoteId: string | null, system: CaptureSystemState): void {
+  const noteId = system.noteId
+  if (!noteId || noteId === prevNoteId || noteId === snapshot.transcribingNoteId || snapshot.pendingStart) return
+  if (snapshot.transcribingNoteId !== null && snapshot.transcribingNoteId !== prevNoteId) return
+  if (system.audioSources && !system.audioSources.includes('microphone')) systemOnly.add(noteId)
+  else systemOnly.delete(noteId)
+  noteSetAt = Date.now() - UI_GRACE_MS
+  update({ transcribingNoteId: noteId })
+}
+
 /** Local ASR is startable once its engine is installed; the session fetches a missing model itself. */
 async function asrReady(provider: Settings['asr.provider']): Promise<boolean> {
   try {
@@ -509,7 +524,11 @@ export function mountCapture(): () => void {
   const engine = new CaptureEngine((e) => api.capture.sendEvent(e))
   const subs = [
     api.capture.onCommand((cmd) => engine.handle(cmd)),
-    api.capture.onSystemState((system) => update({ system })),
+    api.capture.onSystemState((system) => {
+      const prev = snapshot.system.noteId
+      update({ system })
+      adoptMainStart(prev, system)
+    }),
     api.capture.onVolume(({ source, rms }) => setVolume(source, rms)),
     api.capture.onSystemSourceChanged(({ label }) => update({ systemSourceLabel: label })),
     api.capture.onStopRequested(({ reason }) => {
