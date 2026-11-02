@@ -1495,6 +1495,8 @@ const api: NotulaApi = {
     exportSeries: (req) => ipcRenderer.invoke('sources:export-series' satisfies InvokeChannel, req),
     refreshCatalog: (req) => ipcRenderer.invoke('sources:refresh-catalog' satisfies InvokeChannel, req),
     openLesson: (req) => ipcRenderer.invoke('sources:open-lesson' satisfies InvokeChannel, req),
+    pickVaultFolder: () => ipcRenderer.invoke('sources:pick-vault-folder' satisfies InvokeChannel),
+    listVaultCourses: (handle) => ipcRenderer.invoke('sources:vault-courses' satisfies InvokeChannel, { handle }),
     onCoursesChanged: (cb) => {
       const listener = (_e: IpcRendererEvent, p: PushPayload<'sources:courses-changed'>): void => cb(p)
       ipcRenderer.on('sources:courses-changed' satisfies PushChannel, listener)

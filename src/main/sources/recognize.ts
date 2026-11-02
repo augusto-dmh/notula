@@ -15,7 +15,9 @@
 //   4 the session or window title equals a course's learned title, and no lesson URL or window
 //     read points to another course → `title`;
 //   5 the app belongs to exactly one course, and no URL, window read or learned title points
-//     elsewhere → `app`;
+//     elsewhere → `app`. A page title `<label> | <suffix>` that isn't a learned title, where the
+//     course's learned titles carry the same suffix, points elsewhere: another space of the same
+//     community app (titles without that shape, such as Hubla's lesson titles, keep the rule);
 //   6 several courses fit → `ambiguous`; 7 nothing fits → `none`.
 // The lesson, within the course: 1 the URL's key or URL is in the list; 2 the window read (title,
 // with the module when the list has sections; Circle's position within its section; or a list by
@@ -198,6 +200,20 @@ function isPageTitle(title: string, appName: string | null): boolean {
   if (!name) return false
   const t = title.trim().toLowerCase()
   return t.endsWith(` | ${name}`) || t.endsWith(` - ${name}`) || t.startsWith(`${name} - `) || t.startsWith(`${name} | `)
+}
+
+/** The suffix of a page title `<label> | <suffix>`, normalized; null for a title without that shape. */
+function pageSuffix(title: string | null): string | null {
+  if (!title) return null
+  const i = title.lastIndexOf(' | ')
+  if (i <= 0) return null
+  const label = title.slice(0, i).trim()
+  const suffix = title
+    .slice(i + 3)
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+  return label && suffix ? suffix : null
 }
 
 function learned(c: RecognizableCourse): Set<string> {
@@ -411,6 +427,17 @@ export function recognize(signals: Signals, courses: readonly RecognizableCourse
     })
   const readElsewhere = (c: RecognizableCourse): boolean => !!read && readNames(c, read) === null && live.some((o) => o !== c && readNames(o, read) !== null)
   const titleElsewhere = (c: RecognizableCourse): boolean => titles.some((t) => !learned(c).has(t) && live.some((o) => o !== c && learned(o).has(t)))
+  // Another space of the same community: the page title's suffix is the one the course's learned
+  // titles carry, but the title itself was never learned with it.
+  const pages = [session, win].filter((t): t is string => !!t && !isGenericTitle(t, generic))
+  const spaceElsewhere = (c: RecognizableCourse): boolean => {
+    const own = c.series.match?.titles ?? []
+    const have = learned(c)
+    return pages.some((t) => {
+      const suffix = pageSuffix(t)
+      return suffix !== null && !have.has(norm(t)) && own.some((l) => pageSuffix(l) === suffix)
+    })
+  }
 
   // 4. A learned title.
   if (titles.length) {
@@ -419,7 +446,7 @@ export function recognize(signals: Signals, courses: readonly RecognizableCourse
     if (cs.length > 1 && fit.length === 0) fit = cs
   }
   // 5. The app's one course.
-  const free = linked.filter((c) => !urlElsewhere(c) && !readElsewhere(c) && !titleElsewhere(c))
+  const free = linked.filter((c) => !urlElsewhere(c) && !readElsewhere(c) && !titleElsewhere(c) && !spaceElsewhere(c))
   if (linked.length === 1 && free.length === 1) return done(free[0] as RecognizableCourse, 'app', 5)
   // 6. Several fit.
   if (free.length > 1) return several(free)
@@ -429,6 +456,25 @@ export function recognize(signals: Signals, courses: readonly RecognizableCourse
 }
 
 // ---------- learned titles ----------
+
+/**
+ * Learned titles name the course, never one of its lessons: generic titles and titles equal to a
+ * lesson-list item's title (Hubla reports the lesson title) are dropped, repeats too, and only the
+ * newest `learnedTitles` are kept.
+ */
+export function courseTitles(titles: readonly string[], catalog: readonly Pick<CatalogItem, 'title'>[], generic: ReadonlySet<string> = new Set()): string[] {
+  const items = new Set(catalog.map((it) => norm(it.title)).filter(Boolean))
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (let i = titles.length - 1; i >= 0; i--) {
+    const t = titles[i] as string
+    const n = norm(t)
+    if (!n || seen.has(n) || items.has(n) || isGenericTitle(t, generic)) continue
+    seen.add(n)
+    out.unshift(t)
+  }
+  return out.slice(-SOURCES_LIMITS.learnedTitles)
+}
 
 /**
  * The course's learned titles after an `exact` recognition: the session title, else the window
@@ -443,7 +489,7 @@ export function learnTitles(signals: Signals, course: RecognizableCourse): strin
   const n = norm(t)
   const have = course.series.match?.titles ?? []
   if (have.some((h) => norm(h) === n) || course.catalog.some((it) => norm(it.title) === n)) return null
-  return [...have, t].slice(-SOURCES_LIMITS.learnedTitles)
+  return courseTitles([...have, t], course.catalog, generic)
 }
 
 /** Lesson rule 5's input: catalog item ids of finished lessons, newest finish first. */

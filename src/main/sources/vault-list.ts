@@ -174,3 +174,50 @@ export function vaultFolderOf(handle: string, catalogFile: (handle: string) => s
   const file = catalogFile(handle)
   return file && OUTLINE.test(basename(file)) ? dirname(file) : null
 }
+
+// ---------- the Add course sheet's vault picker ----------
+
+/** A course folder the picker offers. `folder` is its handle, for `{kind: 'vault', handle}`. */
+export interface VaultCourse {
+  folder: string
+  title: string
+  items: number
+  urls: number
+}
+
+/** At most this many course folders are read for one listing. */
+const MAX_COURSES = 200
+
+async function hasLessonFolders(dir: string): Promise<boolean> {
+  const entries = await readdir(dir, { withFileTypes: true }).catch(() => [])
+  return entries.some((e) => (e.isDirectory() && LESSON_FOLDER.test(e.name)) || (e.isFile() && OUTLINE.test(e.name)))
+}
+
+/**
+ * The course folders under a picked folder: the folder itself when it is one, else its
+ * `courses/` folder's children (a study vault's root), else its own children. Folders without
+ * lessons are left out. Read only.
+ */
+export async function listVaultCourses(picked: string): Promise<VaultCourse[]> {
+  let dirs: string[]
+  if (await hasLessonFolders(picked)) {
+    dirs = [picked]
+  } else {
+    const entries = await readdir(picked, { withFileTypes: true })
+    const courses = entries.find((e) => e.isDirectory() && e.name.toLowerCase() === 'courses')
+    const parent = courses ? join(picked, courses.name) : picked
+    const children = courses ? await readdir(parent, { withFileTypes: true }) : entries
+    dirs = children
+      .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+      .map((e) => join(parent, e.name))
+      .sort((a, b) => basename(a).localeCompare(basename(b)))
+      .slice(0, MAX_COURSES)
+  }
+  const out: VaultCourse[] = []
+  for (const dir of dirs) {
+    const v = await readVaultCourse(dir).catch(() => null)
+    if (!v || v.items.length === 0) continue
+    out.push({ folder: vaultFolderHandle(dir), title: slugTitle(basename(dir)), items: v.items.length, urls: v.items.filter((it) => it.url).length })
+  }
+  return out
+}

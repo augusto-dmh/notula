@@ -16,7 +16,7 @@
 // numbers repeat (numbering restarts in each section), the order numbers them too.
 
 import { parseSourceUrl } from '@shared/lib/source-key'
-import type { CanonicalKey, CatalogItem, LessonOrigin, LessonState, NoteSource, SourceDraft } from '@shared/types/sources'
+import type { CanonicalKey, CatalogItem, CatalogOrigin, LessonOrigin, LessonState, NoteSource, SourceDraft } from '@shared/types/sources'
 import { SOURCES_LIMITS } from '@shared/types/sources'
 import type { LessonNumberUpdate } from '../storage/api'
 import { matchTitle } from './titles'
@@ -320,6 +320,14 @@ export function lessonFor(
 }
 
 // ---------- playlists ----------
+
+/**
+ * A playlist may fill a lesson list only when it is empty, or, on Refresh from playlist, when a
+ * playlist filled it. A list imported, from the vault or edited by hand is never replaced.
+ */
+export function playlistMayFill(items: number, origin: CatalogOrigin | null, refresh: boolean): boolean {
+  return items === 0 || (refresh && origin === 'playlist')
+}
 
 /**
  * `yt-dlp --flat-playlist -J <playlist url>` → a lesson list in playlist order, numbered 1…n, with

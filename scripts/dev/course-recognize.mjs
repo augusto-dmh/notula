@@ -201,7 +201,7 @@ test('course 4: blocked by a window read pointing to another course', () => {
 })
 
 test('course 5: the app’s one course → app', () => {
-  const r = R.recognize(signals({ app: fundamentalsApp, session: { title: 'A page | Example Community', artist: null } }), [fundamentals])
+  const r = R.recognize(signals({ app: fundamentalsApp, session: { title: 'Example Community', artist: null } }), [fundamentals])
   eq([r.courseId, r.confidence], ['c-fund', 'app'], 'course')
   check(r.signals.includes('course:5'), 'rule 5')
 })
@@ -290,20 +290,20 @@ test('lesson 2: the same heading in two sections needs the module', () => {
 })
 
 test('lesson 3: one keyless item within ±2 s', () => {
-  const r = R.recognize(signals({ app: fundamentalsApp, session: { title: 'A page | Example Community', artist: null }, timing: { durationMs: 1_201_900, positionMs: 0, live: false } }), [fundamentals])
+  const r = R.recognize(signals({ app: fundamentalsApp, session: { title: 'Example Community', artist: null }, timing: { durationMs: 1_201_900, positionMs: 0, live: false } }), [fundamentals])
   eq([r.lesson.itemId, r.lesson.state], ['c-fund-i2', 'numbered'], 'lesson')
   check(r.signals.includes('lesson:3'), 'rule 3')
 })
 
 test('lesson 3: two items within ±2 s → no match', () => {
-  const r = R.recognize(signals({ app: fundamentalsApp, session: { title: 'A page | Example Community', artist: null }, timing: { durationMs: 1_800_700, positionMs: 0, live: false } }), [fundamentals])
-  check(!r.signals.includes('lesson:3'), 'not rule 3')
+  const r = R.recognize(signals({ app: fundamentalsApp, session: { title: 'Example Community', artist: null }, timing: { durationMs: 1_800_700, positionMs: 0, live: false } }), [fundamentals])
+  check(r.signals.includes('course:5') && !r.signals.includes('lesson:3'), 'the course by the app, not lesson rule 3')
   eq(r.lesson.state, 'pending', 'pending')
 })
 
 test('lesson 3: an item with a key is not matched by duration', () => {
-  const r = R.recognize(signals({ app: fundamentalsApp, session: { title: 'A page | Example Community', artist: null }, timing: { durationMs: 600_000, positionMs: 0, live: false } }), [fundamentals])
-  check(!r.signals.includes('lesson:3'), 'not rule 3')
+  const r = R.recognize(signals({ app: fundamentalsApp, session: { title: 'Example Community', artist: null }, timing: { durationMs: 600_000, positionMs: 0, live: false } }), [fundamentals])
+  check(r.signals.includes('course:5') && !r.signals.includes('lesson:3'), 'the course by the app, not lesson rule 3')
 })
 
 test('lesson 4: title equality', () => {
@@ -313,13 +313,13 @@ test('lesson 4: title equality', () => {
 
 test('lesson 5: the item after the newest finished lesson → guessed', () => {
   const watched = { ...fundamentals, finishedItemIds: ['c-fund-i2', 'c-fund-i1'] }
-  const r = R.recognize(signals({ app: fundamentalsApp, session: { title: 'A page | Example Community', artist: null } }), [watched])
+  const r = R.recognize(signals({ app: fundamentalsApp, session: { title: 'Example Community', artist: null } }), [watched])
   eq([r.lesson.itemId, r.lesson.number, r.lesson.state, r.lesson.origin], ['c-fund-i3', 3, 'guessed', null], 'lesson')
   check(r.signals.includes('lesson:5'), 'rule 5')
 })
 
 test('lesson 6: otherwise pending', () => {
-  const r = R.recognize(signals({ app: fundamentalsApp, session: { title: 'A page | Example Community', artist: null } }), [fundamentals])
+  const r = R.recognize(signals({ app: fundamentalsApp, session: { title: 'Example Community', artist: null } }), [fundamentals])
   eq([r.lesson.itemId, r.lesson.state, r.lesson.label], [null, 'pending', null], 'lesson')
   check(r.signals.includes('lesson:6'), 'rule 6')
 })
@@ -415,6 +415,48 @@ test('A YouTube channel in Courses', () => {
   }
   const pl = R.recognize(signals({ session: { title: 'Part one', artist: 'Someone' }, addressBar: url(`${watch}&list=PLexample01`) }), [playlist, channel])
   eq([pl.courseId, pl.confidence, pl.lesson.itemId], ['c-pl', 'exact', 'c-pl-i1'], 'a playlist')
+})
+
+test('Circle app, another space with no History or window read → none, not the app’s course', () => {
+  const t = (title, windowTitle = null) => R.recognize(signals({ app: fundamentalsApp, session: { title, artist: null }, windowTitle, timing: { durationMs: 7_635_900, positionMs: 0, live: false } }), [fundamentals])
+  const other = t('Recordings, class 3 | Example Community')
+  eq([other.courseId, other.confidence], [null, 'none'], 'session title of another space')
+  check(other.signals.includes('course:7'), 'rule 7')
+  const byWindow = t('Example Community', 'Recordings, class 3 | Example Community - Audio playing')
+  eq([byWindow.courseId, byWindow.confidence], [null, 'none'], 'window title of another space')
+  const own = t('[Course] Fundamentals | Example Community')
+  eq([own.courseId, own.confidence], ['c-fund', 'title'], 'its own space by the learned title')
+  const bare = t('Example Community')
+  eq([bare.courseId, bare.confidence], ['c-fund', 'app'], 'a generic title keeps the app rule')
+  const unlearned = { ...fundamentals, series: { ...fundamentals.series, match: { ...fundamentals.series.match, titles: [] } } }
+  const noTitles = R.recognize(signals({ app: fundamentalsApp, session: { title: 'Recordings, class 3 | Example Community', artist: null } }), [unlearned])
+  eq([noTitles.courseId, noTitles.confidence], ['c-fund', 'app'], 'no learned titles to compare: the app rule')
+  const otherSuffix = R.recognize(signals({ app: fundamentalsApp, session: { title: 'Something | Another Place', artist: null } }), [fundamentals])
+  eq([otherSuffix.courseId, otherSuffix.confidence], ['c-fund', 'app'], 'another suffix is no evidence')
+})
+
+test('Hubla: a lesson title (no page-title shape) keeps the app rule, with learned titles', () => {
+  const learnedSd = { ...systemDesign, series: { ...systemDesign.series, match: { ...systemDesign.series.match, titles: ['System Design Product'] } } }
+  const r = R.recognize(signals({ app: hublaApp, session: { title: 'message queue', artist: null }, windowTitle: 'message queue - Audio playing' }), [learnedSd])
+  eq([r.courseId, r.confidence, r.lesson.state, r.lesson.label], ['c-sd', 'app', 'pending', 'message queue'], 'app, pending, labelled')
+})
+
+// ---------- learned titles ----------
+
+test('learned titles: course-level only, never a lesson title; at most 20', () => {
+  const hubla = R.recognize(signals({ app: hublaApp, session: { title: 'Queues (Filas)', artist: null } }), [systemDesign])
+  eq(hubla.confidence, 'exact', 'rule 3')
+  eq(R.learnTitles(signals({ app: hublaApp, session: { title: 'Queues (Filas)', artist: null } }), systemDesign), null, 'Hubla’s lesson title is not learned')
+  eq(
+    R.courseTitles(['System Design Product', 'Caching', 'Hubla', 'system design product', 'Aula 3 - Queues (Filas)'], systemDesign.catalog, R.genericNames(signals({ app: hublaApp }))),
+    ['system design product'],
+    'item titles, generic titles and repeats dropped (the newest repeat kept)'
+  )
+  const many = Array.from({ length: 25 }, (_, i) => `Space ${i + 1} | Example Community`)
+  const kept = R.courseTitles(many, [])
+  eq([kept.length, kept[0], kept[19]], [20, 'Space 6 | Example Community', 'Space 25 | Example Community'], 'oldest dropped past 20')
+  const space = R.learnTitles(signals({ app: fundamentalsApp, session: { title: 'Fundamentals, live | Example Community', artist: null } }), fundamentals)
+  eq(space, ['[Course] Fundamentals | Example Community', 'Fundamentals, live | Example Community'], 'a space title is learned')
 })
 
 // ---------- helpers ----------

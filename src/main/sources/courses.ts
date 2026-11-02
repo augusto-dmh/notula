@@ -22,7 +22,7 @@
 // Nothing runs while Sources is off or off Windows. Logs: counts, states, rules and confidences,
 // never titles, URLs, hosts or app names.
 
-import { ipcMain } from 'electron'
+import { BrowserWindow, dialog, ipcMain } from 'electron'
 import { notulaError } from '@shared/errors'
 import type { InvokeChannel, InvokeRes, PushChannel } from '@shared/ipc'
 import { hostIs, normalizeHost, parseSourceUrl } from '@shared/lib/source-key'
@@ -51,6 +51,7 @@ import type {
 } from '@shared/types/sources'
 import { GUESS_KEY_PREFIX, SOURCES_LIMITS } from '@shared/types/sources'
 import { randomUUID } from 'node:crypto'
+import { basename, resolve } from 'node:path'
 import type { MainContext } from '../context'
 import { log } from '../log'
 import { lessonRead, windowTitle } from '../media'
@@ -63,6 +64,7 @@ import { courseHistory, fetchPlaylist, findAppAddress } from './identify'
 import {
   channelKey,
   cleanWindowTitle,
+  courseTitles,
   courseUrl,
   finishedItems,
   genericNames,
@@ -73,7 +75,7 @@ import {
   type Signals
 } from './recognize'
 import { catalogFilePath, fillCatalog, fillFromPlaylist } from './series'
-import { readVaultCourse, vaultFolderOf } from './vault-list'
+import { listVaultCourses, readVaultCourse, vaultFolderHandle, vaultFolderOf } from './vault-list'
 
 // ---------- recognition, as the automatic start sees it ----------
 
@@ -691,7 +693,7 @@ export function registerCourses(ctx: MainContext): void {
     const match: CourseMatch = {
       apps: [...prior.apps, ...r.match.apps.filter((a) => !prior.apps.some((b) => b.appUserModelId === a.appUserModelId))],
       hosts: [...new Set([...prior.hosts, ...r.match.hosts])],
-      titles: [...new Set([...prior.titles, ...r.match.titles.filter((t) => !isGenericTitle(t, generic))])].slice(-SOURCES_LIMITS.learnedTitles),
+      titles: courseTitles([...prior.titles, ...r.match.titles], await storage.listCatalog(series.id), generic),
       keys: [...new Set([...prior.keys, ...r.match.keys])],
       windowRead: r.match.windowRead
     }
@@ -714,7 +716,7 @@ export function registerCourses(ctx: MainContext): void {
     if (patch.title !== undefined && patch.title !== series.title) await storage.updateSeries(seriesId, { title: patch.title })
     if (patch.behavior || patch.match) {
       const match: CourseMatch = { ...series.match, ...patch.match }
-      if (patch.match?.titles) match.titles = patch.match.titles.slice(-SOURCES_LIMITS.learnedTitles)
+      if (patch.match?.titles) match.titles = courseTitles(patch.match.titles, await storage.listCatalog(seriesId))
       const before = grantHosts(series.match)
       const after = grantHosts(match)
       await updateGrant(
@@ -838,4 +840,25 @@ export function registerCourses(ctx: MainContext): void {
   ipcMain.handle('sources:set-lesson' satisfies InvokeChannel, (_e, req: unknown): Promise<InvokeRes<'sources:set-lesson'>> => setLesson(req))
 
   ipcMain.handle('sources:refresh-catalog' satisfies InvokeChannel, (_e, req: unknown): Promise<InvokeRes<'sources:refresh-catalog'>> => refreshCatalog(req))
+
+  // The Add course sheet's From your study vault: a folder picked here, then its course folders.
+  ipcMain.handle('sources:pick-vault-folder' satisfies InvokeChannel, async (): Promise<InvokeRes<'sources:pick-vault-folder'>> => {
+    const opts: Electron.OpenDialogOptions = { title: 'Choose a course folder', buttonLabel: 'Choose folder', properties: ['openDirectory'] }
+    const win = BrowserWindow.getFocusedWindow() ?? ctx.windows.main()
+    const res = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
+    const path = res.filePaths[0]
+    if (res.canceled || !path) return null
+    const folder = resolve(path)
+    return { handle: vaultFolderHandle(folder), name: basename(folder) || folder }
+  })
+
+  ipcMain.handle('sources:vault-courses' satisfies InvokeChannel, async (_e, req: unknown): Promise<InvokeRes<'sources:vault-courses'>> => {
+    const handle = id(object(req, 'request')['handle'], 'handle')
+    const folder = vaultFolderOf(handle, catalogFilePath)
+    if (!folder) throw bad('That folder is no longer available. Choose it again.')
+    const list = await listVaultCourses(folder).catch(() => null)
+    if (!list) throw bad('Couldn’t read that folder. Check that it still exists, then choose it again.')
+    log('info', 'sources:vault-courses', { courses: list.length, items: list.reduce((n, c) => n + c.items, 0) })
+    return list
+  })
 }

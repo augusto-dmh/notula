@@ -997,6 +997,10 @@ export interface InvokeChannels {
   'sources:refresh-catalog': [{ seriesId: string }, CatalogImportResult]
   /** Open lesson and Next: in the course app when the course has one, else the default browser. */
   'sources:open-lesson': [{ seriesId: string; catalogItemId: string }, { opened: 'app' | 'browser' | 'none' }]
+  /** The Add course sheet's study vault: a folder picker over the focused window. Null when cancelled. */
+  'sources:pick-vault-folder': [void, { handle: string; name: string } | null]
+  /** The course folders under a picked folder; `folder` is the handle `sources:add-course` takes as `{kind: 'vault', handle}`. */
+  'sources:vault-courses': [{ handle: string }, { folder: string; title: string; items: number; urls: number }[]]
   // The browser extension's bridge
   'ext-bridge:get-status': [void, ExtBridgeStatus]
   /** Writes (on) or removes (off) the host files and the two HKCU keys. */
@@ -2181,6 +2185,8 @@ export interface NotulaApi {
     exportSeries: InvokeMember<'sources:export-series'>
     refreshCatalog: InvokeMember<'sources:refresh-catalog'>
     openLesson: InvokeMember<'sources:open-lesson'>
+    pickVaultFolder: InvokeMember<'sources:pick-vault-folder'>
+    listVaultCourses: (handle: string) => Promise<InvokeRes<'sources:vault-courses'>>
     onCoursesChanged: PushMember<'sources:courses-changed'>
   }
   extBridge: {

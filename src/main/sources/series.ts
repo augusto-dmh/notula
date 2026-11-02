@@ -31,9 +31,10 @@ import type { MainContext } from '../context'
 import { log } from '../log'
 import { id, object } from '../notes/validate'
 import type { SourceSeriesPatch } from '../storage/api'
-import { draftLesson, parseCatalog, parsePlaylistItems, renumberRows, type ParsedCatalogItem } from './catalog'
+import { draftLesson, parseCatalog, parsePlaylistItems, playlistMayFill, renumberRows, type ParsedCatalogItem } from './catalog'
 import { onPlaylistFetched } from './identify'
 import { mergeNotes, undoMerge } from './merge'
+import { courseTitles } from './recognize'
 import { seriesIdRequest } from './validate'
 
 export interface LessonResolution {
@@ -153,14 +154,15 @@ function mergeIdRequest(v: unknown): { mergeId: string } {
 
 /**
  * Replaces a series' catalog with `items`, then renumbers its lessons (`pending`, `guessed`, and
- * numbers an earlier catalog gave; manual numbers never). With `origin`, records where the list
- * came from. `dryRun` counts without writing.
+ * numbers an earlier catalog gave; manual numbers never). Records where the list came from, so a
+ * playlist never replaces a list the user gave, and drops a course's learned titles that are now
+ * a lesson's title. `dryRun` counts without writing.
  */
 export async function fillCatalog(
   ctx: MainContext,
   seriesId: string,
   items: ParsedCatalogItem[],
-  opts: { dryRun?: boolean; origin?: CatalogOrigin } = {}
+  opts: { dryRun?: boolean; origin: CatalogOrigin }
 ): Promise<{ numbered: number }> {
   const sources = await ctx.storage.listNoteSources({ seriesId })
   const rows = renumberRows(sources, items)
@@ -169,7 +171,13 @@ export async function fillCatalog(
   let numbered = 0
   if (rows.unsettled.length) numbered += await ctx.storage.applyLessonNumbers(rows.unsettled)
   if (rows.fromCatalog.length) numbered += await ctx.storage.applyLessonNumbers(rows.fromCatalog, { onlyUnsettled: false })
-  if (opts.origin) await ctx.storage.setCatalogOrigin(seriesId, opts.origin)
+  await ctx.storage.setCatalogOrigin(seriesId, opts.origin)
+  const series = await ctx.storage.getSeries(seriesId)
+  const match = series?.registered_at ? series.match : null
+  if (match?.titles.length) {
+    const titles = courseTitles(match.titles, items)
+    if (titles.length !== match.titles.length) await ctx.storage.updateCourse(seriesId, { match: { ...match, titles } })
+  }
   return { numbered }
 }
 
@@ -208,8 +216,7 @@ export async function fillFromPlaylist(ctx: MainContext, series: SourceSeries, j
   if (parsed.total > SOURCES_LIMITS.playlistAutoFill) return { filled: false, reason: 'too-long' }
   if (parsed.items.length === 0) return { filled: false, reason: 'empty' }
   const current = await ctx.storage.listCatalog(series.id)
-  const ours = opts.refresh && series.catalog_origin === 'playlist'
-  if (current.length > 0 && !ours) return { filled: false, reason: 'not-empty' }
+  if (!playlistMayFill(current.length, series.catalog_origin, !!opts.refresh)) return { filled: false, reason: 'not-empty' }
   const { numbered } = await fillCatalog(ctx, series.id, parsed.items, { origin: 'playlist' })
   log('info', 'sources:playlist-filled', { items: parsed.items.length, numbered, refresh: !!opts.refresh })
   return { filled: true, items: parsed.items.length, numbered }
@@ -270,6 +277,8 @@ export function registerSeries(ctx: MainContext): void {
     await requireActive()
     const { seriesId } = confirmedSeriesRequest(req)
     const removed = await ctx.storage.deleteCatalog(seriesId)
+    // No list, no origin: a playlist may fill it again.
+    await ctx.storage.setCatalogOrigin(seriesId, null)
     log('info', 'sources:catalog-deleted', { items: removed })
   })
 

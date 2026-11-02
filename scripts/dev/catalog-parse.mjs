@@ -419,7 +419,28 @@ test('vault: handles: a folder handle, or the importer outline handle', () => {
   eq(V.vaultFolderOf('other', (x) => (x === 'other' ? resolve(VAULT, 'README.md') : null)), null, 'another file is not a course folder')
 })
 
+const pickedCourse = await V.listVaultCourses(VAULT)
+const pickedParent = await V.listVaultCourses(resolve(VAULT, '..'))
+
+test('vault picker: a course folder, or the course folders under a folder', () => {
+  const one = pickedCourse
+  eq(one.map((c) => [c.title, c.items, c.urls]), [['Vault course', 6, 2]], 'the picked folder is a course')
+  eq(V.vaultFolderOf(one[0].folder, () => null), VAULT, 'its handle is the course folder')
+  const under = pickedParent
+  eq(under.map((c) => [c.title, c.items]), [['Vault course', 6]], 'folders without lessons left out')
+})
+
 // ---------- playlists ----------
+
+test('catalog origin: a playlist fills only an empty list, or refills its own', () => {
+  eq(C.playlistMayFill(0, null, false), true, 'empty')
+  eq(C.playlistMayFill(0, 'import', false), true, 'deleted list')
+  for (const origin of ['import', 'vault', 'manual']) eq(C.playlistMayFill(5, origin, true), false, `${origin} list never replaced`)
+  eq(C.playlistMayFill(5, 'playlist', false), false, 'not without Refresh')
+  eq(C.playlistMayFill(5, 'playlist', true), true, 'Refresh from playlist')
+  eq(C.playlistMayFill(5, null, true), false, 'a list of unknown origin is kept')
+})
+
 
 test('playlist: yt-dlp entries → a numbered lesson list', () => {
   const json = JSON.stringify({
