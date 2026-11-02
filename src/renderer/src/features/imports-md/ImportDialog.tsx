@@ -10,7 +10,7 @@ import type { ImportFolderMode, ImportOptions, ImportPreview, ImportPreviewRow, 
 import { navigate } from '../../app/navigation'
 import { isMac } from '../../app/platform'
 import { usePrefs } from '../settings/prefs-store'
-import { CatalogButton, FindSourcesPanel } from './FindSources'
+import { AddAsCourseButton, FindSourcesPanel } from './FindSources'
 import { DATE_ORIGIN, FORMAT_LABEL, phaseLabel, plural, shortDate, STATUS_LABEL, TITLE_ORIGIN } from './labels'
 
 type Step =
@@ -497,7 +497,7 @@ function DoneStep(p: {
         {p.sourcesOn && p.preview.catalogs?.length ? (
           <div className="nix-section">
             {p.preview.catalogs.map((cat) => (
-              <CatalogButton key={cat.relPath} course={cat.course} handle={cat.handle} />
+              <AddAsCourseButton key={cat.relPath} course={cat.course} handle={cat.handle} />
             ))}
           </div>
         ) : null}

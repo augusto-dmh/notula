@@ -10,6 +10,7 @@
 //   channel: its notes go back to Videos, through the sources core).
 // - Duplicates: notes sharing a source, oldest first; Merge folds a newer one into the oldest.
 // Nothing renders while Sources is off or the folder has no series. It follows `sources:changed`.
+// A series in Courses shows its course page instead.
 
 import { useCallback, useEffect, useMemo, useState, type JSX } from 'react'
 import { parseError } from '@shared/errors'
@@ -17,6 +18,7 @@ import { formatPosition } from '@shared/lib/position'
 import type { SeriesDetail, SeriesKind, SeriesLesson, SeriesListItem } from '@shared/types/sources'
 import { navigate } from '../../../app/navigation'
 import { showToast } from '../../../app/toast'
+import { CoursePage } from '../courses/CoursePage'
 import { isMissingHandler, trySources, useSourcesStatus } from '../note/source-store'
 import { ConfirmDialog, ImportCatalogDialog, MergeDialog, plural, type MergeCandidate } from './series-dialogs'
 import './series.css'
@@ -98,7 +100,7 @@ function LessonRow({ lesson, showNumber }: { lesson: SeriesLesson; showNumber: b
   )
 }
 
-function Duplicates({ detail, onMerge }: { detail: SeriesDetail; onMerge(older: MergeCandidate, newer: MergeCandidate): void }): JSX.Element | null {
+export function Duplicates({ detail, onMerge }: { detail: SeriesDetail; onMerge(older: MergeCandidate, newer: MergeCandidate): void }): JSX.Element | null {
   const [notes, setNotes] = useState<Record<string, MergeCandidate>>({})
   const ids = useMemo(() => detail.duplicates.flatMap((d) => d.noteIds), [detail])
 
@@ -184,12 +186,16 @@ export function SeriesFolderPanelView({ folderId }: { folderId: string }): JSX.E
     if (!enabled) return
     let timer: ReturnType<typeof setTimeout> | null = null
     void refresh()
-    const off = window.notula.sources.onChanged(() => {
+    const later = (): void => {
       if (timer) clearTimeout(timer)
       timer = setTimeout(() => void refresh(), REFRESH_DELAY_MS)
-    })
+    }
+    const off = window.notula.sources.onChanged(later)
+    // Added to or removed from Courses: the page switches between the two views.
+    const offCourses = window.notula.sources.onCoursesChanged(later)
     return () => {
       off()
+      offCourses()
       if (timer) clearTimeout(timer)
     }
   }, [enabled, refresh])
@@ -210,6 +216,7 @@ export function SeriesFolderPanelView({ folderId }: { folderId: string }): JSX.E
   }
 
   const { item, detail } = load
+  if (item.registered_at) return <CoursePage seriesId={item.id} />
   const series = detail.series
   const lessons = detail.lessons
   const watched = lessons.filter((l) => l.noteId !== null).length

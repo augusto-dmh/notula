@@ -190,9 +190,11 @@ export function NotificationCard(): JSX.Element | null {
         <div className="nt-note__text">
           <div className="nt-note__title">
             {p.calendarColor ? <span className="nt-note__color" style={{ background: p.calendarColor }} aria-hidden="true" /> : null}
-            <span className="nt-note__title-text">{p.title}</span>
+            <span className="nt-note__title-text">{p.variant === 'course-recording' && p.course ? `Recording ${p.course.lesson}` : p.title}</span>
           </div>
-          <div className="nt-note__body">{p.body}</div>
+          <div className="nt-note__body">
+            {p.variant === 'course-recording' && p.course ? `${p.course.course} · ${p.course.plan === 'captions' ? 'captions' : 'video audio'}` : p.body}
+          </div>
           {/* A meaningful prep brief's headline. */}
           {p.detail ? (
             <div className="nt-note__detail" title={p.detail}>

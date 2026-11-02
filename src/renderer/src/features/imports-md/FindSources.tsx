@@ -3,12 +3,14 @@
 // through `sources:backfill-preview {noteIds}` and `sources:backfill-apply`. Rows are a preview;
 // nothing changes until Link. Exact and high rows are ticked; several sources ask for a pick.
 // When the backfill isn't in this build yet, it says so and the links stay saved for later.
-// Also the catalog prompt per course (`sources:import-catalog` with a file handle main made).
+// Also the per-course outline offer: Add as course, which opens the Add course sheet with the
+// outline as the course's lesson list (main reads the outline's folder as a study-vault course).
 
 import { useState, type JSX } from 'react'
 import { parseError } from '@shared/errors'
 import type { BackfillPreview, BackfillRow, SourceDraft } from '@shared/types/sources'
 import { showToast } from '../../app/toast'
+import { AddCourseSheet } from '../sources/courses'
 import { isMissingHandler, plural } from './labels'
 
 const REASON: Record<BackfillRow['reason'], string> = {
@@ -130,47 +132,50 @@ export function FindSourcesPanel({ noteIds }: { noteIds: string[] }): JSX.Elemen
   )
 }
 
-/** "Import catalog for <course>": the series must exist (Find sources makes it). */
-export function CatalogButton({ course, handle }: { course: string; handle: string }): JSX.Element {
+/** The course's series: by title, by the folder the import filed it in, or the one series of its notes. */
+async function findCourseSeries(course: string): Promise<string | null> {
+  const want = course.trim().toLowerCase()
+  const [list, folders] = await Promise.all([window.notula.sources.listSeries(), window.notula.folders.list()])
+  const folderTitle = new Map(folders.folders.map((f) => [f.id, f.title.trim().toLowerCase()]))
+  const series = list.find((s) => s.title.trim().toLowerCase() === want) ?? list.find((s) => s.folder_id !== null && folderTitle.get(s.folder_id) === want)
+  if (series) return series.id
+  // Find sources links the notes without filing, and the series may carry another name.
+  const inFolder = folders.folders.filter((f) => f.title.trim().toLowerCase() === want).flatMap((f) => folders.membership[f.id] ?? [])
+  const views = await Promise.all(inFolder.slice(0, 50).map((noteId) => window.notula.sources.getForNote({ noteId }).catch(() => null)))
+  const ids = new Set(views.flatMap((v) => (v?.series && v.series.kind !== 'channel' ? [v.series.id] : [])))
+  return ids.size === 1 ? ([...ids][0] ?? null) : null
+}
+
+/** "Add as course": Courses with the outline as its lesson list. */
+export function AddAsCourseButton({ course, handle }: { course: string; handle: string }): JSX.Element {
+  const [sheet, setSheet] = useState<{ seriesId: string | null } | null>(null)
   const [note, setNote] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  async function run(): Promise<void> {
+  async function open(): Promise<void> {
     setBusy(true)
     setNote(null)
-    try {
-      // The course's series by title, or by the folder it is filed in.
-      const want = course.trim().toLowerCase()
-      const [list, folders] = await Promise.all([window.notula.sources.listSeries(), window.notula.folders.list()])
-      const folderTitle = new Map(folders.folders.map((f) => [f.id, f.title.trim().toLowerCase()]))
-      let series =
-        list.find((s) => s.title.trim().toLowerCase() === want) ?? list.find((s) => s.folder_id !== null && folderTitle.get(s.folder_id) === want)
-      if (!series) {
-        // Else the one course series of the notes the import put in the course's folder: Find
-        // sources links them without filing, and the series may carry another name.
-        const inFolder = folders.folders.filter((f) => f.title.trim().toLowerCase() === want).flatMap((f) => folders.membership[f.id] ?? [])
-        const views = await Promise.all(inFolder.slice(0, 50).map((noteId) => window.notula.sources.getForNote({ noteId }).catch(() => null)))
-        const ids = new Set(views.flatMap((v) => (v?.series && v.series.kind !== 'channel' ? [v.series.id] : [])))
-        if (ids.size === 1) series = list.find((s) => ids.has(s.id))
-      }
-      if (!series) {
-        setNote('Find sources first, so Notula knows this course.')
-        return
-      }
-      const res = await window.notula.sources.importCatalog({ seriesId: series.id, input: { kind: 'file', handle } })
-      showToast({ id: 'notes-import-catalog', kind: 'success', title: `Imported ${plural(res.items, 'lesson', 'lessons')} for ${course}` })
-      setNote(`${plural(res.items, 'lesson', 'lessons')} in the catalog, ${res.numbered} numbered.`)
-    } catch (err) {
-      setNote(isMissingHandler(err) ? 'Catalog import isn’t available in this build yet.' : `Couldn’t import the catalog. ${parseError(err).message}`)
-    } finally {
-      setBusy(false)
-    }
+    const seriesId = await findCourseSeries(course).catch(() => null)
+    setBusy(false)
+    setSheet({ seriesId })
   }
   return (
     <div className="nix-catalog">
-      <button type="button" className="n-btn n-btn--sm" disabled={busy} onClick={() => void run()}>
-        Import catalog for {course}
+      <button type="button" id={`import-add-course-${handle}`} className="n-btn n-btn--sm" disabled={busy} onClick={() => void open()}>
+        Add {course} as course
       </button>
       {note ? <span className="nix-note">{note}</span> : null}
+      {sheet ? (
+        <AddCourseSheet
+          mode="add"
+          seriesId={sheet.seriesId}
+          title={course}
+          lessonList={{ kind: 'vault', handle }}
+          onClose={(r) => {
+            setSheet(null)
+            if (r) setNote(`In Courses, with ${plural(r.lessonsTotal, 'lesson', 'lessons')}.`)
+          }}
+        />
+      ) : null}
     </div>
   )
 }

@@ -120,7 +120,7 @@ export function folderMenuEntries(folder: Folder, opts: { inHeader?: boolean } =
   return entries
 }
 
-export function SidebarFolders(): JSX.Element | null {
+export function SidebarFolders({ hidden }: { hidden?: ReadonlySet<string> }): JSX.Element | null {
   const view = useFolders()
   const prefs = usePrefs()
   const route = useRoute()
@@ -152,9 +152,9 @@ export function SidebarFolders(): JSX.Element | null {
   }
 
   const uses = prefs?.['folders.useTimestamps'] ?? {}
-  const favourites = view.folders.filter((f) => f.is_favourite && !(f.parent_id && view.byId.get(f.parent_id)?.is_favourite))
+  const favourites = view.folders.filter((f) => f.is_favourite && !hidden?.has(f.id) && !(f.parent_id && view.byId.get(f.parent_id)?.is_favourite))
   favourites.sort((a, b) => folderTitle(a).localeCompare(folderTitle(b), undefined, { sensitivity: 'base' }))
-  const top = childrenOf(view, null)
+  const top = childrenOf(view, null).filter((f) => !hidden?.has(f.id))
   const picks = topFolders(view, uses, top)
   const rest = picks ? top.filter((f) => !picks.includes(f)) : []
   const onMyNotesPage = activeId === MY_NOTES_SECTION_ID
@@ -225,7 +225,7 @@ export function SidebarFolders(): JSX.Element | null {
   })
 
   const renderFolder = (folder: Folder, depth: number, inFavourites: boolean): JSX.Element => {
-    const kids = childrenOf(view, folder.id).filter((k) => !inFavourites || k.is_favourite)
+    const kids = childrenOf(view, folder.id).filter((k) => (!inFavourites || k.is_favourite) && !hidden?.has(k.id))
     const open = expanded.has(folder.id)
     const active = activeId === folder.id
     const title = folderTitle(folder)

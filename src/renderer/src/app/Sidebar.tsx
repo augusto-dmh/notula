@@ -21,7 +21,7 @@ import { startNewNote } from '../features/new-note'
 import { WhatsNewCard } from '../features/nux'
 import { SidebarPeopleButtons } from '../features/people'
 import { SidebarSearchLink } from '../features/search'
-import { CoursesSection } from '../features/sources/courses'
+import { CoursesSection, useCourseFolderIds } from '../features/sources/courses'
 import { usePrefs } from '../features/settings/prefs-store'
 import { useSettingsSections } from '../features/settings/sections'
 import { SidebarTasksLink } from '../features/tasks'
@@ -93,6 +93,8 @@ export function SidebarToggle({ label, align }: { label: string; align: 'start' 
 function NotesList({ path }: { path: string }): JSX.Element {
   const under = (p: string): boolean => path === p || path.startsWith(`${p}/`)
   const prefs = usePrefs()
+  // A course's folder shows under Courses, not also under the folders.
+  const courseFolders = useCourseFolderIds(prefs?.['sources.enabled'] === true)
   return (
     <>
       <div className="app-sidebar__group">
@@ -123,7 +125,7 @@ function NotesList({ path }: { path: string }): JSX.Element {
         <SidebarSearchLink />
       </div>
       {prefs?.['sources.enabled'] ? <CoursesSection /> : null}
-      <SidebarFolders />
+      <SidebarFolders hidden={courseFolders} />
       {/* The Customer calls view, null unless `customerCalls.enabled`. */}
       <SidebarCustomerCallsLink />
       <SidebarCompanyFavorites />

@@ -7,8 +7,9 @@ import { FolderPageView } from './FolderPage'
 import { SidebarFolders as Sidebar } from './SidebarFolders'
 import { SuggestionBar } from './SuggestionBar'
 
-export function SidebarFolders(): JSX.Element | null {
-  return createElement(Sidebar)
+/** `hidden`: folders shown elsewhere (course folders, under Courses). */
+export function SidebarFolders({ hidden }: { hidden?: ReadonlySet<string> } = {}): JSX.Element | null {
+  return createElement(Sidebar, { hidden })
 }
 
 /** `/list/:id`, including `/list/my-notes`. */

@@ -118,7 +118,7 @@ export function GrantRows(): JSX.Element | null {
     >
       <SettingsRow
         title="Read browser history"
-        description="Find a video’s exact link in the playing browser’s history: YouTube and course sites only, the last 24 hours. Notula reads a temporary copy and deletes it."
+        description="Find a YouTube video’s exact link in the playing browser’s history, from the last 24 hours. Notula reads a temporary copy and deletes it. Course sites are granted per course."
         control={
           <Switch
             label="Read browser history"

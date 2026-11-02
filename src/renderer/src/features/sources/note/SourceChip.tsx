@@ -6,6 +6,9 @@
 // `sources.enabled` is off, off Windows, or before `sources:get-for-note` has a handler.
 // While mounted with a source, it registers the note as the window's active source note, which
 // the editor's stamping plugin binds to.
+// Courses: on a course's note the lesson label (*<course> › Aula 53*) opens the lesson picker; a
+// guessed lesson reads *Aula 54?* with Yes and Change; a lesson not known yet reads *Not sure
+// which lesson*. A series outside Courses adds *Add <series> to Courses* to the menu.
 
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react'
 import type { NoteSourceView } from '@shared/types/sources'
@@ -14,6 +17,11 @@ import { navigate, navigateToSettings } from '../../../app/navigation'
 import { isMac } from '../../../app/platform'
 import { IconPlay } from '../../settings/icons'
 import { usePrefs } from '../../settings/prefs-store'
+import { AddCourseSheet } from '../courses/AddCourseSheet'
+import { refreshCourses, useCourses } from '../courses/courses-store'
+import { failure } from '../courses/helpers'
+import { LessonPicker } from '../courses/LessonPicker'
+import { showToast } from '../../../app/toast'
 import { LinkSourceDialog, type LinkDialogMode } from './LinkSourceDialog'
 import { clearActiveSource, setActiveSource, trySources } from './source-store'
 import './sources-note.css'
@@ -73,6 +81,23 @@ function useNoteSource(noteId: string, enabled: boolean): [Loaded | null, () => 
   return [loaded, load]
 }
 
+/** Yes on a guessed lesson: the same lesson, now set by the user. */
+async function confirmGuess(noteId: string, seriesId: string, number: number | null): Promise<void> {
+  try {
+    const d = await window.notula.sources.getSeries({ seriesId })
+    const lessons = (d?.lessons ?? []).filter((l) => l.catalogItemId !== null)
+    const item = lessons.find((l) => l.noteId === noteId) ?? (number !== null ? lessons.find((l) => l.number === number) : undefined)
+    if (!item?.catalogItemId) {
+      showToast({ kind: 'error', title: 'Couldn’t find this lesson in the list', description: 'Pick it with Change.' })
+      return
+    }
+    await window.notula.sources.setLesson({ noteId, itemId: item.catalogItemId })
+    refreshCourses()
+  } catch (err) {
+    showToast({ kind: 'error', title: 'Couldn’t set the lesson', description: failure(err, 'set the lesson') })
+  }
+}
+
 /** The guess's "Same as <note>?" line, once per note until answered. */
 function SameAsPrompt({ noteId, otherId }: { noteId: string; otherId: string }): JSX.Element | null {
   const [title, setTitle] = useState<string | null>(null)
@@ -123,7 +148,12 @@ export function SourceChipView({ noteId }: { noteId: string }): JSX.Element | nu
   const [loaded, reload] = useNoteSource(noteId, enabled)
   const [dialog, setDialog] = useState<LinkDialogMode | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [picking, setPicking] = useState(false)
+  const [adding, setAdding] = useState(false)
+  const [confirming, setConfirming] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
+  const lessonRef = useRef<HTMLButtonElement>(null)
+  const courses = useCourses()
 
   const view = loaded?.available ? loaded.view : null
   const source = view?.source ?? null
@@ -181,9 +211,12 @@ export function SourceChipView({ noteId }: { noteId: string }): JSX.Element | nu
     )
   }
 
+  const course = view.series ? (courses?.find((c) => c.id === view.series?.id) ?? null) : null
   const lesson = lessonText(view)
   const confidence = confidenceText(view)
-  const seriesTitle = view.series && view.series.kind !== 'channel' ? view.series.title : null
+  const seriesTitle = course ? course.title : view.series && view.series.kind !== 'channel' ? view.series.title : null
+  const guessed = source.lesson_state === 'guessed'
+  const courseLesson = course ? (lesson && lesson !== '—' ? `${lesson}${guessed ? '?' : ''}` : 'Not sure which lesson') : null
   const sameAs =
     source.confidence === 'guess' &&
     view.sameKeyNoteIds[0] &&
@@ -211,12 +244,45 @@ export function SourceChipView({ noteId }: { noteId: string }): JSX.Element | nu
           <span className="src-chip__meta src-chip__crumb">
             {seriesTitle ? <span className="src-chip__series">{seriesTitle}</span> : null}
             {seriesTitle && lesson ? <span aria-hidden="true"> › </span> : null}
-            {lesson ? (
+            {course ? null : lesson ? (
               <span title={source.lesson_state === 'guessed' ? 'Number guessed from the title' : undefined}>
                 {lesson}
                 {source.lesson_state === 'guessed' ? '?' : ''}
               </span>
             ) : null}
+            {course && courseLesson ? (
+              <button
+                ref={lessonRef}
+                type="button"
+                id="source-chip-lesson"
+                className={`src-chip__lesson${guessed ? ' is-guessed' : ''}`}
+                aria-haspopup="dialog"
+                aria-expanded={picking}
+                title="Change the lesson"
+                onClick={() => setPicking((p) => !p)}
+              >
+                {courseLesson}
+              </button>
+            ) : null}
+          </span>
+        ) : null}
+        {course && guessed ? (
+          <span className="src-chip__guess" role="group" aria-label="Is this the lesson?">
+            <button
+              type="button"
+              id="source-chip-guess-yes"
+              className="n-btn n-btn--sm"
+              disabled={confirming}
+              onClick={() => {
+                setConfirming(true)
+                void confirmGuess(noteId, course.id, source.lesson_number).finally(() => setConfirming(false))
+              }}
+            >
+              Yes
+            </button>
+            <button type="button" id="source-chip-guess-change" className="n-btn n-btn--sm n-btn--ghost" onClick={() => setPicking(true)}>
+              Change
+            </button>
           </span>
         ) : null}
         {percent !== null ? <span className="src-chip__meta">{Math.round(percent)}% watched</span> : null}
@@ -250,6 +316,17 @@ export function SourceChipView({ noteId }: { noteId: string }): JSX.Element | nu
               <button type="button" role="menuitem" className="src-menu__item" onClick={() => (setMenuOpen(false), setDialog('edit'))}>
                 Edit details…
               </button>
+              {view.series && !course ? (
+                <button
+                  type="button"
+                  role="menuitem"
+                  id="source-chip-add-course"
+                  className="src-menu__item"
+                  onClick={() => (setMenuOpen(false), setAdding(true))}
+                >
+                  Add {view.series.title} to Courses
+                </button>
+              ) : null}
               <div className="src-menu__divider" role="separator" />
               <button type="button" role="menuitem" className="src-menu__item" onClick={() => (setMenuOpen(false), setDialog('unlink'))}>
                 Unlink source…
@@ -271,6 +348,10 @@ export function SourceChipView({ noteId }: { noteId: string }): JSX.Element | nu
       </div>
       {sameAs ? <SameAsPrompt noteId={noteId} otherId={sameAs} /> : null}
       {dialogEl}
+      {picking && course ? <LessonPicker noteId={noteId} seriesId={course.id} anchor={lessonRef.current} onClose={() => setPicking(false)} /> : null}
+      {adding && view.series ? (
+        <AddCourseSheet mode="add" seriesId={view.series.id} url={source.url} onClose={() => setAdding(false)} />
+      ) : null}
     </div>
   )
 }

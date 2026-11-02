@@ -50,7 +50,23 @@ function previewLine(r: CatalogImportResult): string {
   return `${lessons}${where}.${numbered}`
 }
 
-export function ImportCatalogDialog({ series, catalogCount, onClose, onDone }: { series: SourceSeries; catalogCount: number; onClose(): void; onDone(): void }): JSX.Element {
+export function ImportCatalogDialog({
+  series,
+  catalogCount,
+  lessonList,
+  onClose,
+  onDone
+}: {
+  series: SourceSeries
+  catalogCount: number
+  /** A course's page: the same dialog, in Courses' words (a lesson list, not a catalog). */
+  lessonList?: boolean
+  onClose(): void
+  onDone(): void
+}): JSX.Element {
+  const words = lessonList
+    ? { title: 'Add lesson list', done: 'Lesson list added', read: 'Read the lesson list', run: 'Add the lesson list', replaces: 'This replaces the current lesson list of', busy: 'Adding…', go: 'Add' }
+    : { title: 'Import catalog', done: 'Catalog imported', read: 'Read the catalog', run: 'Import the catalog', replaces: 'This replaces the current catalog of', busy: 'Importing…', go: 'Import' }
   const [text, setText] = useState('')
   const [preview, setPreview] = useState<CatalogImportResult | null>(null)
   const [previewError, setPreviewError] = useState<string | null>(null)
@@ -70,7 +86,7 @@ export function ImportCatalogDialog({ series, catalogCount, onClose, onDone }: {
       window.notula.sources
         .importCatalog({ seriesId: series.id, input: { kind: 'text', text }, dryRun: true })
         .then((r) => !stale && setPreview(r))
-        .catch((err: unknown) => !stale && setPreviewError(failure(err, 'Read the catalog')))
+        .catch((err: unknown) => !stale && setPreviewError(failure(err, words.read)))
     }, PREVIEW_DELAY_MS)
     return () => {
       stale = true
@@ -99,7 +115,7 @@ export function ImportCatalogDialog({ series, catalogCount, onClose, onDone }: {
       const r = await window.notula.sources.importCatalog({ seriesId: series.id, input: { kind: 'text', text } })
       showToast({
         kind: 'success',
-        title: 'Catalog imported',
+        title: words.done,
         description: r.numbered > 0 ? `${plural(r.numbered, 'note', 'notes')} numbered.` : undefined,
         durationMs: 4_000
       })
@@ -107,12 +123,12 @@ export function ImportCatalogDialog({ series, catalogCount, onClose, onDone }: {
       onClose()
     } catch (err) {
       setBusy(false)
-      setError(failure(err, 'Import the catalog'))
+      setError(failure(err, words.run))
     }
   }
 
   return (
-    <Modal label="Import catalog" className="series-dialog" onClose={() => !busy && onClose()}>
+    <Modal label={words.title} className="series-dialog" onClose={() => !busy && onClose()}>
       <form
         className="h-modal__body"
         onSubmit={(e) => {
@@ -120,7 +136,7 @@ export function ImportCatalogDialog({ series, catalogCount, onClose, onDone }: {
           if (preview && !busy) void run()
         }}
       >
-        <DialogHeader title="Import catalog" subtitle={`The lesson list of “${series.title}”, in order.`} onClose={onClose} />
+        <DialogHeader title={words.title} subtitle={`The lesson list of “${series.title}”, in order.`} onClose={onClose} />
         <label className="series-dialog__label" htmlFor={textId}>
           Lessons
         </label>
@@ -159,7 +175,7 @@ export function ImportCatalogDialog({ series, catalogCount, onClose, onDone }: {
         </div>
         {catalogCount > 0 ? (
           <p className="series-dialog__hint">
-            This replaces the current catalog of {plural(catalogCount, 'lesson', 'lessons')}. Numbers you set by hand stay.
+            {words.replaces} {plural(catalogCount, 'lesson', 'lessons')}. Numbers you set by hand stay.
           </p>
         ) : null}
         {error ? (
@@ -172,7 +188,7 @@ export function ImportCatalogDialog({ series, catalogCount, onClose, onDone }: {
             Cancel
           </button>
           <button type="submit" className="n-btn n-btn--primary" disabled={!preview || busy}>
-            {busy ? 'Importing…' : preview ? `Import ${plural(preview.items, 'lesson', 'lessons')}` : 'Import'}
+            {busy ? words.busy : preview ? `${words.go} ${plural(preview.items, 'lesson', 'lessons')}` : words.go}
           </button>
         </footer>
       </form>

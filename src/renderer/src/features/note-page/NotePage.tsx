@@ -557,7 +557,6 @@ function NoteView({ note, reveal: revealQuery }: { note: Note; reveal: string | 
                   <>
                     <NoteAttendees noteId={note.id} />
                     <SourceChip noteId={note.id} />
-                    <EndStrip noteId={note.id} />
                     <TemplateChip noteId={note.id} hasSummary={panels.length > 0} editor={notesEditor} />
                   </>
                 )}
@@ -654,6 +653,8 @@ function NoteView({ note, reveal: revealQuery }: { note: Note; reveal: string | 
               {/* The rating banner in the bottom zone; idle while the note chat is closed. */}
               <SummaryFeedbackBanner noteId={note.id} chatIdle={!chatOpen} />
               <MeetingPrompts noteId={note.id} />
+              {/* A course lesson's end strip, above the bottom bar (Courses). */}
+              <EndStrip noteId={note.id} />
               <div className="note-dock">
                 <div className="note-dock__center">
                   {/* A demo note never captures; its bar replaces MeetingControls. */}

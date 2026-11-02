@@ -6,6 +6,7 @@
 import type { JSX } from 'react'
 import { FindSourcesRow } from '../backfill/FindSourcesRow'
 import { BrowserExtensionRow } from '../extension/BrowserExtensionRow'
+import { CourseRows, HistoryHostRows, NoCaptionsRow } from './course-rows'
 import {
   CourseHostRows,
   DetectionRows,
@@ -22,14 +23,20 @@ export function SourcesSettingsPage(): JSX.Element {
     <>
       {/* Detection: the reader switch, its status, the last identification step. */}
       <DetectionRows />
+      {/* Courses: Settings and Remove per course. */}
+      <CourseRows />
       {/* History and online lookups, set together by the first-use prompt. */}
       <GrantRows />
+      {/* The History grants courses made, per site, with Revoke. */}
+      <HistoryHostRows />
       {/* Managed yt-dlp: state, version, Download, size and licence. */}
       <ToolsRows />
       {/* The browser extension: switch, per-browser status, Repair. */}
       <BrowserExtensionRow />
       {/* Video captions and the lesson template. */}
       <TranscriptRows />
+      {/* A video outside Courses with no captions. */}
+      <NoCaptionsRow />
       {/* Stamps and Ctrl+Alt+T. */}
       <StampRows />
       {/* Filing into course, playlist and channel folders. */}
