@@ -17,6 +17,8 @@
 // - Content sources: `notes.list` takes `source_kind`, `series_id`, `has_source` and `has_series`
 //   (false = source notes in no series, the vault's unfiled inbox); `series.list` and `series.get`
 //   answer from the storage joins, under `notes:read`.
+// - Courses: `series.list` takes `registered`, and a course's `apps` are the names its app ids
+//   map to (main only knows them; the storage rows carry none).
 
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -42,10 +44,25 @@ import type { SourceKind } from '@shared/types/sources'
 import type { MainContext } from '../context'
 import { log } from '../log'
 import { egressBlocked } from '../privacy'
-import type { ApiNoteFilters } from '../storage/api'
+import { mapApp } from '../media/apps'
+import type { ApiNoteFilters, ApiSeriesItem } from '../storage/api'
 
 /** `source_kind` values (the storage repo checks them again). */
 const SOURCE_KINDS: readonly SourceKind[] = ['video', 'live', 'lesson', 'other']
+
+/** A course's app names, from the app ids in its match; an app that maps to no name is left out. */
+async function withAppNames<T extends ApiSeriesItem>(ctx: MainContext, items: T[]): Promise<T[]> {
+  if (!items.some((x) => x.registered)) return items
+  const courses = new Map((await ctx.storage.listCourses()).map((c) => [c.id, c.match?.apps ?? []]))
+  return Promise.all(
+    items.map(async (x) => {
+      const apps = courses.get(x.id) ?? []
+      if (!apps.length) return x
+      const names = await Promise.all(apps.map((a) => mapApp(a.appUserModelId).then((m) => m.name, () => null)))
+      return { ...x, apps: [...new Set(names.filter((n): n is string => !!n))] }
+    })
+  )
+}
 
 /** The Local API row's line while local-only is on (also used by the companion row). */
 export const LOCAL_API_LOCAL_ONLY_LINE = 'Off while Nothing leaves this machine is on. Programs that read your notes could send them elsewhere.'
@@ -437,12 +454,15 @@ export function registerLocalApi(ctx: MainContext): void {
         return { message: 'Note removed from the folder' }
       }
       // Content sources: series with their lessons in catalog order.
-      case 'series.list':
-        return { series: await ctx.storage.apiListSeries() }
+      case 'series.list': {
+        const registered = flag(p['registered'], 'registered')
+        const all = await ctx.storage.apiListSeries()
+        return { series: await withAppNames(ctx, registered === undefined ? all : all.filter((x) => (x.registered === true) === registered)) }
+      }
       case 'series.get': {
         const s = await ctx.storage.apiGetSeries(id(p['id'], 'id'))
         if (!s) throw new ApiError('NOT_FOUND', 'Series not found')
-        return s
+        return (await withAppNames(ctx, [s]))[0]
       }
     }
   }

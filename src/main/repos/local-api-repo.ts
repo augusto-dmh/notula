@@ -13,6 +13,8 @@
 //   captions superseded are left out.
 // - `notes.list` carries at most the newest `LIST_SPANS` watched spans per note (its percent
 //   still counts them all); `notes.get` carries every span.
+// - Series rows carry the course fields (`registered`, behavior, sites, progress, next lesson);
+//   lessons carry `finished`. Both are derived on read, never stored.
 
 import type {
   ApiFolder,
@@ -257,7 +259,7 @@ function apiSources(s: StoreCtx, noteIds: string[], spanLimit: number | null): M
         lesson:
           src.lesson_number === null && src.lesson_label === null && src.lesson_state === 'pending' && !src.series_id
             ? null
-            : { number: src.lesson_number, label: src.lesson_label, state: src.lesson_state },
+            : { number: src.lesson_number, label: src.lesson_label, state: src.lesson_state, origin: src.lesson_origin },
         confidence: src.confidence,
         watched: {
           spans: sp.map((x) => ({ wall_start: x.wall_start, wall_end: x.wall_end, pos_start_ms: x.pos_start_ms, pos_end_ms: x.pos_end_ms, rate: x.rate })),
@@ -470,7 +472,16 @@ function apiSeriesItem(x: SeriesListItem): ApiSeriesItem {
     note_count: x.noteCount,
     catalog_count: x.catalogCount,
     pending_count: x.pendingCount,
-    last_watched_at: x.lastWatchedAt
+    last_watched_at: x.lastWatchedAt,
+    // Courses. `apps` holds names, which only main can map: it fills them.
+    registered: x.registered_at !== null,
+    on_play: x.registered_at !== null ? x.on_play : null,
+    on_end: x.registered_at !== null ? x.on_end : null,
+    sites: x.match?.hosts ?? [],
+    apps: [],
+    lessons_total: x.lessonsTotal,
+    lessons_with_notes: x.lessonsWithNotes,
+    next_lesson: x.nextLesson ? { number: x.nextLesson.number, title: x.nextLesson.title, url: x.nextLesson.url } : null
   }
 }
 
@@ -502,7 +513,8 @@ export function apiGetSeries(s: StoreCtx, id: string): ApiSeriesDetail | null {
       duration_ms: l.durationMs,
       note_id: l.noteId,
       state: l.lessonState,
-      watched_percent: l.watchedPercent
+      watched_percent: l.watchedPercent,
+      finished: l.finished
     })),
     pending_note_ids: pending.map((r) => String(r['id'])),
     duplicates: detail.duplicates.map((d) => ({ canonical_key: d.canonicalKey, note_ids: d.noteIds }))

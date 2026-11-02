@@ -593,7 +593,7 @@ export interface ApiNoteSource {
   duration_ms: number | null
   live: boolean
   series: { id: string; kind: SeriesKind; title: string } | null
-  lesson: { number: number | null; label: string | null; state: LessonState } | null
+  lesson: { number: number | null; label: string | null; state: LessonState; origin?: LessonOrigin | null } | null
   confidence: SourceConfidence
   watched: { spans: { wall_start: number; wall_end: number; pos_start_ms: number; pos_end_ms: number; rate: number }[]; percent: number | null }
 }

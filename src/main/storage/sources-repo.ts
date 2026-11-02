@@ -19,8 +19,10 @@ import {
   type CanonicalKey,
   type CatalogItem,
   type CatalogOrigin,
+  type BrowserId,
   type CourseBehavior,
   type CourseMatch,
+  type CourseNextLesson,
   type CourseView,
   type LessonOrigin,
   type LessonState,
@@ -57,7 +59,7 @@ import type {
 import { nowIso, parseJson } from './rows'
 import { clearDroppedPendingFlags } from './speaker-names-repo'
 import { checkpointVoice, deleteNoteVoiceRows, secureWrite } from './speaker-voice-repo'
-import { inTransaction, invalid, notFound, StoreError, type StoreCtx } from './store'
+import { inTransaction, invalid, notFound, type StoreCtx } from './store'
 
 type Row = Record<string, unknown>
 
@@ -184,7 +186,28 @@ export function toNoteSource(r: Row): NoteSource {
   }
 }
 
-function toSeries(r: Row): SourceSeries {
+/** Stored matches that failed to parse since start; logged as a running count. */
+let badMatchReads = 0
+
+const emptyMatch = (): CourseMatch => ({ apps: [], hosts: [], titles: [], keys: [], windowRead: false })
+
+/**
+ * `match_json` back to a `CourseMatch`: null stays null (not added yet), and anything that isn't
+ * a match becomes the empty one, so a damaged row reads as a course that matches nothing.
+ */
+function readMatch(raw: unknown, s?: StoreCtx): CourseMatch | null {
+  if (raw === null || raw === undefined) return null
+  const v = parseJson<unknown>(raw, undefined)
+  try {
+    return matchValue(v)
+  } catch {
+    badMatchReads++
+    s?.log('warn', 'sources:bad-match', { count: badMatchReads })
+    return emptyMatch()
+  }
+}
+
+function toSeries(r: Row, s?: StoreCtx): SourceSeries {
   return {
     id: String(r['id']),
     workspace_id: String(r['workspace_id']),
@@ -198,7 +221,7 @@ function toSeries(r: Row): SourceSeries {
     registered_at: str(r['registered_at']),
     on_play: pick(r['on_play'], ON_PLAY, 'record'),
     on_end: pick(r['on_end'], ON_END, 'notes'),
-    match: parseJson<CourseMatch | null>(r['match_json'], null),
+    match: readMatch(r['match_json'], s),
     catalog_origin: CATALOG_ORIGINS.includes(r['catalog_origin'] as CatalogOrigin) ? (r['catalog_origin'] as CatalogOrigin) : null,
     created_at: String(r['created_at']),
     updated_at: String(r['updated_at'])
@@ -289,6 +312,59 @@ function sessionIds(v: unknown): string {
     throw invalid('superseded_session_ids must be session ids')
   }
   return JSON.stringify([...new Set(v as string[])])
+}
+
+const BROWSERS: readonly BrowserId[] = ['edge', 'chrome', 'brave']
+const MAX_MATCH_APPS = 20
+const MAX_MATCH_KEYS = 50
+const MAX_APP_ID = 500
+const MAX_HOST = 253
+const HOST = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:\d{1,5})?$/
+
+function list(v: unknown, what: string, max: number): unknown[] {
+  if (!Array.isArray(v) || v.length > max) throw invalid(`${what} must be a list of at most ${max}`)
+  return v
+}
+
+/** A whole `CourseMatch`, checked field by field; hosts are lower-cased and every list deduplicated. */
+function matchValue(v: unknown): CourseMatch {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) throw invalid('match must be an object')
+  const m = v as Record<string, unknown>
+  const apps = list(m['apps'], 'match.apps', MAX_MATCH_APPS).map((a) => {
+    if (typeof a !== 'object' || a === null) throw invalid('match.apps must hold apps')
+    const app = a as Record<string, unknown>
+    return {
+      browser: oneOf(app['browser'], BROWSERS, 'browser'),
+      appUserModelId: key(text(app['appUserModelId'], 'appUserModelId', MAX_APP_ID), 'appUserModelId'),
+      profile: textOrNull(app['profile'], 'profile', MAX_LABEL),
+      appId: textOrNull(app['appId'], 'appId', MAX_LABEL)
+    }
+  })
+  const hosts = list(m['hosts'], 'match.hosts', SOURCES_LIMITS.historyHosts).map((h) => {
+    const host = text(h, 'host', MAX_HOST).trim().toLowerCase()
+    if (!HOST.test(host)) throw invalid('match.hosts must hold host names')
+    return host
+  })
+  const titles = list(m['titles'], 'match.titles', SOURCES_LIMITS.learnedTitles).map((t) => text(t, 'title', MAX_TITLE).trim()).filter(Boolean)
+  const keys = list(m['keys'], 'match.keys', MAX_MATCH_KEYS).map((k) => key(k, 'match key'))
+  if (typeof m['windowRead'] !== 'boolean') throw invalid('match.windowRead must be true or false')
+  return {
+    apps: apps.filter((a, i) => apps.findIndex((b) => b.appUserModelId === a.appUserModelId) === i),
+    hosts: [...new Set(hosts)],
+    titles: [...new Set(titles)],
+    keys: [...new Set(keys)],
+    windowRead: m['windowRead']
+  }
+}
+
+function behaviorValue(v: unknown, base: CourseBehavior | null): CourseBehavior {
+  if (typeof v !== 'object' || v === null) throw invalid('behavior must be an object')
+  const b = v as Partial<CourseBehavior>
+  if (!base) return { onPlay: oneOf(b.onPlay, ON_PLAY, 'on_play'), onEnd: oneOf(b.onEnd, ON_END, 'on_end') }
+  return {
+    onPlay: b.onPlay === undefined ? base.onPlay : oneOf(b.onPlay, ON_PLAY, 'on_play'),
+    onEnd: b.onEnd === undefined ? base.onEnd : oneOf(b.onEnd, ON_END, 'on_end')
+  }
 }
 
 /** The local owner's rows, for id-addressed series and catalog statements (no alias). */
@@ -639,7 +715,7 @@ export function getSeries(s: StoreCtx, seriesId: string): SourceSeries | null {
   const r = s.db.prepare(`SELECT ${SERIES_COLS} FROM source_series WHERE id = @id AND ${OWN_ROW}`).get({ ...scope(s), id: id(seriesId, 'seriesId') }) as
     | Row
     | undefined
-  return r ? toSeries(r) : null
+  return r ? toSeries(r, s) : null
 }
 
 /** The ids of the local owner's series filed into these folders (read before a folder delete). */
@@ -658,7 +734,7 @@ export function findSeriesByFolder(s: StoreCtx, folderId: string): SourceSeries 
        ORDER BY created_at ASC, rid ASC LIMIT 1`
     )
     .get({ ...scope(s), folder: id(folderId, 'folderId') }) as Row | undefined
-  return r ? toSeries(r) : null
+  return r ? toSeries(r, s) : null
 }
 
 export function upsertSeries(s: StoreCtx, input: NewSourceSeries): { series: SourceSeries; created: boolean } {
@@ -674,7 +750,7 @@ export function upsertSeries(s: StoreCtx, input: NewSourceSeries): { series: Sou
       .prepare(`SELECT ${SERIES_COLS} FROM source_series WHERE owner_id = ? AND kind = ? AND provider = ? AND canonical_key = ?`)
       .get(s.identity.ownerId, kind, provider, canonicalKey) as Row | undefined
     if (found) {
-      const series = toSeries(found)
+      const series = toSeries(found, s)
       if (!series.title && title) {
         s.db.prepare(`UPDATE source_series SET title = ?, updated_at = ? WHERE id = ?`).run(title, nowIso(), series.id)
         return { id: series.id, created: false, changed: true }
@@ -753,16 +829,22 @@ function seriesListItems(s: StoreCtx, seriesId: string | null): SeriesListItem[]
        ORDER BY lower(ss.title), ss.created_at, ss.id`
     )
     .all({ ...scope(s), series: seriesId }) as Row[]
-  return rows.map((r) => ({
-    ...toSeries(r),
-    noteCount: num(r['note_count']) ?? 0,
-    catalogCount: num(r['catalog_count']) ?? 0,
-    pendingCount: num(r['pending_count']) ?? 0,
-    lastWatchedAt: isoOfMs(num(r['last_wall'])),
-    lessonsTotal: num(r['catalog_count']) ?? 0,
-    lessonsWithNotes: 0,
-    nextLesson: null
-  }))
+  return rows.map((r) => {
+    const series = toSeries(r, s)
+    const catalogCount = num(r['catalog_count']) ?? 0
+    // The progress fields come from the lessons view; a series without a lesson list has none.
+    const detail = catalogCount > 0 ? getSeriesDetail(s, series.id) : null
+    return {
+      ...series,
+      noteCount: num(r['note_count']) ?? 0,
+      catalogCount,
+      pendingCount: num(r['pending_count']) ?? 0,
+      lastWatchedAt: isoOfMs(num(r['last_wall'])),
+      lessonsTotal: detail?.lessonsTotal ?? 0,
+      lessonsWithNotes: detail?.lessonsWithNotes ?? 0,
+      nextLesson: detail?.nextLesson ?? null
+    }
+  })
 }
 
 /** Groups of own, non-trashed notes sharing a key, oldest note first; optionally one series. */
@@ -884,57 +966,183 @@ export function getSeriesDetail(s: StoreCtx, seriesId: string): SeriesDetail | n
     duplicates,
     lessonsTotal: catalog.length,
     lessonsWithNotes: lessons.filter((l) => l.catalogItemId !== null && l.noteId !== null).length,
-    nextLesson: null
+    nextLesson: nextLessonOf(lessons)
   }
 }
 
+/**
+ * The first lesson-list item after the most recently watched finished one that has no finished
+ * note; with nothing finished, the first item without a note. Null when the list has no such item.
+ */
+export function nextLessonOf(lessons: readonly SeriesLesson[]): CourseNextLesson | null {
+  const items = lessons.filter((l): l is SeriesLesson & { catalogItemId: string } => l.catalogItemId !== null)
+  let newest = -1
+  items.forEach((l, i) => {
+    if (l.finished && (newest < 0 || (l.lastWatchedAt ?? '') > (items[newest]!.lastWatchedAt ?? ''))) newest = i
+  })
+  const next = newest < 0 ? items.find((l) => l.noteId === null) : items.slice(newest + 1).find((l) => !l.finished)
+  return next ? { catalogItemId: next.catalogItemId, number: next.number, title: next.title, url: next.url } : null
+}
+
 // ---------- courses ----------
-// Signatures for Courses; the bodies are not written yet. Reads answer empty, writes refuse.
+// A course is a series with `registered_at` set. Its behavior and match live on the series row,
+// so leaving Courses (or a delete of the series) needs no other table.
 
-function notYet(what: string): StoreError {
-  return new StoreError('internal', `${what}: not implemented`)
+/** Writes course columns of one own series inside the caller's transaction. */
+function setSeriesColumns(s: StoreCtx, seriesId: string, cols: Record<string, unknown>): void {
+  const names = Object.keys(cols)
+  s.db
+    .prepare(`UPDATE source_series SET ${names.map((n) => `${n} = @${n}`).join(', ')}, updated_at = @now WHERE id = @id AND ${OWN_ROW}`)
+    .run({ ...cols, ...scope(s), id: seriesId, now: nowIso() })
 }
 
-/** Marks the series as a course (`registered_at`), with its behavior and match. */
-export function registerCourse(_s: StoreCtx, _seriesId: string, _behavior: CourseBehavior, _match: CourseMatch): SourceSeries {
-  throw notYet('registerCourse')
+/** Marks the series as a course (`registered_at`, kept when already set), with its behavior and match. */
+export function registerCourse(s: StoreCtx, seriesId: string, behavior: CourseBehavior, match: CourseMatch): SourceSeries {
+  id(seriesId, 'seriesId')
+  const b = behaviorValue(behavior, null)
+  const m = JSON.stringify(matchValue(match))
+  inTransaction(s.db, () => {
+    const series = getSeries(s, seriesId)
+    if (!series) throw notFound('series', seriesId)
+    setSeriesColumns(s, seriesId, { registered_at: series.registered_at ?? nowIso(), on_play: b.onPlay, on_end: b.onEnd, match_json: m })
+  })
+  s.touch('source_series', seriesId)
+  return getSeries(s, seriesId) as SourceSeries
 }
 
-/** Behavior and match only; `registered_at` is kept. */
-export function updateCourse(_s: StoreCtx, _seriesId: string, _patch: CourseSeriesPatch): SourceSeries {
-  throw notYet('updateCourse')
-}
-
-/** Back to a plain series: `registered_at` and the match cleared; notes, folder and catalog kept. */
-export function unregisterCourse(_s: StoreCtx, _seriesId: string): SourceSeries {
-  throw notYet('unregisterCourse')
-}
-
-/** Series in Courses, last watched first. */
-export function listCourses(_s: StoreCtx): SeriesListItem[] {
-  return []
-}
-
-/** A course page; null for an unknown series or one not in Courses. */
-export function getCourseView(_s: StoreCtx, _seriesId: string): CourseView | null {
-  return null
-}
-
-export function setCatalogOrigin(_s: StoreCtx, _seriesId: string, _origin: CatalogOrigin | null): SourceSeries {
-  throw notYet('setCatalogOrigin')
+/** Behavior (unset fields kept) and match (replaced whole); `registered_at` is kept. */
+export function updateCourse(s: StoreCtx, seriesId: string, patch: CourseSeriesPatch): SourceSeries {
+  id(seriesId, 'seriesId')
+  if (typeof patch !== 'object' || patch === null) throw invalid('patch must be an object')
+  const changed = inTransaction(s.db, () => {
+    const series = getSeries(s, seriesId)
+    if (!series) throw notFound('series', seriesId)
+    const cols: Record<string, unknown> = {}
+    if (patch.behavior !== undefined) {
+      const b = behaviorValue(patch.behavior, { onPlay: series.on_play, onEnd: series.on_end })
+      cols['on_play'] = b.onPlay
+      cols['on_end'] = b.onEnd
+    }
+    if (patch.match !== undefined) cols['match_json'] = JSON.stringify(matchValue(patch.match))
+    if (!Object.keys(cols).length) return false
+    setSeriesColumns(s, seriesId, cols)
+    return true
+  })
+  if (changed) s.touch('source_series', seriesId)
+  return getSeries(s, seriesId) as SourceSeries
 }
 
 /**
- * The picker: the note's lesson becomes the catalog item (`numbered`, with `origin`), or none
- * (`itemId` null: the lesson is cleared). A manual number is never overwritten by another origin.
+ * Back to a plain series: only `registered_at` is cleared. Folder, lesson list, notes, behavior and
+ * match stay, so adding the course again starts from what it had.
  */
-export function setLessonForNote(_s: StoreCtx, _noteId: string, _itemId: string | null, _origin: LessonOrigin): NoteSource {
-  throw notYet('setLessonForNote')
+export function unregisterCourse(s: StoreCtx, seriesId: string): SourceSeries {
+  id(seriesId, 'seriesId')
+  const changed = inTransaction(s.db, () => {
+    const series = getSeries(s, seriesId)
+    if (!series) throw notFound('series', seriesId)
+    if (series.registered_at === null) return false
+    setSeriesColumns(s, seriesId, { registered_at: null })
+    return true
+  })
+  if (changed) s.touch('source_series', seriesId)
+  return getSeries(s, seriesId) as SourceSeries
+}
+
+/** Series in Courses, last watched first (never watched last, the newest added first among them). */
+export function listCourses(s: StoreCtx): SeriesListItem[] {
+  return seriesListItems(s, null)
+    .filter((x) => x.registered_at !== null)
+    .sort(
+      (a, b) =>
+        (b.lastWatchedAt ?? '').localeCompare(a.lastWatchedAt ?? '') ||
+        (b.registered_at ?? '').localeCompare(a.registered_at ?? '') ||
+        a.id.localeCompare(b.id)
+    )
+}
+
+/** A course page; null for an unknown series or one not in Courses. `playsIn` is main's to fill. */
+export function getCourseView(s: StoreCtx, seriesId: string): CourseView | null {
+  const detail = getSeriesDetail(s, seriesId)
+  if (!detail || detail.series.registered_at === null) return null
+  const needsLesson = listNoteSources(s, { seriesId })
+    .filter((n) => n.lesson_state === 'pending' || n.lesson_state === 'guessed')
+    .map((n) => ({ noteId: n.note_id, label: n.lesson_label, state: n.lesson_state }))
+  return { detail, playsIn: null, needsLesson }
+}
+
+export function setCatalogOrigin(s: StoreCtx, seriesId: string, origin: CatalogOrigin | null): SourceSeries {
+  id(seriesId, 'seriesId')
+  const value = origin === null ? null : oneOf(origin, CATALOG_ORIGINS, 'catalog origin')
+  const changed = inTransaction(s.db, () => {
+    const series = getSeries(s, seriesId)
+    if (!series) throw notFound('series', seriesId)
+    if (series.catalog_origin === value) return false
+    setSeriesColumns(s, seriesId, { catalog_origin: value })
+    return true
+  })
+  if (changed) s.touch('source_series', seriesId)
+  return getSeries(s, seriesId) as SourceSeries
+}
+
+function getCatalogItem(s: StoreCtx, itemId: string): CatalogItem | null {
+  const r = s.db.prepare(`SELECT ${CATALOG_COLS} FROM series_catalog_items WHERE id = @id AND ${OWN_ROW}`).get({ ...scope(s), id: itemId }) as Row | undefined
+  return r ? toCatalogItem(r) : null
+}
+
+/**
+ * The picker: the note's lesson becomes the catalog item (`numbered`, with `origin`, in the item's
+ * series), or none (`itemId` null, Not a lesson: the series and the lesson are cleared). A manual
+ * lesson is never overwritten by another origin; the source then comes back unchanged.
+ */
+export function setLessonForNote(s: StoreCtx, noteId: string, itemId: string | null, origin: LessonOrigin): NoteSource {
+  id(noteId, 'noteId')
+  const item = itemId === null ? null : id(itemId, 'itemId')
+  const o = oneOf(origin, LESSON_ORIGINS, 'lesson origin')
+  const changed = inTransaction(s.db, () => {
+    const source = getSourceRow(s, noteId)
+    if (!source) throw notFound('note source', noteId)
+    if (source.lesson_origin === 'manual' && o !== 'manual') return false
+    let cols: Record<string, unknown>
+    if (item === null) {
+      cols = { series_id: null, lesson_number: null, lesson_label: null, lesson_state: 'pending', lesson_origin: o }
+    } else {
+      const it = getCatalogItem(s, item)
+      if (!it) throw notFound('catalog item', item)
+      cols = { series_id: it.series_id, lesson_number: it.number, lesson_label: null, lesson_state: 'numbered', lesson_origin: o }
+    }
+    const names = Object.keys(cols)
+    s.db
+      .prepare(`UPDATE note_sources SET ${names.map((n) => `${n} = @${n}`).join(', ')}, updated_at = @now WHERE note_id = @note_id`)
+      .run({ ...cols, now: nowIso(), note_id: noteId })
+    return true
+  })
+  if (changed) s.touch('note_sources', noteId)
+  return getSourceRow(s, noteId) as NoteSource
 }
 
 /** A remembered pick: the item's key and URL are filled when empty. Null for an unknown item. */
-export function rememberLessonKey(_s: StoreCtx, _itemId: string, _key: CanonicalKey, _url: string | null): CatalogItem | null {
-  throw notYet('rememberLessonKey')
+export function rememberLessonKey(s: StoreCtx, itemId: string, canonicalKey: CanonicalKey, itemUrl: string | null): CatalogItem | null {
+  id(itemId, 'itemId')
+  const k = key(canonicalKey, 'canonicalKey')
+  const u = url(itemUrl)
+  const res = inTransaction(s.db, () => {
+    const it = getCatalogItem(s, itemId)
+    if (!it) return null
+    const cols: Record<string, unknown> = {}
+    if (it.canonical_key === null) cols['canonical_key'] = k
+    if (it.url === null && u !== null) cols['url'] = u
+    const names = Object.keys(cols)
+    if (names.length) {
+      s.db
+        .prepare(`UPDATE series_catalog_items SET ${names.map((n) => `${n} = @${n}`).join(', ')}, updated_at = @now WHERE id = @id`)
+        .run({ ...cols, now: nowIso(), id: itemId })
+    }
+    return { seriesId: it.series_id, changed: names.length > 0 }
+  })
+  if (!res) return null
+  if (res.changed) s.touch('series_catalog_items', res.seriesId)
+  return getCatalogItem(s, itemId)
 }
 
 // ---------- catalog ----------

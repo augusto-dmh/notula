@@ -11,7 +11,9 @@
 //     video positions. Other notes keep the exact "Copy transcript" text in the standard export
 //     (unchanged); the Markdown export times them too, as offsets from their first line.
 //   A version-1 reader still reads a version-2 file: the new keys are extra front-matter.
-// - The standard export's front-matter gains a `source` block (null without one). The Markdown
+// - The standard export's front-matter gains a `source` block (null without one). A course's
+//   series (in Courses now, or once) adds its behavior and match there: they belong to the series.
+//   The Markdown
 //   export uses flat properties instead (`source_url`, `source_kind`, `source_title`, `channel`,
 //   `series`, `lesson`, `duration`, `watched`), which Markdown apps that read front-matter can sort and group.
 // - Markdown export layout: the note's Notula folders (two levels), one `<name>.md` per note and a
@@ -21,7 +23,7 @@ import { formatPosition } from '@shared/lib/position'
 import { speakerTurns } from '@shared/lib/speakers'
 import { transcriptCopyText } from '@shared/lib/transcript-text'
 import type { Note } from '@shared/types/notes'
-import type { NoteSourceView } from '@shared/types/sources'
+import type { NoteSourceView, SourceSeries } from '@shared/types/sources'
 import type { TranscriptChunk } from '@shared/types/transcript'
 
 /** A body section of an exported note. */
@@ -52,8 +54,8 @@ export function sectionLines(sections: ExportSection[]): string[] {
   return out
 }
 
-/** The standard export's `source` block (in its front-matter). */
-export function sourceBlockLines(v: NoteSourceView | null): string[] {
+/** The standard export's `source` block (in its front-matter); `series` is the full row, for a course's fields. */
+export function sourceBlockLines(v: NoteSourceView | null, series: SourceSeries | null = null): string[] {
   if (!v) return ['source: null']
   const s = v.source
   const out = [
@@ -66,8 +68,24 @@ export function sourceBlockLines(v: NoteSourceView | null): string[] {
     `  duration_ms: ${num(s.duration_ms)}`,
     `  live: ${s.live ? 'true' : 'false'}`
   ]
-  if (v.series) out.push('  series:', `    id: ${q(v.series.id)}`, `    kind: ${q(v.series.kind)}`, `    title: ${q(v.series.title)}`)
-  else out.push('  series: null')
+  if (v.series) {
+    out.push('  series:', `    id: ${q(v.series.id)}`, `    kind: ${q(v.series.kind)}`, `    title: ${q(v.series.title)}`)
+    if (series?.id === v.series.id && (series.registered_at !== null || series.match !== null)) {
+      const list = (xs: string[]): string => `[${xs.map(q).join(', ')}]`
+      const m = series.match
+      out.push(
+        `    registered_at: ${qn(series.registered_at)}`,
+        `    on_play: ${q(series.on_play)}`,
+        `    on_end: ${q(series.on_end)}`,
+        `    sites: ${list(m?.hosts ?? [])}`,
+        `    apps: ${list((m?.apps ?? []).map((a) => a.appUserModelId))}`,
+        `    titles: ${list(m?.titles ?? [])}`,
+        `    keys: ${list(m?.keys ?? [])}`,
+        `    window_read: ${m?.windowRead ? 'true' : 'false'}`,
+        `    catalog_origin: ${qn(series.catalog_origin)}`
+      )
+    }
+  } else out.push('  series: null')
   out.push(
     '  lesson:',
     `    number: ${num(s.lesson_number)}`,

@@ -45,7 +45,7 @@ import { transcriptCopyText } from '@shared/lib/transcript-text'
 import { DATA_EXPORT, type DataExportFormat } from '@shared/types/data-export'
 import type { Note, NotePerson } from '@shared/types/notes'
 import type { Panel } from '@shared/types/panels'
-import type { NoteSourceView } from '@shared/types/sources'
+import type { NoteSourceView, SourceSeries } from '@shared/types/sources'
 import type { TranscriptChunk } from '@shared/types/transcript'
 import {
   chunkPositions,
@@ -62,7 +62,7 @@ import { getSettingsRaw } from './kv-repo'
 import { getNote, listNotes } from './notes-repo'
 import { listPanels } from './panels-repo'
 import { DB_FILE, KEY_FILE } from './protocol'
-import { getNoteSourceView } from './sources-repo'
+import { getNoteSourceView, getSeries } from './sources-repo'
 import { getTranscript } from './transcript-repo'
 import { listTrash } from './trash-repo'
 import { invalid, StoreError, type Db, type StoreCtx } from './store'
@@ -227,6 +227,8 @@ function frontMatter(f: {
   transcript: string | null
   trashed: boolean
   source: NoteSourceView | null
+  /** The source's series row, for a course's fields. */
+  series: SourceSeries | null
   format: DataExportFormat
   sections: ExportSection[]
 }): string {
@@ -257,7 +259,7 @@ function frontMatter(f: {
   lines.push(`transcript: ${f.transcript ? q(f.transcript) : 'null'}`)
   lines.push(f.attachments.length === 0 ? 'attachments: []' : 'attachments:', ...f.attachments.map((n) => `  - ${q(n)}`))
   lines.push(`trashed: ${f.trashed ? 'true' : 'false'}`)
-  lines.push(...(f.format === 'markdown' ? sourcePropertyLines(f.source) : sourceBlockLines(f.source)))
+  lines.push(...(f.format === 'markdown' ? sourcePropertyLines(f.source) : sourceBlockLines(f.source, f.series)))
   lines.push(...sectionLines(f.sections), `notula_export_version: ${DATA_EXPORT.exportVersion}`, '---')
   return lines.join('\n')
 }
@@ -453,6 +455,7 @@ export function writeExportNotes(
             transcript: transcriptFile,
             trashed: ref.trashed,
             source,
+            series: source?.series ? getSeries(s, source.series.id) : null,
             format
           },
           body

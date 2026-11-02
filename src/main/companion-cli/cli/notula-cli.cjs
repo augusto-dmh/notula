@@ -29,7 +29,7 @@ Usage:
                     [--source-kind KIND] [--series-id ID] [--has-source[=BOOL]] [--has-series[=BOOL]]
   notula notes get --id ID [--id ID ...]
   notula notes transcript get --id ID
-  notula series list
+  notula series list [--registered[=BOOL]]
   notula series get --id ID
   notula folders list [--search TEXT]
   notula folders add-document --folder-id ID --document-id ID
@@ -38,6 +38,7 @@ Usage:
 Results print as JSON. TIME needs a timezone offset or Z, for example 2026-10-01T09:00:00Z.
 KIND is video, live, lesson or other. BOOL is true or false; a bare --has-source means true.
 --has-series=false lists the source notes that are in no series.
+--registered lists only the series added to Courses; --registered=false lists the others.
 Exit codes: 0 success, 1 Notula error, 2 usage error.
 `
 
@@ -144,8 +145,9 @@ function parseCommand(argv) {
     return { method: 'notes.list', params }
   }
   if (a === 'series' && b === 'list') {
-    parseFlags([c, ...rest].filter((x) => x !== undefined), [])
-    return { method: 'series.list', params: {} }
+    const f = parseFlags([c, ...rest].filter((x) => x !== undefined), ['registered'], ['registered'])
+    const registered = boolFlag(f, 'registered')
+    return { method: 'series.list', params: registered === undefined ? {} : { registered } }
   }
   if (a === 'series' && b === 'get') {
     const f = parseFlags([c, ...rest].filter((x) => x !== undefined), ['id'])

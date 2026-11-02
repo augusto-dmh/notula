@@ -7,19 +7,20 @@
 // 1. Builds this tree's storage engine and the real main modules behind them (local-api/index.ts,
 //    sources/backfill.ts, data-export/index.ts) with vite into the OS temp folder, with
 //    `electron` replaced by a stub (no window, no network: lookups stay off).
-// 2. Opens a fresh database (schema 9) in a scratch folder and seeds, through the storage API:
+// 2. Opens a fresh database (this tree's schema) in a scratch folder and seeds, through the storage API:
 //    a YouTube video note in a channel series with spans, a stamped projection and a
-//    system-audio transcript whose chunks carry video positions; a course with a catalog and two
-//    lesson notes (one pending, one with a video-captions transcript); a plain meeting note; and
+//    system-audio transcript whose chunks carry video positions; a course in Courses with a
+//    catalog and two lesson notes (one pending, one finished with a video-captions transcript); a plain meeting note; and
 //    three older notes without a source (a YouTube URL in the text, two hand-typed titles).
 // 3. Starts the real Local API listener with the companion CLI on, and runs the real CLI
 //    (`notula-cli.cjs`) against it: `notes list` with every new filter, `notes get`
-//    (`notes_md_stamped`), `notes transcript get` (`position_ms`), `series list`, `series get`,
-//    and the usage errors. This is the `/study` ingest round trip.
+//    (`notes_md_stamped`), `notes transcript get` (`position_ms`), `series list` (with the course
+//    fields and `--registered`), `series get` (`finished`), and the usage errors. This is the
+//    `/study` ingest round trip.
 // 4. Runs Find sources (preview, apply, undo) through its IPC handlers.
 // 5. Runs Export notes as Markdown and the standard export into a scratch folder: the folder
 //    tree, front-matter (source properties, export format 2 section markers), the stamped body,
-//    the `[mm:ss]` transcripts, and never-overwrite.
+//    the `[mm:ss]` transcripts, the course fields of the series block, and never-overwrite.
 //
 // Exits 1 on any failure. `--keep` keeps the scratch folder.
 
@@ -36,6 +37,8 @@ const require = createRequire(join(ROOT, 'package.json'))
 const KEEP = process.argv.includes('--keep')
 const OUT = join(tmpdir(), 'notula-cli-source-check')
 const CLI = join(ROOT, 'src/main/companion-cli/cli/notula-cli.cjs')
+/** The schema a fresh database of this tree opens at (read from the source). */
+const SCHEMA = Number(/export const SCHEMA_VERSION = (\d+)/.exec(readFileSync(join(ROOT, 'src/main/storage/protocol.ts'), 'utf8'))[1])
 
 let failures = 0
 function check(name, ok, detail) {
@@ -154,7 +157,7 @@ const opened = call('open', {
   devVersionAhead: false,
   housekeeping: false
 })
-check('a fresh database opens at schema 9', opened.state === 'ready' && opened.schemaVersion === 9, { state: opened.state, version: opened.schemaVersion })
+check(`a fresh database opens at schema ${SCHEMA}`, opened.state === 'ready' && opened.schemaVersion === SCHEMA, { state: opened.state, version: opened.schemaVersion })
 
 const settings = {
   'localApi.enabled': false,
@@ -197,11 +200,11 @@ const mk = (title, extra = {}) => call('createNote', { origin: 'unknown', title,
 const identity = call('identity')
 
 // A YouTube video in a channel series: spans, stamps, a system-audio transcript mapped to the video.
-const video = mk('Creating a loosely coupled monolith')
-const channel = call('upsertSeries', { kind: 'channel', provider: 'youtube', canonical_key: 'youtube:channel:codeopinion', title: 'CodeOpinion' }).series
+const video = mk('Sample talk on modules')
+const channel = call('upsertSeries', { kind: 'channel', provider: 'youtube', canonical_key: 'youtube:channel:examplechannel', title: 'Example Channel' }).series
 call('createNoteSource', {
   note_id: video, kind: 'video', provider: 'youtube', canonical_key: 'youtube:abcdefghijk', url: 'https://www.youtube.com/watch?v=abcdefghijk',
-  title: 'Creating a loosely coupled monolith', channel: 'CodeOpinion', duration_ms: 600_000, series_id: channel.id, confidence: 'exact', detected_via: 'media-session'
+  title: 'Sample talk on modules', channel: 'Example Channel', duration_ms: 600_000, series_id: channel.id, confidence: 'exact', detected_via: 'media-session'
 })
 call('updateNote', video, { notes_md: '# Key ideas\n\nModules own their data.', notes_text: 'Key ideas Modules own their data.' })
 call('updateNoteSource', video, { notes_md_stamped: '# Key ideas\n\n[01:05](https://www.youtube.com/watch?v=abcdefghijk&t=65s) Modules own their data.' })
@@ -219,8 +222,16 @@ call('upsertChunks', [chunk(video, audioSession, 0, 'Welcome back to the channel
 const course = call('upsertSeries', { kind: 'course', provider: 'circle', canonical_key: 'circle:courses.example.com:course:fundamentos', title: 'Fundamentos' }).series
 call('replaceCatalog', course.id, [
   { number: 1, section: 'Intro', title: 'Welcome', url: 'https://courses.example.com/c/fundamentos/sections/1/lessons/11', canonical_key: 'circle:courses.example.com:11', duration_ms: 300_000 },
-  { number: 2, section: 'Intro', title: 'Modules', url: 'https://courses.example.com/c/fundamentos/sections/1/lessons/12', canonical_key: 'circle:courses.example.com:12', duration_ms: 400_000 }
+  { number: 2, section: 'Intro', title: 'Modules', url: 'https://courses.example.com/c/fundamentos/sections/1/lessons/12', canonical_key: 'circle:courses.example.com:12', duration_ms: 400_000 },
+  { number: 3, section: 'Intro', title: 'Boundaries', url: 'https://courses.example.com/c/fundamentos/sections/1/lessons/13', canonical_key: 'circle:courses.example.com:13', duration_ms: 500_000 }
 ])
+call('registerCourse', course.id, { onPlay: 'ask', onEnd: 'button' }, {
+  apps: [{ browser: 'chrome', appUserModelId: 'Chrome._crx_aaaabbbbccccddddeeeeffffgggghhhh', profile: 'Default', appId: 'aaaabbbbccccddddeeeeffffgggghhhh' }],
+  hosts: ['courses.example.com'],
+  titles: ['Example Community'],
+  keys: ['circle:courses.example.com:space:fundamentos'],
+  windowRead: false
+})
 const lesson2 = mk('Modules')
 call('createNoteSource', {
   note_id: lesson2, kind: 'lesson', provider: 'circle', canonical_key: 'circle:courses.example.com:12', url: 'https://courses.example.com/c/fundamentos/sections/1/lessons/12',
@@ -229,6 +240,8 @@ call('createNoteSource', {
 const captions = randomUUID()
 call('createSession', { id: captions, document_id: lesson2, provider: 'captions', model: 'vtt', language: 'pt', started_at: iso(T0) })
 call('upsertChunks', [chunk(lesson2, captions, 0, 'Bem-vindos.', null, T0 + 12_000)])
+// 95 % watched: finished, so the next lesson is the one after it.
+call('addSourceSpans', lesson2, [{ wall_start: T0 + 3_600_000, wall_end: T0 + 3_980_000, pos_start_ms: 0, pos_end_ms: 380_000, rate: 1 }])
 const pending = mk('Lesson without a number')
 call('createNoteSource', {
   note_id: pending, kind: 'lesson', provider: 'circle', canonical_key: 'title:courses.example.com:lesson without a number', url: null,
@@ -243,7 +256,7 @@ call('upsertChunks', [chunk(meeting, meetingSession, 0, 'Let us start with the b
 // Older notes without a source, for Find sources.
 const withUrl = mk('Notes on a talk')
 call('updateNote', withUrl, { notes_md: 'Watched https://youtu.be/zyxwvutsrqp?t=30 today. Also [Sampleapp](https://notes.sampleapp.test/d/abc).', notes_text: 'Watched today.' })
-const tagged = mk('[Vídeo] Event sourcing basics - Youtube - CodeOpinion')
+const tagged = mk('[Vídeo] Event sourcing basics - Youtube - Example Channel')
 const courseTitle = mk('[Curso] Fundamentos - Aula 33 - Arquitetura evolutiva')
 // Folders for the Markdown export tree.
 const courses = call('createFolder', { title: 'Courses' })
@@ -278,8 +291,8 @@ check('notes list carries a source block (or null) on every note', all.code === 
 const vItem = all.json?.notes.find((n) => n.id === video)
 check(
   'a source note item: kind, url, channel, series, watched',
-  vItem?.source?.kind === 'video' && vItem.source.url === 'https://www.youtube.com/watch?v=abcdefghijk' && vItem.source.channel === 'CodeOpinion' &&
-    vItem.source.series?.title === 'CodeOpinion' && vItem.source.watched.percent === 50 && vItem.source.watched.spans.length === 1,
+  vItem?.source?.kind === 'video' && vItem.source.url === 'https://www.youtube.com/watch?v=abcdefghijk' && vItem.source.channel === 'Example Channel' &&
+    vItem.source.series?.title === 'Example Channel' && vItem.source.watched.percent === 50 && vItem.source.watched.spans.length === 1,
   vItem?.source
 )
 check('a plain note has source null', all.json?.notes.find((n) => n.id === meeting)?.source === null)
@@ -288,6 +301,8 @@ check('--has-source=false lists only notes without one', ids(await cli('notes', 
 check('--has-series=false is the unfiled inbox', ids(await cli('notes', 'list', '--has-series', 'false')) === unfiled)
 check('--source-kind lesson', ids(await cli('notes', 'list', '--source-kind', 'lesson')) === sorted(lesson2, pending))
 check('--series-id', ids(await cli('notes', 'list', '--series-id', course.id)) === sorted(lesson2, pending))
+const l2Item = all.json?.notes.find((n) => n.id === lesson2)
+check('a lesson note item carries lesson.origin', l2Item?.source?.lesson?.origin === 'catalog' && all.json?.notes.find((n) => n.id === pending)?.source?.lesson?.origin === null, l2Item?.source?.lesson)
 const badKind = await cli('notes', 'list', '--source-kind', 'podcast')
 check('an unknown --source-kind is a usage error', badKind.code === 2 && badKind.json?.code === 'USAGE', badKind.json)
 const badBool = await cli('notes', 'list', '--has-source=maybe')
@@ -304,19 +319,40 @@ const tl = await cli('notes', 'transcript', 'get', '--id', lesson2)
 check('transcript get: a video-captions chunk is its offset into the session', tl.json?.transcript[0]?.position_ms === 12_000, tl.json?.transcript)
 
 const sl = await cli('series', 'list')
-check('series list', sl.code === 0 && sl.json.series.map((x) => x.title).sort().join() === 'CodeOpinion,Fundamentos', sl.json)
+check('series list', sl.code === 0 && sl.json.series.map((x) => x.title).sort().join() === 'Example Channel,Fundamentos', sl.json)
+const slCourse = sl.json?.series.find((x) => x.id === course.id)
+check(
+  'series list: a course carries registered, behavior, sites, apps (names), progress and the next lesson',
+  slCourse?.registered === true && slCourse.on_play === 'ask' && slCourse.on_end === 'button' && slCourse.sites.join() === 'courses.example.com' &&
+    Array.isArray(slCourse.apps) && !slCourse.apps.some((a) => a.includes('_crx_')) && slCourse.lessons_total === 3 && slCourse.lessons_with_notes === 1 &&
+    slCourse.next_lesson?.number === 3 && slCourse.next_lesson.title === 'Boundaries' && slCourse.next_lesson.url === 'https://courses.example.com/c/fundamentos/sections/1/lessons/13',
+  slCourse
+)
+const slChannel = sl.json?.series.find((x) => x.id === channel.id)
+check('series list: a plain series is not registered and has no behavior', slChannel?.registered === false && slChannel.on_play === null && slChannel.next_lesson === null, slChannel)
+const slReg = await cli('series', 'list', '--registered')
+check('series list --registered keeps only courses', slReg.code === 0 && slReg.json.series.map((x) => x.id).join() === course.id, slReg.json)
+const slUnreg = await cli('series', 'list', '--registered=false')
+check('series list --registered=false keeps the others', slUnreg.code === 0 && slUnreg.json.series.map((x) => x.id).join() === channel.id, slUnreg.json)
+const slBad = await cli('series', 'list', '--registered=maybe')
+check('series list --registered=maybe is a usage error', slBad.code === 2, slBad.json)
 const sg = await cli('series', 'get', '--id', course.id)
 check(
   'series get: lessons in catalog order with note ids (unwatched ones null), then pending notes',
   sg.json?.lessons?.slice(0, 2).map((l) => `${l.number}:${l.note_id ?? '-'}`).join() === `1:-,2:${lesson2}` && sg.json.pending_note_ids.join() === pending,
   sg.json
 )
+check(
+  'series get: lessons carry watched_percent and finished (at 90 % or more)',
+  sg.json?.lessons?.slice(0, 3).map((l) => `${l.watched_percent ?? '-'}:${l.finished}`).join() === '-:false,95:true,-:false' && sg.json.registered === true && sg.json.next_lesson?.number === 3,
+  sg.json?.lessons
+)
 const sMissing = await cli('series', 'get', '--id', 'no-such-series')
 check('series get of an unknown id is NOT_FOUND', sMissing.code === 1 && sMissing.json?.code === 'NOT_FOUND', sMissing.json)
 const sNoId = await cli('series', 'get')
 check('series get without --id is a usage error', sNoId.code === 2, sNoId.json)
 const help = await new Promise((done) => execFile(process.execPath, [CLI, 'help'], (_e, out) => done(out)))
-check('help lists the new commands and filters', /series list/.test(help) && /series get --id ID/.test(help) && /--has-series/.test(help))
+check('help lists the new commands and filters', /series list/.test(help) && /series get --id ID/.test(help) && /--has-series/.test(help) && /--registered/.test(help))
 
 // ---------- 4. Find sources ----------
 
@@ -413,19 +449,19 @@ if (process.platform === 'win32') {
     const files = walk(md)
     check('the folder tree mirrors Notula folders (two levels)', files.includes('Courses/Fundamentos/2 - Modules.md') && files.some((f) => f.startsWith('Courses/Fundamentos/') && f.includes('Lesson without a number')), files)
     check('a numbered lesson file starts with its number; a transcript sits beside it', files.includes('Courses/Fundamentos/2 - Modules.transcript.md'), files)
-    const vFile = files.find((f) => f.endsWith('Creating a loosely coupled monolith.md'))
+    const vFile = files.find((f) => f.endsWith('Sample talk on modules.md'))
     const vText = vFile ? readFileSync(join(md, vFile), 'utf8') : ''
     check(
       'front-matter has the flat source properties',
-      /\nsource_url: "https:\/\/www\.youtube\.com\/watch\?v=abcdefghijk"\n/.test(vText) && /\nsource_kind: "video"\n/.test(vText) && /\nchannel: "CodeOpinion"\n/.test(vText) &&
-        /\nseries: "CodeOpinion"\n/.test(vText) && /\nduration: "10:00"\n/.test(vText) && /\nwatched: 50\n/.test(vText),
+      /\nsource_url: "https:\/\/www\.youtube\.com\/watch\?v=abcdefghijk"\n/.test(vText) && /\nsource_kind: "video"\n/.test(vText) && /\nchannel: "Example Channel"\n/.test(vText) &&
+        /\nseries: "Example Channel"\n/.test(vText) && /\nduration: "10:00"\n/.test(vText) && /\nwatched: 50\n/.test(vText),
       vText.slice(0, 900)
     )
     check('the body is the stamped projection', vText.includes('[01:05](https://www.youtube.com/watch?v=abcdefghijk&t=65s) Modules own their data.'))
     const line = Number(/notula_sections:\n {2}- kind: "notes"\n {4}title: "My notes"\n {4}line: (\d+)/.exec(vText)?.[1])
     check('section markers name the exact heading line', vText.split('\n')[line - 1] === '## My notes', { line, at: vText.split('\n')[line - 1] })
     check('export format 2', /\nnotula_export_version: 2\n/.test(vText))
-    const vt = files.find((f) => f.endsWith('Creating a loosely coupled monolith.transcript.md'))
+    const vt = files.find((f) => f.endsWith('Sample talk on modules.transcript.md'))
     const vtText = vt ? readFileSync(join(md, vt), 'utf8') : ''
     check('the transcript has [mm:ss] video times', /\n\[01:00\] [^:\n]+: Welcome back to the channel\. Today, coupling\.\n?/.test(vtText) || /\[01:00\] .*Welcome back/.test(vtText), vtText)
   }
@@ -433,13 +469,22 @@ if (process.platform === 'win32') {
   stdDone++
   if (std) {
     const files = walk(std)
-    const vFile = files.find((f) => f.startsWith('notes/') && f.includes('Creating a loosely coupled monolith'))
+    const vFile = files.find((f) => f.startsWith('notes/') && f.includes('Sample talk on modules'))
     const vText = vFile ? readFileSync(join(std, vFile), 'utf8') : ''
     check('the standard export has the nested source block', /\nsource:\n {2}kind: "video"\n {2}provider: "youtube"\n/.test(vText) && /\n {2}watched_percent: 50\n/.test(vText), vText.slice(0, 900))
     check('the standard export keeps notes_md as its body', vText.includes('\nModules own their data.') && !vText.includes('[01:05]('))
+    const lFile = files.find((f) => f.startsWith('notes/') && f.includes(' Modules'))
+    const lText = lFile ? readFileSync(join(std, lFile), 'utf8') : ''
+    check(
+      "the standard export's series block carries the course fields",
+      /\n {4}title: "Fundamentos"\n {4}registered_at: "[^"]+"\n {4}on_play: "ask"\n {4}on_end: "button"\n {4}sites: \["courses\.example\.com"\]\n/.test(lText) &&
+        /\n {4}keys: \["circle:courses\.example\.com:space:fundamentos"\]\n {4}window_read: false\n {4}catalog_origin: null\n/.test(lText),
+      lText.slice(0, 1400)
+    )
+    check("a plain series' block has no course fields", !/registered_at/.test(vText), vText.slice(0, 900))
     const plain = files.find((f) => f.startsWith('notes/') && f.includes('Weekly sync'))
     check('a note without a source has source: null', !!plain && /\nsource: null\n/.test(readFileSync(join(std, plain), 'utf8')))
-    const tFile = files.find((f) => f.startsWith('transcripts/') && f.includes('Creating a loosely coupled monolith'))
+    const tFile = files.find((f) => f.startsWith('transcripts/') && f.includes('Sample talk on modules'))
     check("a source note's standard transcript is timed", !!tFile && /\[01:00\] /.test(readFileSync(join(std, tFile), 'utf8')))
     const mFile = files.find((f) => f.startsWith('transcripts/') && f.includes('Weekly sync'))
     const mText = mFile ? readFileSync(join(std, mFile), 'utf8') : ''
