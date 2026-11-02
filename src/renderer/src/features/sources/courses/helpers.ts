@@ -20,29 +20,14 @@ export interface VaultCourse {
   urls: number
 }
 
-interface VaultBridge {
-  pickVaultFolder?(): Promise<{ handle: string; name: string } | null>
-  listVaultCourses?(handle: string): Promise<VaultCourse[]>
+/** Picks the study vault (or a folder in it); null when cancelled. */
+export function pickVaultFolder(): Promise<{ handle: string; name: string } | null> {
+  return window.notula.sources.pickVaultFolder()
 }
 
-/** The vault picker lands in parallel; until its bridge exists, the option says so. */
-function vaultBridge(): VaultBridge {
-  return window.notula.sources as unknown as VaultBridge
-}
-
-export function vaultAvailable(): boolean {
-  const b = vaultBridge()
-  return typeof b.pickVaultFolder === 'function' && typeof b.listVaultCourses === 'function'
-}
-
-export async function pickVaultFolder(): Promise<{ handle: string; name: string } | null> {
-  const b = vaultBridge()
-  return b.pickVaultFolder ? b.pickVaultFolder() : null
-}
-
-export async function listVaultCourses(handle: string): Promise<VaultCourse[]> {
-  const b = vaultBridge()
-  return b.listVaultCourses ? b.listVaultCourses(handle) : []
+/** The course folders in a picked folder. */
+export function listVaultCourses(handle: string): Promise<VaultCourse[]> {
+  return window.notula.sources.listVaultCourses(handle)
 }
 
 // ---------- words ----------

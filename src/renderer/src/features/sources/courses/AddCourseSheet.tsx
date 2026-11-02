@@ -27,7 +27,7 @@ import { showToast } from '../../../app/toast'
 import { Modal } from '../../folders/Modal'
 import { Segmented, Switch } from '../../settings/controls'
 import { refreshCourses } from './courses-store'
-import { BROWSER_NAME, failure, listVaultCourses, pickVaultFolder, plural, vaultAvailable, type VaultCourse } from './helpers'
+import { BROWSER_NAME, failure, listVaultCourses, pickVaultFolder, plural, type VaultCourse } from './helpers'
 import './courses.css'
 
 export interface AddCourseSheetProps {
@@ -83,8 +83,7 @@ type Load =
   | { status: 'ready'; base: Base; unlinked: CourseListItem[] }
 
 function listOptions(kind: SeriesKind, offered?: readonly ListKind[]): ListKind[] {
-  const all = offered ?? (['vault', 'paste', ...(kind === 'playlist' ? (['playlist'] as const) : []), 'later'] as ListKind[])
-  return all.filter((k) => k !== 'vault' || vaultAvailable())
+  return offered ? [...offered] : ['vault', 'paste', ...(kind === 'playlist' ? (['playlist'] as const) : []), 'later']
 }
 
 async function seriesBase(seriesId: string): Promise<Omit<Base, 'playbackId'> | null> {
