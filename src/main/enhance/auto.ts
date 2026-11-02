@@ -28,6 +28,11 @@
 // and the indicator stop come through `ctx.enhance.stopAndSummarize`, which runs the
 // preflight on the live note before the stop and starts generation at the stop. Their
 // `capture:stopped` then does nothing.
+//
+// Courses: a note of a registered course never goes through any of this (a stop, the next
+// lesson's switch, an inactivity stop, the queue at launch). Lesson notes own its automatic
+// generation (sources/lesson-notes.ts, through `autoGenerate`), and the user's Generate notes
+// still works.
 
 import { app } from 'electron'
 import { SUGGESTED_ACTIONS_SLUG } from '@shared/types/enhance'
@@ -44,6 +49,7 @@ import { didMeetingEnd, parseMeetingEnded } from './prompts'
 import { currentProvider } from '../llm/registry'
 import { MAX_TOKENS } from '../llm/types'
 import { egressBlocked, LOCAL_ONLY_REASON } from '../privacy'
+import { generalAutoGeneration } from '../sources/automation'
 import { readerTranscript } from '../sources/reader'
 import { formatTranscript, lastWords, transcriptChunks } from './transcript'
 
@@ -116,6 +122,12 @@ export class AutoGeneration {
     }
     const latest = this.sessions.get(noteId)
     if (sessionId && latest && latest !== sessionId) return this.skip(noteId, 'stale-stop')
+    void this.courseNote(noteId)
+      .then((course) => (course ? this.skip(noteId, 'course-note') : this.afterStopped(noteId, reason)))
+      .catch((err: unknown) => this.failed(noteId, err))
+  }
+
+  private afterStopped(noteId: string, reason: StopReason): void {
     if (this.resumed(noteId)) return this.skip(noteId, 'capture-resumed')
     if (AFTER_STOP_CHECK.includes(reason)) void this.afterStop(noteId).catch((err: unknown) => this.failed(noteId, err))
     else if (END_OF_MEETING.includes(reason)) void this.endOfMeeting(noteId).catch((err: unknown) => this.failed(noteId, err))
@@ -181,6 +193,12 @@ export class AutoGeneration {
    * already stopped some other way meanwhile, that stop's own `capture:stopped` decides.
    */
   async stopAndSummarize(noteId: string, stop: () => Promise<void>): Promise<{ summarizing: boolean }> {
+    if (await this.courseNote(noteId)) {
+      this.skip(noteId, 'course-note-at-stop')
+      // Its own `capture:stopped` is skipped the same way.
+      await stop()
+      return { summarizing: false }
+    }
     let summarizing = false
     try {
       const blocked = await this.preflight(noteId)
@@ -291,6 +309,7 @@ export class AutoGeneration {
       if (Date.parse(session.ended_at) < cutoff) continue
       const panels = await this.ctx.storage.listPanels(item.id, { includeDeleted: true })
       if (panels.some((p) => p.created_at >= (session.ended_at as string))) continue
+      if (await this.courseNote(item.id)) continue
       log('info', 'enhance:auto-queued-run', { noteId: item.id, reason: session.end_reason })
       await this.endOfMeeting(item.id).catch((err: unknown) => this.failed(item.id, err))
     }
@@ -324,6 +343,14 @@ export class AutoGeneration {
       log('warn', 'enhance:meeting-end-check-failed', { noteId, err })
       return false
     }
+  }
+
+  /** A registered course's note: lesson notes own its automatic generation. A failed read counts as not. */
+  private async courseNote(noteId: string): Promise<boolean> {
+    const source = await this.ctx.storage.getNoteSource(noteId).catch(() => null)
+    if (!source?.series_id) return false
+    const series = await this.ctx.storage.getSeries(source.series_id).catch(() => null)
+    return !generalAutoGeneration({ seriesId: source.series_id, seriesRegistered: !!series?.registered_at })
   }
 
   private resumed(noteId: string): boolean {

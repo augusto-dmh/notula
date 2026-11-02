@@ -229,7 +229,7 @@ export function registerSources(ctx: MainContext): void {
     settings: current,
     tracks: () => offers?.current() ?? [],
     watchingEnded: (noteId) => void offerGenerate(noteId).catch((err: unknown) => log('warn', 'sources:generate-offer-failed', { err })),
-    resumed: (noteId, playbackId) => void course.resumed(noteId, playbackId).catch((err: unknown) => log('warn', 'sources:auto-continue-failed', { err }))
+    resumed: (noteId, playback) => void course.resumed(noteId, playback).catch((err: unknown) => log('warn', 'sources:auto-continue-failed', { name: err instanceof Error ? err.name : 'error' }))
   })
   offers = new SourceOffers(ctx, {
     settings: current,
@@ -696,7 +696,7 @@ export function registerSources(ctx: MainContext): void {
   // ---------- bus and storage ----------
 
   bus.on('sources:lesson-finished', ({ noteId }) => {
-    if (active) void onLessonFinished(ctx, noteId).catch((err: unknown) => log('warn', 'sources:lesson-notes-failed', { err }))
+    if (active) void onLessonFinished(ctx, noteId).catch((err: unknown) => log('warn', 'sources:lesson-notes-failed', { name: err instanceof Error ? err.name : 'error' }))
   })
 
   bus.on('settings:changed', ({ keys, settings: s }) => {

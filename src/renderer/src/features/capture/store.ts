@@ -191,7 +191,9 @@ function update(patch: Partial<CaptureSnapshot>): void {
   next.audioSources = sources.length === snapshot.audioSources.length && sources.every((s) => snapshot.audioSources.includes(s)) ? snapshot.audioSources : sources
   next.ui = deriveUi(next)
   const started = next.transcribingNoteId && next.transcribingNoteId !== snapshot.transcribingNoteId
+  const pendingEnded = snapshot.pendingStart && !next.pendingStart
   snapshot = next
+  if (pendingEnded && deferredAdopt) queueMicrotask(retryDeferredAdopt)
   // Any start on the note answers a pending "Resume transcript?".
   if (started) clearResumePrompt(next.transcribingNoteId as string)
   if (initialized) {
@@ -258,19 +260,37 @@ async function resolveSystemOnly(noteId: string): Promise<void> {
   }
 }
 
+/** Main's capture that arrived while a start of the user's was pending, adopted once that start ends without one. */
+let deferredAdopt: string | null = null
+
 /**
  * A capture main started itself (a course lesson's automatic start, or its next lesson): the
  * store follows it, with the sources main opened. Only on a change of main's note, so a state
- * still in flight after the user's own stop never restarts capture.
+ * still in flight after the user's own stop never restarts capture. While a start of the user's
+ * is pending, it waits for that start to end (`retryDeferredAdopt`).
  */
 function adoptMainStart(prevNoteId: string | null, system: CaptureSystemState): void {
   const noteId = system.noteId
-  if (!noteId || noteId === prevNoteId || noteId === snapshot.transcribingNoteId || snapshot.pendingStart) return
+  if (noteId !== deferredAdopt) deferredAdopt = null
+  if (!noteId || noteId === prevNoteId || noteId === snapshot.transcribingNoteId) return
+  if (snapshot.pendingStart) {
+    deferredAdopt = noteId
+    return
+  }
+  deferredAdopt = null
   if (snapshot.transcribingNoteId !== null && snapshot.transcribingNoteId !== prevNoteId) return
   if (system.audioSources && !system.audioSources.includes('microphone')) systemOnly.add(noteId)
   else systemOnly.delete(noteId)
   noteSetAt = Date.now() - UI_GRACE_MS
   update({ transcribingNoteId: noteId })
+}
+
+/** The user's pending start ended: main's capture that waited on it is adopted if it still runs. */
+function retryDeferredAdopt(): void {
+  const noteId = deferredAdopt
+  deferredAdopt = null
+  if (!noteId || snapshot.pendingStart || snapshot.system.noteId !== noteId) return
+  adoptMainStart(null, snapshot.system)
 }
 
 /** Local ASR is startable once its engine is installed; the session fetches a missing model itself. */

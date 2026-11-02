@@ -1,14 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 // Dev-only check for Courses automation: the pure parts as cases. The per-playback decision
 // (automatic start, the card modes, today's offer, and the never-start rules), finished
-// detection, the one-start rule with Undo and Stop, and the watched-scope cut with its budget
-// warning. Hosts, ids and titles are placeholders.
+// detection and the samples it reads, the one-start rule with Undo and Stop and the lesson key,
+// the latest recognition kept while a decision is busy, continuing after a stop, a main start
+// cancelled before it reaches the gates, who generates a course note's notes, the Next window
+// after an ad pod, and the watched-scope cut with its budget warning. Where a rule lives in
+// Electron-bound code, a case checks the wiring in the source text. Hosts, ids and titles are
+// placeholders.
 //
 // Run:  node scripts/dev/course-automation-check.mjs     every case; exits 1 on a failure
 //
 // The TypeScript sources load through Node's type stripping; the resolve hook maps `@shared/…`
 // and extensionless relative imports to their `.ts` files.
 
+import { readFileSync } from 'node:fs'
 import { registerHooks } from 'node:module'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -27,6 +32,20 @@ registerHooks({
 
 const A = await import(pathToFileURL(resolve(root, 'src/main/sources/automation.ts')).href)
 const T = await import(pathToFileURL(resolve(root, 'src/main/enhance/transcript.ts')).href)
+const MS = await import(pathToFileURL(resolve(root, 'src/main/capture/main-starts.ts')).href)
+const OR = await import(pathToFileURL(resolve(root, 'src/main/sources/offer-rules.ts')).href)
+
+/** A source file's text, for the wiring cases. */
+const src = (rel) => readFileSync(resolve(root, rel), 'utf8').replace(/\r\n/g, '\n')
+/** One method or function's text: from its signature to the closing brace at its indent. */
+function body(text, signature) {
+  const at = text.indexOf(signature)
+  if (at < 0) return ''
+  const lineStart = text.lastIndexOf('\n', at) + 1
+  const pad = text.slice(lineStart, at).match(/^\s*/)[0]
+  const end = text.indexOf(`\n${pad}}\n`, at)
+  return text.slice(at, end < 0 ? undefined : end)
+}
 
 // ---------- a tiny runner ----------
 
@@ -257,6 +276,140 @@ test('the budget cut returns the last position that fits', () => {
   eq(cut?.cutAtMs, 80_000, 'cut at 01:20')
   const cutH = T.budgetCut(text, text.length - 1)
   eq(cutH?.cutAtMs, 3_723_000, 'h:mm:ss parsed')
+})
+
+// ---------- review fixes (R3) ----------
+
+const autoTs = src('src/main/sources/course-auto.ts')
+const enhanceAutoTs = src('src/main/enhance/auto.ts')
+const feedTs = src('src/main/sources/feed.ts')
+
+test('H1: course notes skip the general automatic generation; other notes keep it', () => {
+  eq(A.generalAutoGeneration({ seriesId: 'series-1', seriesRegistered: true }), false, 'a registered course')
+  eq(A.generalAutoGeneration({ seriesId: 'series-2', seriesRegistered: false }), true, 'a plain Sources series')
+  eq(A.generalAutoGeneration({ seriesId: null, seriesRegistered: false }), true, 'a meeting note')
+  // Stop (toggle_off), the next-lesson switch (toggle_off), idle_timeout (stop and summarize) and the queue at launch.
+  check(/courseNote\(noteId\)[\s\S]{0,120}'course-note'/.test(body(enhanceAutoTs, 'onStopped(e:')), 'onStopped skips course notes')
+  check(/courseNote\(noteId\)[\s\S]{0,200}await stop\(\)/.test(body(enhanceAutoTs, 'async stopAndSummarize(')), 'stopAndSummarize only stops a course note')
+  check(/courseNote\(item\.id\)/.test(body(enhanceAutoTs, 'async runQueued(')), 'the launch queue skips course notes')
+  check(!/courseNote/.test(body(enhanceAutoTs, 'async autoGenerate(')), 'lesson notes (autoGenerate) still generate')
+})
+
+test('M1: Undo and Stop take back a start still on its way', () => {
+  const c = new MS.CancelledStarts()
+  const t0 = 1_000_000
+  c.cancel('note-a', t0)
+  check(!c.take('note-b', t0 + 10), 'another note is unaffected')
+  check(c.take('note-a', t0 + 2_000), 'a main start arriving after the cancel is refused')
+  check(!c.take('note-a', t0 + 2_100), 'the mark is used once')
+  c.cancel('note-a', t0)
+  check(!c.take('note-a', t0 + MS.CANCELLED_START_MS + 1), 'an old mark never blocks a later start')
+  for (const sig of ['async undo(', 'private async stop(']) {
+    const b = body(autoTs, sig)
+    check(b.includes('cancelHeldStart(noteId') && b.indexOf('cancelHeldStart(noteId') < b.indexOf('capture.stop('), `${sig} cancels the held or pending start before stopping`)
+  }
+  const start = body(autoTs, 'private async autoStart(')
+  check(/if \(auto\.undone \|\| auto\.stopped\) return/.test(start), 'nothing starts when Undo came during the plan')
+  check(/startFromMain[\s\S]{0,200}if \(auto\.undone \|\| auto\.stopped\)[\s\S]{0,300}cancelHeldStart/.test(start), 'a start that resolves after Undo is cancelled')
+  const ctl = src('src/main/capture/controller.ts')
+  check(/startFromMain\([\s\S]{0,300}cancelledStarts\.take\(noteId/.test(ctl), 'the controller refuses a cancelled main start')
+})
+
+test('M2: Undo of a continued note discards its run, also a session that comes late', () => {
+  check(body(autoTs, 'async undo(').includes('this.discardRun(noteId, auto)'), 'Undo discards the run')
+  check(/discardSourceRun\(noteId, auto\.since, auto\.sessionId\)/.test(body(autoTs, 'private async discardRun(')), 'spans since the start, and the session when known')
+  check(/auto\?\.undone\) void this\.lateSession/.test(autoTs), 'a session announced after Undo is handled')
+  check(/capture\.stop\('auto_undo'\)[\s\S]{0,80}if \(!auto\.created\) await this\.discardRun/.test(body(autoTs, 'private async lateSession(')), 'it stops, and a continued note loses it')
+})
+
+test('M3: Record on the next lesson switches, and nothing says Recording when nothing started', () => {
+  // Under ask, the next lesson's card while this playback's own note records: that note stops.
+  eq(kind(A.decide(base({ behavior: ask, capturing: { noteId: 'n', ownAuto: true, linkable: false } }))), 'card:course', 'the next lesson asks')
+  check(/d\.mode === 'course' && capturing && own && own\.key !== key[\s\S]{0,300}capture\.stop\(/.test(body(autoTs, 'private async decideOnce(')), 'the previous lesson stops while the card asks')
+  check(/a === 'record' && series[\s\S]{0,300}capturingNote\(pid\)[\s\S]{0,200}now\?\.ownAuto \? now\.noteId : null/.test(body(autoTs, 'private async onAnswer(')), 'Record passes the capturing own note as switchFrom')
+  const start = body(autoTs, 'private async autoStart(')
+  check(start.includes("plan === 'system-audio' && !capturing") && start.indexOf("plan === 'system-audio' && !capturing") < start.indexOf('this.showRecordingCard('), 'L2: a refused start shows no card')
+  check(/switchFrom && !capturing && this\.ctx\.capture\.currentNoteId\(\) === switchFrom/.test(start), 'the previous note never keeps the next lesson')
+})
+
+test('M4: a recognition during a busy decision waits; only the newest runs', () => {
+  const q = new A.LatestPerPlayback()
+  check(q.enter('pb-1', 'r1'), 'the first runs')
+  check(!q.enter('pb-1', 'r2'), 'a second waits')
+  check(!q.enter('pb-1', 'r3'), 'a third replaces it')
+  check(q.enter('pb-2', 'x'), 'another playback runs at once')
+  eq(q.leave('pb-1'), 'r3', 'the newest runs next')
+  check(!q.enter('pb-1', 'r4'), 'still busy while it runs')
+  eq(q.leave('pb-1'), 'r4', 'then the one that came meanwhile')
+  eq(q.leave('pb-1'), null, 'then free')
+  check(q.enter('pb-1', 'r5'), 'free again')
+  check(!/await this\.sessionOf/.test(body(autoTs, 'private async autoStart(')), 'the session wait is outside the decision')
+})
+
+test('M5: continuing after a stop follows the automatic start rules and the plan', () => {
+  const r = (over = {}) => A.resumeAllowed({ app: false, privateWindow: false, onboarding: false, locked: false, capturing: false, suppressed: 'started', plan: 'system-audio', onPlay: 'record', ...over })
+  check(r(), 'a normal window, video audio')
+  check(!r({ privateWindow: true }), 'a private window')
+  check(!r({ privateWindow: 'unknown' }), 'an unknown window')
+  check(r({ app: true, privateWindow: 'unknown' }), 'a course app has no private window')
+  check(!r({ onboarding: true }) && !r({ locked: true }) && !r({ capturing: true }), 'onboarding, the lock, another capture')
+  check(!r({ suppressed: 'undone' }) && !r({ suppressed: 'stopped' }), 'after Undo or Stop')
+  check(!r({ plan: 'none' }) && !r({ plan: 'captions' }), 'the plan says no video audio (local-only, none set up, captions)')
+  check(!r({ onPlay: 'ask' }), 'on_play = ask')
+  const res = body(autoTs, 'async resumed(')
+  check(res.includes('coursePlan(this.ctx, noteId)') && res.includes('privateWindow: playback.privateWindow'), 'resumed() re-plans and reads the window')
+})
+
+test('M6: finished detection reads the lesson’s own samples', () => {
+  const d = 1_800_000
+  let f = { positionMs: null, durationMs: d, live: false, title: null }
+  const a = (pos, over = {}) => ({ keyMatches: false, title: 'Lesson A', positionMs: pos, durationMs: d, live: false, ...over })
+  f = A.foldFinishSample(f, a(1_000_000))
+  f = A.foldFinishSample(f, a(1_790_000))
+  // The course app moves to lesson B in the same media session before the capture switches.
+  f = A.foldFinishSample(f, a(5_000, { title: 'Lesson B', durationMs: 900_000 }))
+  eq(f.positionMs, 1_790_000, 'a new title is another lesson')
+  f = A.foldFinishSample(f, a(5_000, { durationMs: 900_000 }))
+  eq(f.positionMs, 1_790_000, 'same title, another duration: another lesson')
+  f = A.foldFinishSample(f, a(1_200_000))
+  eq(f.positionMs, 1_790_000, 'the furthest position is kept')
+  check(A.isFinished({ durationMs: f.durationMs, live: f.live, positionMs: f.positionMs, ended: false, watchedMs: 0 }), 'watched to the end reads as finished')
+  const k = A.foldFinishSample({ positionMs: 10_000, durationMs: d, live: false, title: 'Lesson A' }, a(1_700_000, { keyMatches: true, title: 'Lesson A (renamed)', durationMs: d + 5_000 }))
+  eq(k.positionMs, 1_700_000, 'the note’s own key always counts')
+  check(feedTs.includes('foldFinishSample(w.sample'), 'the feed folds samples')
+  check(/await this\.stoppedSince\(w\.noteId, w\.since\)/.test(body(feedTs, 'private async finishCheck(')), 'L3: the finish waits for the session’s final flush')
+})
+
+test('Item 9: the Next window starts when the playback ended, before the ad pod', () => {
+  const t0 = 5_000_000
+  eq(A.playbackEndedAt('ad', t0, t0 + 90_000), t0, 'released after an ad pod: ended when the ads began')
+  eq(A.playbackEndedAt('bound', t0, t0 + 90_000), t0 + 90_000, 'a plain end: now')
+  eq(A.playbackEndedAt('ad', null, t0), t0, 'no ad time known: now')
+  // end → 90 s of ads → next item: Next; the same with no ads: too late; a 6-min pod: past the cap.
+  check(OR.withinNextWindow(t0, t0 + 90_000, 90_000, 5_000), 'ads left out')
+  check(!OR.withinNextWindow(t0, t0 + 90_000, 0, 5_000), 'no ads: 90 s is past the window')
+  // Before the fix the end was seen only when the next item arrived, so the cap never applied.
+  check(!OR.withinNextWindow(A.playbackEndedAt('ad', t0, t0 + 6 * 60_000), t0 + 6 * 60_000, 6 * 60_000, 5_000), 'the 5-min cap applies from the real end')
+  check(/lastEnd = \{ at: playbackEndedAt\(prevState, this\.adSince, now\)/.test(feedTs), 'the feed reports that end')
+})
+
+test('L4: the lesson key holds when the item learns its URL', () => {
+  const r = { courseId: 'series-1', lesson: { itemId: 'item-7', number: 7, label: null, state: 'numbered', origin: 'catalog' } }
+  eq(A.lessonKeyOf(r, 'title:space a'), A.lessonKeyOf(r, 'circle:community.example.com:345'), 'same item, any draft key')
+  const pending = { courseId: 'series-1', lesson: { itemId: null, number: null, label: null, state: 'pending', origin: null } }
+  eq(A.lessonKeyOf(pending, 'circle:community.example.com:345'), 'circle:community.example.com:345', 'no item: the identified key')
+  eq(A.lessonKeyOf(pending, 'title:space a'), 'series-1:pending', 'a guess key never counts')
+})
+
+test('lows: L1 adoption retry, L3 once across restarts, L6 log fields', () => {
+  const store = src('src/renderer/src/features/capture/store.ts')
+  check(/if \(pendingEnded && deferredAdopt\) queueMicrotask\(retryDeferredAdopt\)/.test(store), 'L1: main’s capture is adopted once the pending start ends')
+  const ln = src('src/main/sources/lesson-notes.ts')
+  check(ln.includes('listPanels(noteId, { includeDeleted: true })'), 'L3: a deleted lesson-notes panel still counts')
+  const on = body(ln, 'export async function onLessonFinished(')
+  check(on.indexOf('tried.add(noteId)') > 0 && on.indexOf('tried.add(noteId)') < on.indexOf('await '), 'L3: claimed before the first await')
+  check(!/\{ err \}/.test(autoTs), 'L6: course-auto logs error names only')
+  check(/try \{\s*await shell\.openExternal/.test(autoTs), 'L6: openExternal is caught')
 })
 
 console.log(`\n${checks} checks, ${failures} failed`)

@@ -11,7 +11,8 @@
 // Link this note turns a meeting capture into video audio), and the other source keeps flowing.
 //
 // Main may start a capture itself (`startFromMain`: a course lesson's automatic start). The
-// renderer's store adopts it from the system state it is pushed.
+// renderer's store adopts it from the system state it is pushed. `cancelHeldStart` takes such a
+// start back wherever it is: held or still running the gates, or not yet arrived (main-starts.ts).
 
 import { app, powerSaveBlocker } from 'electron'
 import {
@@ -33,6 +34,7 @@ import type { TranscriptionControl } from '../transcription'
 import { AudioBatcher, SAMPLE_RATE } from './batcher'
 import { EndpointMonitor, type CaptureEndpoint } from './endpoints'
 import { InputSelection, normalizePreference, resolveAutoTarget, type ReconcileReason } from './input'
+import { CancelledStarts } from './main-starts'
 import {
   pushActiveDevice,
   pushCommand,
@@ -187,6 +189,8 @@ export class CaptureController {
   private micApps: MicApp[] = []
   /** The sources of a start in progress, before `running` is set. */
   private pendingSources: readonly AudioSource[] | null = null
+  /** Main starts cancelled before they reached the gates. */
+  private readonly cancelledStarts = new CancelledStarts()
 
   constructor(
     private readonly ctx: MainContext,
@@ -308,6 +312,10 @@ export class CaptureController {
     noteId: string,
     opts: { language: string; keywords: string[]; asr: DesiredOn['asr']; audioSources: AudioSource[]; switchFrom?: string | null }
   ): boolean {
+    if (this.cancelledStarts.take(noteId, Date.now())) {
+      log('info', 'capture:start-from-main-cancelled', { noteId })
+      return false
+    }
     if (this.pending) return false
     if (this.running && this.running.noteId !== opts.switchFrom) return false
     if (this.running?.noteId === noteId) return true
@@ -372,10 +380,17 @@ export class CaptureController {
     void this.runGates(p)
   }
 
-  /** The renderer's desired state goes off, exactly like a main-side stop. */
+  /**
+   * The renderer's desired state goes off, exactly like a main-side stop. Any pending start of the
+   * note counts, held or still in the gates; with none, a main start of it that hasn't arrived yet
+   * is refused when it does.
+   */
   cancelHeldStart(noteId: string, reason: StopReason): void {
     const p = this.pending
-    if (!p || p.noteId !== noteId) return
+    if (!p || p.noteId !== noteId) {
+      if (this.running?.noteId !== noteId) this.cancelledStarts.cancel(noteId, Date.now())
+      return
+    }
     log('info', 'capture:start-cancelled', { noteId, gateId: p.heldBy, reason })
     this.pending = null
     this.lastDesired = JSON.stringify({ capture: 'off', reason })

@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // Courses automation, the pure parts: what a playback's recognition leads to, when a hand-started
-// capture may be linked, when a lesson counts as finished, and the per-playback rule that allows
-// one automatic start until the lesson key or the title changes. No Electron, no storage: the
-// sources core (index.ts, feed.ts) feeds them facts, and `scripts/dev/course-automation-check.mjs`
-// runs them as cases.
+// capture may be linked, when a lesson counts as finished (and which samples count for it), the
+// per-playback rule that allows one automatic start until the lesson key or the title changes,
+// the lesson key itself, the latest recognition kept while a decision is busy, when a stopped
+// note may continue, and who generates notes for a course note. No Electron, no storage: the
+// sources core (index.ts, feed.ts) and enhance feed them facts, and
+// `scripts/dev/course-automation-check.mjs` runs them as cases.
 
 import { BUILTIN_COURSE_HOSTS, hostIs, parseSourceUrl } from '@shared/lib/source-key'
 import type { CourseBehavior, CourseConfidence, Recognition, SourceCardMode } from '@shared/types/sources'
-import { SOURCES_LIMITS } from '@shared/types/sources'
+import { GUESS_KEY_PREFIX, SOURCES_LIMITS } from '@shared/types/sources'
 
 // ---------- the decision per playback ----------
 
@@ -162,4 +164,138 @@ export class AutoSuppression {
   clear(): void {
     this.marks.clear()
   }
+}
+
+/**
+ * The lesson key for the one-start rule: the course's item when one is known, whatever its
+ * canonical key (learning a URL later mustn't reopen the rule), else the identified key, else the
+ * course and the lesson state.
+ */
+export function lessonKeyOf(rec: Pick<Recognition, 'courseId' | 'lesson'>, draftKey: string | null): string {
+  if (rec.courseId && rec.lesson.itemId) return `${rec.courseId}:item:${rec.lesson.itemId}`
+  if (draftKey && !draftKey.startsWith(GUESS_KEY_PREFIX)) return draftKey
+  return `${rec.courseId ?? 'none'}:${rec.lesson.state}`
+}
+
+// ---------- a busy decision ----------
+
+/**
+ * One decision per playback at a time. A recognition that arrives while one runs isn't dropped:
+ * the newest waits and runs when the current one ends (recognition runs once per title, so a
+ * dropped one would never come again).
+ */
+export class LatestPerPlayback<T> {
+  private readonly running = new Set<string>()
+  private readonly waiting = new Map<string, T>()
+
+  /** True when the caller may run now; otherwise `item` replaces whatever waited. */
+  enter(playbackId: string, item: T): boolean {
+    if (!this.running.has(playbackId)) {
+      this.running.add(playbackId)
+      return true
+    }
+    this.waiting.set(playbackId, item)
+    return false
+  }
+
+  /** The run ended: the waiting item to run next (the playback stays busy), else null. */
+  leave(playbackId: string): T | null {
+    const next = this.waiting.get(playbackId)
+    if (next === undefined) {
+      this.running.delete(playbackId)
+      return null
+    }
+    this.waiting.delete(playbackId)
+    return next
+  }
+
+  clear(): void {
+    this.running.clear()
+    this.waiting.clear()
+  }
+}
+
+// ---------- continuing after an end-of-watching stop ----------
+
+/**
+ * A note stopped at the end of watching plays again: it continues by itself only under the rules
+ * of an automatic start (never in a private window, during onboarding, under the lock, over
+ * another capture, or after Undo or Stop) and while its course still records video audio.
+ */
+export function resumeAllowed(i: {
+  app: boolean
+  privateWindow: boolean | 'unknown'
+  onboarding: boolean
+  locked: boolean
+  capturing: boolean
+  suppressed: 'started' | 'undone' | 'stopped' | 'answered' | null
+  plan: 'captions' | 'system-audio' | 'none'
+  onPlay: CourseBehavior['onPlay'] | null
+}): boolean {
+  if (!i.app && i.privateWindow !== false) return false
+  if (i.onboarding || i.locked || i.capturing) return false
+  if (i.suppressed === 'undone' || i.suppressed === 'stopped') return false
+  return i.onPlay === 'record' && i.plan === 'system-audio'
+}
+
+// ---------- the samples finished detection reads ----------
+
+/** Two durations this close are the same video. */
+const SAME_DURATION_MS = 2_000
+
+export interface FinishSample {
+  /** The furthest position of the note's own lesson during this capture. */
+  positionMs: number | null
+  durationMs: number | null
+  live: boolean
+  /** The bound playback's title at its first sample; a new title is another lesson. */
+  title: string | null
+}
+
+/**
+ * Folds one sample of a watched playback into the note's finish sample. Only the note's own
+ * lesson counts: a sample whose key isn't the note's (a course app that moved to the next lesson
+ * in the same media session) counts only while its title is the one first seen, and never when
+ * its duration differs from the lesson's. The furthest position is kept, so a few ticks of the
+ * next lesson's 0:05 can't make a lesson watched to the end read as unfinished.
+ */
+export function foldFinishSample(
+  prev: FinishSample,
+  s: { keyMatches: boolean; title: string; positionMs: number; durationMs: number | null; live: boolean }
+): FinishSample {
+  if (!s.keyMatches) {
+    if (prev.title !== null && s.title !== prev.title) return prev
+    const known = prev.durationMs
+    if (known !== null && s.durationMs !== null && s.durationMs > 0 && !s.live && Math.abs(s.durationMs - known) > SAME_DURATION_MS) return prev
+  }
+  return {
+    positionMs: prev.positionMs === null ? s.positionMs : Math.max(prev.positionMs, s.positionMs),
+    durationMs: s.durationMs !== null && s.durationMs > 0 && !s.live ? s.durationMs : prev.durationMs,
+    live: prev.live || s.live,
+    title: prev.title ?? s.title
+  }
+}
+
+// ---------- Next item after an ad pod ----------
+
+/**
+ * When the fed note's playback ended, for the Next window. An end that follows an ad state (the
+ * end → ad pod → next item shape, where the machine holds the item aside as a possible mid-roll
+ * and only releases it when a long new title arrives) ended when the ads began, not when the
+ * release was seen.
+ */
+export function playbackEndedAt(prevState: 'bound' | 'ad' | 'lost' | 'ended' | 'unbound', adSince: number | null, now: number): number {
+  return prevState === 'ad' && adSince !== null && adSince <= now ? adSince : now
+}
+
+// ---------- who generates a course note's notes ----------
+
+/**
+ * A note of a registered course gets notes only through lesson notes (finished, once, enough
+ * words, `on_end = notes`) or the user's own Generate notes; the general automatic generation
+ * (after a stop, stop and summarize, the queue at launch) leaves it alone. Every other note keeps
+ * it, source notes outside Courses included.
+ */
+export function generalAutoGeneration(n: { seriesId: string | null; seriesRegistered: boolean }): boolean {
+  return !(n.seriesId !== null && n.seriesRegistered)
 }
