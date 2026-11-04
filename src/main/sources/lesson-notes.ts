@@ -136,7 +136,15 @@ export async function onLessonFinished(ctx: MainContext, noteId: string): Promis
   }
   const provider = await currentProvider(ctx.settings, ctx.secrets)
   if (!(await provider.available()).ok) {
-    notice(ctx, noteId, 'No AI model is set up. Add one in Settings, then generate notes in the note.')
+    // Local-only mode moves notes to the local model: when none is running, say that, not "none set up".
+    const localOnly = await ctx.settings.get('privacy.localOnly').catch(() => false)
+    notice(
+      ctx,
+      noteId,
+      localOnly
+        ? 'Local-only mode is on, and the local AI model isn’t running. Start it, or choose one in Settings, then generate notes in the note.'
+        : 'No AI model is set up. Add one in Settings, then generate notes in the note.'
+    )
     return skip('no-model')
   }
   setNoteTemplate(noteId, LESSON_TEMPLATE_ID)
