@@ -364,6 +364,7 @@ test('M5: continuing after a stop follows the automatic start rules and the plan
   const res = body(autoTs, 'async resumed(')
   check(res.includes('coursePlan(this.ctx, noteId)') && res.includes('privateWindow = playback.privateWindow'), 'resumed() re-plans and reads the window')
   check(/playback\.privateWindow === 'unknown' && allowed\('system-audio', 'record', false\)\) return this\.askToContinue\(noteId, playback\)/.test(res), 'QA: a window that may be private asks to continue (the course card) instead of nothing')
+  check(/this.carded.get(playback.id) === asked || this.ctx.capture.currentNoteId() === noteId/.test(body(autoTs, 'private async askToContinue(')), 'QA: one card when a replay is also a new playback')
 })
 
 test('M6: finished detection reads the lesson’s own samples', () => {

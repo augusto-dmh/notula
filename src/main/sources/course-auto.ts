@@ -631,6 +631,11 @@ export class CourseAutomation {
     if (!rec || !series?.registered_at || rec.courseId !== series.id) return log('info', 'sources:auto-continue-skipped', { reason: 'rules' })
     const item = rec.lesson.itemId ? ((await this.ctx.storage.listCatalog(series.id)).find((i) => i.id === rec.lesson.itemId) ?? null) : null
     const key = this.lessonKey(rec, this.hooks.offers.track(playback.id))
+    // The playback's own course card already asked (a replay is also a new playback), or the
+    // note records again: one card is enough.
+    const asked = cardedKey('course', playback.title)
+    if (this.carded.get(playback.id) === asked || this.ctx.capture.currentNoteId() === noteId) return log('info', 'sources:auto-continue-skipped', { reason: 'asked' })
+    this.carded.set(playback.id, asked)
     log('info', 'sources:auto-continue-asked', {})
     this.askCard('course', playback, rec, series, item, key, await this.capturingNote(playback.id))
   }
