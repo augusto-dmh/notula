@@ -122,12 +122,13 @@ interface AutoNote {
 }
 
 /**
- * The lesson as cards say it: "Lesson 53", "Lesson 54?" when guessed, else the item's title. The
- * lesson's `label` is its section (D96), never the lesson itself.
+ * The lesson as cards say it: "Lesson 53", "Lesson 54?" when guessed, else the item's title, else
+ * the playing title (a channel's video). The lesson's `label` is its section (D96), never the
+ * lesson itself.
  */
-function lessonLabel(rec: Recognition, item: CatalogItem | null): string {
+function lessonLabel(rec: Recognition, item: CatalogItem | null, title: string | null = null): string {
   if (rec.lesson.number !== null) return rec.lesson.state === 'guessed' ? `Lesson ${rec.lesson.number}?` : `Lesson ${rec.lesson.number}`
-  return item?.title ?? 'this lesson'
+  return item?.title ?? (title?.trim() || 'this lesson')
 }
 
 function dateLabel(d: Date): string {
@@ -402,7 +403,7 @@ export class CourseAutomation {
       await this.dropUnstarted(noteId, auto)
       return
     }
-    this.showRecordingCard(noteId, auto, lessonLabel(rec, item), series.title, plan, blocked)
+    this.showRecordingCard(noteId, auto, lessonLabel(rec, item, playback.title), series.title, plan, blocked)
     this.openIfIdle(noteId)
     // Announced outside the playback's decision: the session id may take a moment.
     const e = { seriesId: series.id, playbackId: pid, created, confidence: rec.confidence, lessonState: rec.lesson.state, waitSession: plan === 'system-audio' }
@@ -628,7 +629,7 @@ export class CourseAutomation {
     capturing: CapturingNote | null
   ): void {
     const pid = playback.id
-    const lesson = series ? lessonLabel(rec, item) : null
+    const lesson = series ? lessonLabel(rec, item, playback.title) : null
     void (async () => {
       const candidates =
         mode === 'which-course'

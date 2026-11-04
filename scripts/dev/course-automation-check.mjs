@@ -466,5 +466,12 @@ test('QA: the lesson picker numbers every row the same way', () => {
   check(/function rowLabel\(l: SeriesLesson\): string \{\n\s*return lessonLabel\(null, l\.number\) \?\? '—'/.test(picker), 'a row with a note says "Lesson n", not its section')
 })
 
+test('QA: a channel video is named by its title; a channel starts with Later', () => {
+  check(/return item\?\.title \?\? \(title\?\.trim\(\) \|\| 'this lesson'\)/.test(body(autoTs, 'function lessonLabel(')), 'the playing title before "this lesson"')
+  check((autoTs.match(/lessonLabel\(rec, item, playback\.title\)/g) ?? []).length === 2, 'both cards pass it')
+  const sheet = src('src/renderer/src/features/sources/courses/AddCourseSheet.tsx')
+  check(/base\.kind === 'channel' && options\.includes\('later'\) \? 'later'/.test(sheet), 'a channel’s lesson list starts at Later')
+})
+
 console.log(`\n${checks} checks, ${failures} failed`)
 process.exit(failures ? 1 : 0)

@@ -393,7 +393,8 @@ function CourseForm({ props, base, unlinked, onClose }: { props: AddCourseSheetP
   const [windowRead, setWindowRead] = useState(settings ? base.match.windowRead : true)
   const options = base.lessonListOptions
   const preset = props.lessonList ?? null
-  const [list, setList] = useState<ListKind>(preset?.kind ?? options[0] ?? 'later')
+  // A channel has no list to read: Later, so Add course isn't held up by a folder it doesn't need.
+  const [list, setList] = useState<ListKind>(preset?.kind ?? (base.kind === 'channel' && options.includes('later') ? 'later' : (options[0] ?? 'later')))
   const [paste, setPaste] = useState(preset?.kind === 'paste' ? preset.text : '')
   const [vault, setVaultState] = useState<VaultState>({
     root: null,
