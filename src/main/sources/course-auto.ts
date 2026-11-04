@@ -121,10 +121,12 @@ interface AutoNote {
   title: string
 }
 
-/** The lesson's label as cards say it: "Aula 53", the item's title, or the number. */
+/**
+ * The lesson as cards say it: "Lesson 53", "Lesson 54?" when guessed, else the item's title. The
+ * lesson's `label` is its section (D96), never the lesson itself.
+ */
 function lessonLabel(rec: Recognition, item: CatalogItem | null): string {
-  if (rec.lesson.label?.trim()) return rec.lesson.label.trim()
-  if (rec.lesson.number !== null) return `Lesson ${rec.lesson.number}`
+  if (rec.lesson.number !== null) return rec.lesson.state === 'guessed' ? `Lesson ${rec.lesson.number}?` : `Lesson ${rec.lesson.number}`
   return item?.title ?? 'this lesson'
 }
 

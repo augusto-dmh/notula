@@ -448,5 +448,11 @@ test('QA: the sheet names a Circle course from its tab, its earlier series or it
   check(/if \(!title && canonicalKey\.startsWith\('circle:'\)\) title = slugTitle\(/.test(cs), 'a pasted link names the course from its slug, not the host')
 })
 
+test('QA: cards name the lesson by its number, not its section', () => {
+  const fn = body(autoTs, 'function lessonLabel(')
+  check(!/rec\.lesson\.label/.test(fn), 'the label (a section) is not the lesson')
+  check(/state === 'guessed' \? `Lesson \$\{rec\.lesson\.number\}\?` : `Lesson \$\{rec\.lesson\.number\}`/.test(fn), '"Lesson 53", "Lesson 54?" when guessed')
+})
+
 console.log(`\n${checks} checks, ${failures} failed`)
 process.exit(failures ? 1 : 0)
