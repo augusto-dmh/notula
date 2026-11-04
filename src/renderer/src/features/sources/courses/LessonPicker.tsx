@@ -32,8 +32,9 @@ const GAP = 6
 
 type Load = { status: 'loading' } | { status: 'error'; message: string } | { status: 'ready'; lessons: SeriesLesson[]; current: SeriesLesson | null }
 
+/** A row's number column: "Lesson 12". A lesson's label is its section, which heads its group. */
 function rowLabel(l: SeriesLesson): string {
-  return lessonLabel(l.label, l.number) ?? '—'
+  return lessonLabel(null, l.number) ?? '—'
 }
 
 function matches(l: SeriesLesson, q: string): boolean {

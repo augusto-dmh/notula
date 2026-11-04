@@ -461,5 +461,10 @@ test('QA: a lesson note teaches its list item the lesson’s address', () => {
   check(/item\.canonical_key \|\| !draft\.url \|\| draft\.canonicalKey\.startsWith\(GUESS_KEY_PREFIX\)/.test(fn), 'once, with a real address, never a guess')
 })
 
+test('QA: the lesson picker numbers every row the same way', () => {
+  const picker = src('src/renderer/src/features/sources/courses/LessonPicker.tsx')
+  check(/function rowLabel\(l: SeriesLesson\): string \{\n\s*return lessonLabel\(null, l\.number\) \?\? '—'/.test(picker), 'a row with a note says "Lesson n", not its section')
+})
+
 console.log(`\n${checks} checks, ${failures} failed`)
 process.exit(failures ? 1 : 0)
