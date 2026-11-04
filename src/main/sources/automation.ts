@@ -47,8 +47,11 @@ const MATCHED: ReadonlySet<CourseConfidence> = new Set(['exact', 'title', 'app']
 
 /** One recognition → what happens (behavior §4.5.1, §4.5.5–6, §4.9.7, §4.9.9). */
 export function decide(i: DecisionInput): Decision {
-  // InPrivate and Incognito: no automatic start and no cards either (the existing Sources rule).
-  if (i.privateWindow !== false) return { kind: 'nothing', reason: 'private' }
+  // InPrivate and Incognito: no automatic start and no cards either. A window whose type can't be
+  // told (Chrome's titles look the same either way) may show a card, but nothing starts by itself:
+  // the existing Sources rule persists nothing there until the user acts.
+  if (i.privateWindow === true) return { kind: 'nothing', reason: 'private' }
+  const knownNormal = i.privateWindow === false
   if (i.onboarding) return { kind: 'nothing', reason: 'onboarding' }
   const rec = i.recognition
   if (!rec) return { kind: 'nothing', reason: 'not-recognized' }
@@ -58,8 +61,9 @@ export function decide(i: DecisionInput): Decision {
       // A meeting-mode note captures: offer to link it, never change it by itself.
       return i.capturing.linkable ? { kind: 'card', mode: 'link-capturing' } : { kind: 'nothing', reason: 'capturing' }
     }
-    // Under the device lock the card asks (acting on it unlocks first); nothing starts by itself.
-    if (i.behavior.onPlay === 'ask' || i.locked) return { kind: 'card', mode: 'course' }
+    // Under the device lock, or in a window that may be private, the card asks (acting on it
+    // unlocks first); nothing starts by itself.
+    if (i.behavior.onPlay === 'ask' || i.locked || !knownNormal) return { kind: 'card', mode: 'course' }
     return { kind: 'auto-start' }
   }
   if (rec.confidence === 'ambiguous') {

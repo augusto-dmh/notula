@@ -382,6 +382,13 @@ export function registerCourses(ctx: MainContext): void {
   }
 
   const watches = new Map<string, Watch>()
+  /**
+   * The last ended playbacks, newest last: the sheet's Recently played lists them, so a pick
+   * still finds the playback and what was gathered for it (an app playback has no address).
+   */
+  const ended = new Map<string, Watch>()
+  const ENDED_KEPT = 20
+  const watchOf = (playbackId: string): Watch | undefined => watches.get(playbackId) ?? ended.get(playbackId)
   /** Playbacks just added to Courses from the sheet: their next recognition says `immediate`. */
   const immediate = new Set<string>()
   let sessions: MediaSession[] = []
@@ -513,7 +520,8 @@ export function registerCourses(ctx: MainContext): void {
       w.signals = signals
       log('info', 'sources:recognized', { confidence: rec.confidence, lesson: rec.lesson.state, rules: rec.signals.filter((s) => s.includes(':')), signals: rec.signals.filter((s) => !s.includes(':')).length, windowRead: readState })
       publish(w, rec, immediate.delete(w.playback.id))
-      await learn(rec, signals, courses)
+      // Learning writes titles and keys: only for a course app or a window known to be normal.
+      if (w.playback.app || w.playback.privateWindow === false) await learn(rec, signals, courses)
     } catch (err) {
       log('warn', 'sources:recognize-failed', { name: err instanceof Error ? err.name : 'error' })
     } finally {
@@ -546,6 +554,7 @@ export function registerCourses(ctx: MainContext): void {
   async function onSnapshot(provider: Playback['provider'], playbacks: Playback[]): Promise<void> {
     if (!(await active())) {
       watches.clear()
+      ended.clear()
       recognitions.clear()
       return
     }
@@ -565,13 +574,21 @@ export function registerCourses(ctx: MainContext): void {
         recognitions.delete(p.id)
       }
       w.playback = p
-      // InPrivate windows are never recognized; a course app has none.
-      const normal = !!p.app || p.privateWindow === false
-      if (ELIGIBLE.has(p.state) && normal && !p.ad && w.title !== p.title) void run(w)
+      // InPrivate windows are never recognized; a course app has none. A window whose type can't
+      // be told is recognized from what is on screen (History stays unread, nothing is learned).
+      const notPrivate = !!p.app || p.privateWindow !== true
+      if (ELIGIBLE.has(p.state) && notPrivate && !p.ad && w.title !== p.title) void run(w)
     }
     for (const [pid, w] of [...watches]) {
       if (w.playback.provider !== provider || present.has(pid)) continue
       watches.delete(pid)
+      ended.delete(pid)
+      ended.set(pid, w)
+      while (ended.size > ENDED_KEPT) {
+        const oldest = ended.keys().next().value
+        if (oldest === undefined) break
+        ended.delete(oldest)
+      }
       recognitions.delete(pid)
       immediate.delete(pid)
     }
@@ -592,7 +609,7 @@ export function registerCourses(ctx: MainContext): void {
   async function proposalFor(p: Playback | null, link: string | null): Promise<CourseProposal | null> {
     const session = p ? sessionOf(p) : null
     const mapping = p ? await mappingOf(p, session) : null
-    const w = p ? watches.get(p.id) : undefined
+    const w = p ? watchOf(p.id) : undefined
     const known = link ?? p?.url ?? w?.signals?.addressBar?.url ?? w?.signals?.history?.url ?? null
     let parsed = known ? parseSourceUrl(known) : null
     let cu = known ? courseUrl(known, p?.artist ?? null) : null
@@ -664,7 +681,7 @@ export function registerCourses(ctx: MainContext): void {
     const { playbackId, url } = candidatesRequest(raw)
     const courses = await storage.listCourses()
     const open = await Promise.all(courses.filter((c) => c.registered_at && unlinked(c)).map(toItem))
-    const playback = playbackId ? (watches.get(playbackId)?.playback ?? null) : null
+    const playback = playbackId ? (watchOf(playbackId)?.playback ?? null) : null
     if (playbackId && !playback) log('info', 'sources:course-candidates', { playback: 'gone' })
     const proposal = playback || url ? await proposalFor(playback, url) : null
     log('info', 'sources:course-candidates', { unlinked: open.length, proposal: proposal !== null, found: proposal?.foundHost != null })

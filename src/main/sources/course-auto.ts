@@ -142,6 +142,9 @@ function proxyPath(browser: 'chrome' | 'edge'): string | null {
   return roots.find((p): p is string => !!p && existsSync(p)) ?? null
 }
 
+/** The one-card rule's key: a card kind and the title it was asked for. */
+const cardedKey = (mode: string, title: string | null): string => `${mode} | ${title ?? ''}`
+
 export class CourseAutomation {
   private active = false
   private readonly suppression = new AutoSuppression()
@@ -153,7 +156,10 @@ export class CourseAutomation {
   private readonly mainStarts = new Set<string>()
   /** When today's offer first asked about a playback (the recognition wait). */
   private readonly firstAsked = new Map<string, number>()
-  /** Playbacks a course card was already asked for, with the title it was asked for. */
+  /**
+   * Playbacks a course card was already asked for: the card kind and title it was asked for. A
+   * new kind for the same title asks again (Add course, then the course card once it is added).
+   */
   private readonly carded = new Map<string, string>()
   private readonly decisions = new LatestPerPlayback<{ playback: Playback; rec: Recognition; immediate: boolean }>()
   /** Undone starts, for a session that announces itself after the Undo. */
@@ -251,7 +257,7 @@ export class CourseAutomation {
     const item = series && rec.lesson.itemId ? ((await this.ctx.storage.listCatalog(series.id)).find((i) => i.id === rec.lesson.itemId) ?? null) : null
     const track = this.hooks.offers.track(pid)
     const key = this.lessonKey(rec, track)
-    const suppressed = !this.suppression.allowed(pid, key, playback.title) || (rec.confidence === 'ambiguous' && this.carded.get(pid) === playback.title)
+    const suppressed = !this.suppression.allowed(pid, key, playback.title) || (rec.confidence === 'ambiguous' && this.carded.get(pid) === cardedKey('which-course', playback.title))
     const capturing = await this.capturingNote(pid)
     const d = decide({
       recognition: rec,
@@ -268,8 +274,8 @@ export class CourseAutomation {
       await this.autoStart(playback, rec, series, item, key, capturing?.ownAuto ? capturing.noteId : null)
     } else if (d.kind === 'card') {
       // One card per playback and title.
-      if (this.carded.get(pid) === playback.title) return
-      this.carded.set(pid, playback.title)
+      if (this.carded.get(pid) === cardedKey(d.mode, playback.title)) return
+      this.carded.set(pid, cardedKey(d.mode, playback.title))
       const own = capturing?.ownAuto ? this.autoNotes.get(capturing.noteId) : undefined
       if (d.mode === 'course' && capturing && own && own.key !== key && this.ctx.capture.currentNoteId() === capturing.noteId) {
         // The next lesson asks first: the previous lesson's capture ends, so the new lesson's

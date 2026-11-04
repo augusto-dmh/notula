@@ -242,7 +242,7 @@ function PickStep({ onPick, onClose }: { onPick(source: { playbackId: string | n
                     type="button"
                     id={`course-sheet-recent-${item.playback.id}`}
                     className="course-sheet__recent-row"
-                    onClick={() => onPick({ playbackId: item.playback.id, url: null })}
+                    onClick={() => onPick({ playbackId: item.playback.id, url: item.draft?.url ?? item.playback.url ?? null })}
                   >
                     <span className="course-sheet__recent-title">{item.playback.title || 'Untitled video'}</span>
                     {line ? <span className="course-sheet__recent-meta">{line}</span> : null}

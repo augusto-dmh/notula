@@ -124,8 +124,13 @@ test('none: course-like gets Add course, other videos keep the offer', () => {
 
 test('never in private windows (no cards either)', () => {
   eq(kind(A.decide(base({ privateWindow: true }))), 'nothing:private', 'private')
-  eq(kind(A.decide(base({ privateWindow: 'unknown' }))), 'nothing:private', 'unknown')
   eq(kind(A.decide(base({ privateWindow: true, recognition: rec('none', 'pending'), courseLike: true, behavior: null }))), 'nothing:private', 'no add-course card')
+})
+
+test('a window that may be private asks instead of starting (the Sources rule)', () => {
+  eq(kind(A.decide(base({ privateWindow: 'unknown' }))), 'card:course', 'unknown: the card asks')
+  eq(kind(A.decide(base({ privateWindow: 'unknown', recognition: rec('none', 'pending'), courseLike: true, behavior: null }))), 'card:add-course', 'unknown: Add course')
+  eq(kind(A.decide(base({ privateWindow: 'unknown', recognition: rec('ambiguous', 'pending') }))), 'card:which-course', 'unknown: which course')
 })
 
 test('never during onboarding', () => {
@@ -410,6 +415,15 @@ test('lows: L1 adoption retry, L3 once across restarts, L6 log fields', () => {
   check(on.indexOf('tried.add(noteId)') > 0 && on.indexOf('tried.add(noteId)') < on.indexOf('await '), 'L3: claimed before the first await')
   check(!/\{ err \}/.test(autoTs), 'L6: course-auto logs error names only')
   check(/try \{\s*await shell\.openExternal/.test(autoTs), 'L6: openExternal is caught')
+})
+
+test('QA: one card per playback, kind and title (Add course, then the course card)', () => {
+  check(/this\.carded\.get\(pid\) === cardedKey\(d\.mode, playback\.title\)/.test(autoTs), 'the rule keys on the card kind')
+  check(/cardedKey\('which-course', playback\.title\)/.test(autoTs), 'Which course is this? is asked once per title')
+  const cs = src('src/main/sources/courses.ts')
+  check(/const notPrivate = !!p\.app \|\| p\.privateWindow !== true/.test(cs), 'a window that may be private is recognized')
+  check(/if \(w\.playback\.app \|\| w\.playback\.privateWindow === false\) await learn\(/.test(cs), 'learning only in a course app or a known-normal window')
+  check(/watchOf\(playbackId\)\?\.playback/.test(cs) && /ended\.set\(pid, w\)/.test(cs), 'Recently played still finds an ended playback')
 })
 
 console.log(`\n${checks} checks, ${failures} failed`)
