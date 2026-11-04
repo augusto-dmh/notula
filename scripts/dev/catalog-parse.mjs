@@ -369,6 +369,18 @@ test('import renumbering: pending and guessed change, manual never, earlier cata
   check(![...rows.unsettled, ...rows.fromCatalog].some((r) => r.noteId === 'n29' || r.noteId === 'n31'), 'manual and playlist numbers untouched')
 })
 
+test('import renumbering: a page-titled note follows its old item’s title into the new list', () => {
+  // An unnumbered list whose prose took numbers 1–2: First module is 5 there.
+  const previous = C.parseCatalog('Intro paragraph.\nSecond paragraph.\n- Welcome\n- Planning\n- First module').items
+  const next = C.parseCatalog('1. Welcome\n2. Planning\n3. First module', { outline: true }).items
+  // Numbered 5 by the old list (its prose shifted it); titled by the page, not the lesson.
+  const s = { note_id: 'n1', canonical_key: 'circle:community.example.com:9', url: null, title: 'Example space | Example community', lesson_number: 5, lesson_label: null, lesson_state: 'numbered', lesson_origin: 'catalog' }
+  const rows = C.renumberRows([s], next, previous)
+  eq(rows.fromCatalog.map((r) => [r.noteId, r.lesson_number]), [['n1', 3]], 'found again by the old item’s title')
+  eq(C.renumberRows([s], next).fromCatalog.length, 0, 'without the old list it stays as it was')
+  eq(C.renumberRows([{ ...s, lesson_origin: 'manual' }], next, previous).fromCatalog.length, 0, 'manual numbers untouched')
+})
+
 // ---------- titles ----------
 
 test('titles: deterministic cleanup', () => {

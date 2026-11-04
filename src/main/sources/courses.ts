@@ -253,6 +253,18 @@ const COURSES_TTL_MS = 10_000
 
 const EMPTY_MATCH: CourseMatch = { apps: [], hosts: [], titles: [], keys: [], windowRead: false }
 
+/** A URL slug as a name: `software-design` → `Software design`. */
+function slugTitle(slug: string): string {
+  let s = slug
+  try {
+    s = decodeURIComponent(slug)
+  } catch {
+    // Not percent-encoded: as it is.
+  }
+  s = s.replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim()
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : ''
+}
+
 /** A course with no app and no site yet (added from the vault): the sheet offers to link it. */
 function unlinked(s: Pick<SourceSeries, 'match'>): boolean {
   return !s.match || (s.match.apps.length === 0 && s.match.hosts.length === 0 && s.match.keys.length === 0)
@@ -651,8 +663,15 @@ export function registerCourses(ctx: MainContext): void {
       // A Circle space: the page title without ` | <community>`; an app's own name otherwise.
       const suffix = appTitle ? ` | ${appTitle}`.toLowerCase() : null
       if (suffix && sessionTitle.toLowerCase().endsWith(suffix)) title = sessionTitle.slice(0, -suffix.length).trim()
+      // A browser tab of a Circle space: `<space> | <community>` too.
+      else if (circleKey && !appTitle && sessionTitle.includes(' | ')) title = sessionTitle.slice(0, sessionTitle.lastIndexOf(' | ')).trim()
       else title = appTitle ?? sessionTitle
     }
+    // Added before and removed from Courses since: its own name.
+    const before = (await storage.listSeries()).find((s) => s.canonical_key === canonicalKey && s.kind === kind)
+    if (before?.title) title = before.title
+    // A pasted link names no space: its slug does (`software-design` → `Software design`).
+    if (!title && canonicalKey.startsWith('circle:')) title = slugTitle(canonicalKey.slice(canonicalKey.lastIndexOf(':') + 1))
     if (!title) title = cu?.host ?? 'Untitled course'
     const generic = p ? genericNames({ app: p.app ? { appUserModelId: p.app.appUserModelId, mapping } : null, history: null, addressBar: null }, [cu?.host ?? null]) : new Set<string>()
     const learned = p && !isGenericTitle(sessionTitle, generic) ? [sessionTitle] : []

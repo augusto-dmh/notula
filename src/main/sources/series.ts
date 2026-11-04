@@ -165,7 +165,9 @@ export async function fillCatalog(
   opts: { dryRun?: boolean; origin: CatalogOrigin }
 ): Promise<{ numbered: number }> {
   const sources = await ctx.storage.listNoteSources({ seriesId })
-  const rows = renumberRows(sources, items)
+  // The list being replaced: a number it gave is found again by its item's title.
+  const previous = await ctx.storage.listCatalog(seriesId)
+  const rows = renumberRows(sources, items, previous)
   if (opts.dryRun) return { numbered: rows.unsettled.length + rows.fromCatalog.length }
   await ctx.storage.replaceCatalog(seriesId, items)
   let numbered = 0

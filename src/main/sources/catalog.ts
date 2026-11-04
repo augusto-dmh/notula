@@ -321,10 +321,13 @@ export function draftLesson(
 /**
  * The lessons an imported catalog renumbers: `pending`, `guessed`, and numbers an earlier catalog
  * gave. Manual, playlist and extension numbers are left alone (storage refuses manual ones too).
+ * `previous`: the catalog being replaced. A number it gave is found again by its item's title when
+ * the note's own key, URL and title match nothing (a lesson note titled by its page, not its lesson).
  */
 export function renumberRows(
   sources: readonly Pick<NoteSource, 'note_id' | 'canonical_key' | 'url' | 'title' | 'lesson_number' | 'lesson_label' | 'lesson_state' | 'lesson_origin'>[],
-  items: readonly Matchable[]
+  items: readonly Matchable[],
+  previous: readonly Pick<Matchable, 'number' | 'title'>[] = []
 ): { unsettled: LessonNumberUpdate[]; fromCatalog: LessonNumberUpdate[] } {
   const unsettled: LessonNumberUpdate[] = []
   const fromCatalog: LessonNumberUpdate[] = []
@@ -333,7 +336,11 @@ export function renumberRows(
     const isUnsettled = s.lesson_state === 'pending' || s.lesson_state === 'guessed'
     const wasCatalog = s.lesson_state === 'numbered' && s.lesson_origin === 'catalog'
     if (!isUnsettled && !wasCatalog) continue
-    const l = lessonFor(items, { canonicalKey: s.canonical_key, url: s.url, title: s.title })
+    let l = lessonFor(items, { canonicalKey: s.canonical_key, url: s.url, title: s.title })
+    if (!l.fromCatalog && wasCatalog) {
+      const was = previous.find((p) => p.number !== null && p.number === s.lesson_number)
+      if (was?.title) l = lessonFor(items, { canonicalKey: s.canonical_key, url: s.url, title: was.title })
+    }
     if (!l.fromCatalog) continue
     if (wasCatalog && s.lesson_number === l.number && s.lesson_label === l.label) continue
     const row: LessonNumberUpdate = { noteId: s.note_id, lesson_number: l.number, lesson_label: l.label, lesson_state: 'numbered', lesson_origin: 'catalog' }

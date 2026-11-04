@@ -441,5 +441,12 @@ test('QA: Export lessons copies into the new folder it made', () => {
   check(/await rm\(dest, \{ recursive: true, force: true \}\)/.test(seek), 'a failed copy removes its own new folder')
 })
 
+test('QA: the sheet names a Circle course from its tab, its earlier series or its slug', () => {
+  const cs = src('src/main/sources/courses.ts')
+  check(/else if \(circleKey && !appTitle && sessionTitle\.includes\(' \| '\)\) title = sessionTitle\.slice\(0, sessionTitle\.lastIndexOf\(' \| '\)\)\.trim\(\)/.test(cs), 'a browser tab drops ` | <community>`')
+  check(/if \(before\?\.title\) title = before\.title/.test(cs), 'a course added before keeps its name')
+  check(/if \(!title && canonicalKey\.startsWith\('circle:'\)\) title = slugTitle\(/.test(cs), 'a pasted link names the course from its slug, not the host')
+})
+
 console.log(`\n${checks} checks, ${failures} failed`)
 process.exit(failures ? 1 : 0)
