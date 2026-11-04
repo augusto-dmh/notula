@@ -195,10 +195,11 @@ export function SourceDetectedCard({
   return (
     <div className="src-card" ref={rootRef}>
       {course ? (
-        <div className="src-card__source">
-          <div className="src-card__title">{course.question}</div>
+        // The card's own title is main's question (`payload.title`); the line under it names the
+        // lesson, as an offer names its video.
+        <div className="src-card__source" aria-label={course.question}>
           {course.line ? (
-            <div className="src-card__meta" title={course.line}>
+            <div className="src-card__title" title={course.line}>
               {course.line}
             </div>
           ) : null}

@@ -473,5 +473,11 @@ test('QA: a channel video is named by its title; a channel starts with Later', (
   check(/base\.kind === 'channel' && options\.includes\('later'\) \? 'later'/.test(sheet), 'a channel’s lesson list starts at Later')
 })
 
+test('QA: a course card asks its question once', () => {
+  const card = src('src/renderer/src/features/sources/note/SourceDetectedCard.tsx')
+  check(!/<div className="src-card__title">\{course\.question\}<\/div>/.test(card), 'the frame shows main’s question; the card doesn’t repeat it')
+  check(/<div className="src-card__title" title=\{course\.line\}>/.test(card), 'the lesson line is the card’s title')
+})
+
 console.log(`\n${checks} checks, ${failures} failed`)
 process.exit(failures ? 1 : 0)
