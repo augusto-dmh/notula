@@ -454,5 +454,12 @@ test('QA: cards name the lesson by its number, not its section', () => {
   check(/state === 'guessed' \? `Lesson \$\{rec\.lesson\.number\}\?` : `Lesson \$\{rec\.lesson\.number\}`/.test(fn), '"Lesson 53", "Lesson 54?" when guessed')
 })
 
+test('QA: a lesson note teaches its list item the lesson’s address', () => {
+  check(/this\.hooks\.noteFor\([^\n]*\)\n\s*await this\.rememberItemKey\(item, draft\)/.test(body(autoTs, 'private async autoStart(')), 'after the automatic start (or Record) makes the note')
+  check(/this\.hooks\.linkNote\([^\n]*\)\n\s*await this\.rememberItemKey\(item, draft\)/.test(autoTs), 'after Link this note')
+  const fn = body(autoTs, 'private async rememberItemKey(')
+  check(/item\.canonical_key \|\| !draft\.url \|\| draft\.canonicalKey\.startsWith\(GUESS_KEY_PREFIX\)/.test(fn), 'once, with a real address, never a guess')
+})
+
 console.log(`\n${checks} checks, ${failures} failed`)
 process.exit(failures ? 1 : 0)

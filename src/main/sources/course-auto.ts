@@ -340,6 +340,19 @@ export class CourseAutomation {
     return null
   }
 
+  /**
+   * A note now exists for this lesson (started by itself or by the user's answer): its list item
+   * learns the lesson's address once, so Open lesson and the next recognition find it. A window
+   * that may be private persists nothing before this point.
+   */
+  private async rememberItemKey(item: CatalogItem | null, draft: SourceDraft): Promise<void> {
+    if (!item || item.canonical_key || !draft.url || draft.canonicalKey.startsWith(GUESS_KEY_PREFIX)) return
+    await this.ctx.storage.rememberLessonKey(item.id, draft.canonicalKey, draft.url).catch((err: unknown) => {
+      log('warn', 'sources:lesson-key-failed', { name: errName(err) })
+      return null
+    })
+  }
+
   // ---------- the automatic start ----------
 
   private async autoStart(playback: Playback, rec: Recognition, series: SourceSeries, item: CatalogItem | null, key: string, switchFrom: string | null): Promise<void> {
@@ -355,6 +368,7 @@ export class CourseAutomation {
     }
     const since = Date.now()
     const { noteId, created } = await this.hooks.noteFor({ draft, playbackId: pid, series, title, lesson: this.lessonFields(rec), continueId })
+    await this.rememberItemKey(item, draft)
     const auto: AutoNote = { playbackId: pid, seriesId: series.id, created, since, sessionId: null, undone: false, stopped: false, cardId: null, cardUntil: 0, key, title: playback.title }
     this.autoNotes.set(noteId, auto)
     this.byPlayback.set(pid, noteId)
@@ -712,6 +726,7 @@ export class CourseAutomation {
     const item = rec.lesson.itemId ? ((await this.ctx.storage.listCatalog(series.id)).find((i) => i.id === rec.lesson.itemId) ?? null) : null
     const draft = this.draftFor(track.playback, rec, series, item)
     const source = await this.hooks.linkNote(noteId, { draft, playbackId, series, title: this.noteTitle(rec, series, item, draft), lesson: this.lessonFields(rec) })
+    await this.rememberItemKey(item, draft)
     // Video audio only: the microphone closes, system audio keeps flowing.
     const closed = this.ctx.capture.closeSource(noteId, 'microphone')
     markSystemOnly(noteId)
