@@ -286,8 +286,16 @@ export function registerSeek(ctx: MainContext, hooks: SeekHooks): void {
         const res = await ctx.storage.writeExportNotes({ root, notes: refs.slice(i, i + EXPORT_BATCH), markdown: true, transcripts: true, format: 'markdown' })
         problems += res.errors.length
       }
+      // The new folder is made first (that reserves its name), so its contents are copied into it
+      // entry by entry; nothing in it can exist yet, and nothing is ever overwritten.
       const dest = await newCourseFolder(parent, series.title)
-      await cp(root, dest, { recursive: true, force: false, errorOnExist: true })
+      try {
+        for (const entry of await readdir(root)) await cp(join(root, entry), join(dest, entry), { recursive: true, force: false, errorOnExist: true })
+      } catch (err) {
+        // The folder is this export's own, just made: a failed copy doesn't leave it behind.
+        await rm(dest, { recursive: true, force: true }).catch(() => undefined)
+        throw err
+      }
       const files = await countFiles(dest)
       log('info', 'sources:export-series', { notes: refs.length, files, problems })
       if (!(ctx.isDev && process.env['NOTULA_DEV_DIALOG_DIR'])) {

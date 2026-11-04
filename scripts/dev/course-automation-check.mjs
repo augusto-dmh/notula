@@ -434,5 +434,12 @@ test('QA: lesson notes keep their own 150-word rule', () => {
   check(/if \(await this\.hasSummaryPanel\(noteId\)\) return 'has-panel'\n\s*if \(lengthChecked\) return null/.test(autoEn), 'an existing panel still blocks')
 })
 
+test('QA: Export lessons copies into the new folder it made', () => {
+  const seek = src('src/main/sources/seek.ts')
+  check(!/await cp\(root, dest,/.test(seek), 'not a copy onto the folder just made (that fails with EEXIST)')
+  check(/for \(const entry of await readdir\(root\)\) await cp\(join\(root, entry\), join\(dest, entry\), \{ recursive: true, force: false, errorOnExist: true \}\)/.test(seek), 'entry by entry, never overwriting')
+  check(/await rm\(dest, \{ recursive: true, force: true \}\)/.test(seek), 'a failed copy removes its own new folder')
+})
+
 console.log(`\n${checks} checks, ${failures} failed`)
 process.exit(failures ? 1 : 0)
