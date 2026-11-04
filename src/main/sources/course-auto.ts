@@ -582,10 +582,10 @@ export class CourseAutomation {
     if (!this.active) return
     const playbackId = playback.id
     const auto = this.autoNotes.get(noteId)
-    const allowed = (plan: 'captions' | 'system-audio' | 'none', onPlay: SourceSeries['on_play'] | null): boolean =>
+    const allowed = (plan: 'captions' | 'system-audio' | 'none', onPlay: SourceSeries['on_play'] | null, privateWindow = playback.privateWindow): boolean =>
       resumeAllowed({
         app: !!playback.app,
-        privateWindow: playback.privateWindow,
+        privateWindow,
         onboarding: this.ctx.ui.inOnboarding(),
         locked: this.ctx.deviceLock.isLocked(),
         capturing: this.ctx.capture.isCapturing(),
@@ -594,7 +594,11 @@ export class CourseAutomation {
         onPlay
       })
     // The cheap rules first, then the plan (it can take seconds), then the rules again.
-    if (!allowed('system-audio', 'record')) return log('info', 'sources:auto-continue-skipped', { reason: 'rules' })
+    if (!allowed('system-audio', 'record')) {
+      // Only the window's type stands in the way (it may be private): ask, as a first start would.
+      if (!playback.app && playback.privateWindow === 'unknown' && allowed('system-audio', 'record', false)) return this.askToContinue(noteId, playback)
+      return log('info', 'sources:auto-continue-skipped', { reason: 'rules' })
+    }
     const source = await this.ctx.storage.getNoteSource(noteId)
     const series = source?.series_id ? await this.ctx.storage.getSeries(source.series_id) : null
     if (!source || !series?.registered_at) return
@@ -617,6 +621,18 @@ export class CourseAutomation {
       confidence: courseRecognition(playbackId)?.confidence ?? 'exact',
       lessonState: source.lesson_state
     })
+  }
+
+  /** A lesson resumed in a window that may be private: the course card asks; Record continues its note. */
+  private async askToContinue(noteId: string, playback: Playback): Promise<void> {
+    const rec = courseRecognition(playback.id)
+    const source = await this.ctx.storage.getNoteSource(noteId)
+    const series = source?.series_id ? await this.ctx.storage.getSeries(source.series_id) : null
+    if (!rec || !series?.registered_at || rec.courseId !== series.id) return log('info', 'sources:auto-continue-skipped', { reason: 'rules' })
+    const item = rec.lesson.itemId ? ((await this.ctx.storage.listCatalog(series.id)).find((i) => i.id === rec.lesson.itemId) ?? null) : null
+    const key = this.lessonKey(rec, this.hooks.offers.track(playback.id))
+    log('info', 'sources:auto-continue-asked', {})
+    this.askCard('course', playback, rec, series, item, key, await this.capturingNote(playback.id))
   }
 
   // ---------- the asking cards ----------

@@ -362,7 +362,8 @@ test('M5: continuing after a stop follows the automatic start rules and the plan
   check(!r({ plan: 'none' }) && !r({ plan: 'captions' }), 'the plan says no video audio (local-only, none set up, captions)')
   check(!r({ onPlay: 'ask' }), 'on_play = ask')
   const res = body(autoTs, 'async resumed(')
-  check(res.includes('coursePlan(this.ctx, noteId)') && res.includes('privateWindow: playback.privateWindow'), 'resumed() re-plans and reads the window')
+  check(res.includes('coursePlan(this.ctx, noteId)') && res.includes('privateWindow = playback.privateWindow'), 'resumed() re-plans and reads the window')
+  check(/playback\.privateWindow === 'unknown' && allowed\('system-audio', 'record', false\)\) return this\.askToContinue\(noteId, playback\)/.test(res), 'QA: a window that may be private asks to continue (the course card) instead of nothing')
 })
 
 test('M6: finished detection reads the lesson’s own samples', () => {
