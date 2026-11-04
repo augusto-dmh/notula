@@ -426,5 +426,13 @@ test('QA: one card per playback, kind and title (Add course, then the course car
   check(/watchOf\(playbackId\)\?\.playback/.test(cs) && /ended\.set\(pid, w\)/.test(cs), 'Recently played still finds an ended playback')
 })
 
+test('QA: lesson notes keep their own 150-word rule', () => {
+  const lnTs = src('src/main/sources/lesson-notes.ts')
+  check(/autoGenerate\(noteId, \{ lengthChecked: true \}\)/.test(lnTs), 'lesson notes tell auto-generation the length is checked')
+  const autoEn = src('src/main/enhance/auto.ts')
+  check(/if \(lengthChecked\) return null/.test(autoEn), 'the meeting minimum is skipped only when the caller checked')
+  check(/if \(await this\.hasSummaryPanel\(noteId\)\) return 'has-panel'\n\s*if \(lengthChecked\) return null/.test(autoEn), 'an existing panel still blocks')
+})
+
 console.log(`\n${checks} checks, ${failures} failed`)
 process.exit(failures ? 1 : 0)

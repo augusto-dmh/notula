@@ -185,6 +185,41 @@ test('grammar: number forms 12. / 12) / 12 - / Lesson 12, URL anywhere', () => {
   eq(p.skippedLines, 0, 'blank lines are ignored, not skipped')
 })
 
+test('outline: a curriculum file keeps its numbered lessons, not its prose and notes', () => {
+  const text = [
+    '# Example course — Curriculum',
+    '',
+    'Source: the course page, copied on 2026-01-01. 4 classes in 2 sections.',
+    'Numbers below are the course order.',
+    '',
+    '## Getting started',
+    '',
+    '1. Welcome (12:42)',
+    '2. Planning (08:25)',
+    '',
+    '## Going further',
+    '',
+    '3. First module (04:34)',
+    '4. Wrap-up',
+    '',
+    '## Notes',
+    '',
+    'Folders follow the numbering above, with one exception:',
+    '- **Folder 3 holds class 4.** The numbering',
+    '  realigns later; most of it is still inside a',
+    '  30-day window).'
+  ].join('\n')
+  const o = C.parseCatalog(text, { outline: true })
+  eq(o.items.map((i) => [i.number, i.title, i.duration_ms]), [[1, 'Welcome', 762000], [2, 'Planning', 505000], [3, 'First module', 274000], [4, 'Wrap-up', null]], 'items')
+  eq(o.renumbered, false, 'its numbers are kept')
+  eq(o.sections, 2, 'sections with lessons')
+  // Pasted text keeps every line (the paste grammar is unchanged).
+  check(C.parseCatalog(text).items.length > 4, 'a paste still keeps plain lines')
+  // A bulleted outline without numbers keeps its bullets.
+  const b = C.parseCatalog('# Course\nIntro paragraph here.\n- One (01:00)\n- Two (02:00)\n- Three (03:00)\nClosing words.', { outline: true })
+  eq(b.items.map((i) => i.title), ['One', 'Two', 'Three'], 'bullets')
+})
+
 test('grammar: no numbers → the order numbers the items', () => {
   const p = C.parseCatalog('# Playlist\n- Welcome\n- Setting up\n- First steps (04:00)\n')
   eq(

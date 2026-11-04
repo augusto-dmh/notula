@@ -185,7 +185,7 @@ async function importCatalog(ctx: MainContext, raw: unknown): Promise<CatalogImp
   const { seriesId, input, dryRun } = catalogRequest(raw)
   const series = await ctx.storage.getSeries(seriesId)
   if (!series) throw notulaError('not-found', 'No such series')
-  const parsed = parseCatalog(await catalogText(input))
+  const parsed = parseCatalog(await catalogText(input), { outline: input.kind !== 'text' })
   if (parsed.overLimit) throw bad(`A catalog can have up to ${SOURCES_LIMITS.catalogItems.toLocaleString('en-US')} lessons. Split the list and import the part you need.`)
   if (parsed.items.length === 0) throw bad('No lessons found. Put one lesson per line, with an optional number, duration and link.')
   // A list the user imports is theirs: a playlist never replaces it.

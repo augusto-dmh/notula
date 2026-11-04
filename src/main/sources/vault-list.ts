@@ -97,7 +97,7 @@ export function vaultList(folders: readonly VaultFolder[], outline: string | nul
   const repeated = [...counts].filter(([, c]) => c > 1).map(([n]) => n)
   const strip = ({ order: _order, ...it }: ParsedCatalogItem & { order: number }): ParsedCatalogItem => it
 
-  const parsedOutline: ParsedCatalog | null = outline ? parseCatalog(outline) : null
+  const parsedOutline: ParsedCatalog | null = outline ? parseCatalog(outline, { outline: true }) : null
   if (!parsedOutline || parsedOutline.items.length === 0) return { items: rows.map(strip), repeated, outline: false }
 
   // The outline's order and titles; the folders' URLs by number; the rest after it.

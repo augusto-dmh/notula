@@ -140,7 +140,7 @@ export async function onLessonFinished(ctx: MainContext, noteId: string): Promis
     return skip('no-model')
   }
   setNoteTemplate(noteId, LESSON_TEMPLATE_ID)
-  const r = await ctx.enhance.autoGenerate(noteId)
+  const r = await ctx.enhance.autoGenerate(noteId, { lengthChecked: true })
   if (!r) return skip('not-started')
   started.set(noteId, r.panelId)
   log('info', 'sources:lesson-notes-started', { words: pre.words, whole: pre.scope.whole, notes: pre.scope.noteCount })

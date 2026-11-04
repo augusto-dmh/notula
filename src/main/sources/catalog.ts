@@ -136,10 +136,38 @@ function parseItemLine(raw: string): Omit<ParsedCatalogItem, 'section'> | null {
   }
 }
 
-/** Parses a pasted catalog or a Markdown file. */
-export function parseCatalog(text: string): ParsedCatalog {
-  const items: ParsedCatalogItem[] = []
-  const sectionsWithItems = new Set<string>()
+/** How a line marks itself as a lesson: a bullet, a number style, both, or null (plain text). */
+function markerStyle(line: string): string | null {
+  const bullet = LIST_MARKER.test(line)
+  const rest = line.replace(LIST_MARKER, '').trim()
+  const num = NUM_WORD.test(rest) ? 'word' : NUM_DOT.test(rest) ? 'dot' : NUM_DASH.test(rest) ? 'dash' : null
+  if (!bullet && !num) return null
+  return [bullet ? 'bullet' : null, num].filter(Boolean).join('+')
+}
+
+/** An outline's lesson marker: the most common style, when at least 3 lines use it. */
+function commonStyle(styles: readonly (string | null)[]): string | null {
+  const counts = new Map<string, number>()
+  for (const s of styles) if (s) counts.set(s, (counts.get(s) ?? 0) + 1)
+  let best: string | null = null
+  let most = 0
+  for (const [s, c] of counts) {
+    if (c > most) {
+      best = s
+      most = c
+    }
+  }
+  return most >= 3 ? best : null
+}
+
+/**
+ * Parses a pasted catalog or a Markdown file. `outline`: a curriculum file, where notes and prose
+ * sit around the lessons. Its lessons are the lines that use its most common lesson marker (`12.`,
+ * `12 -`, `Aula 12`, a bullet, or a bullet with a number); its other lines are skipped.
+ */
+export function parseCatalog(text: string, opts: { outline?: boolean } = {}): ParsedCatalog {
+  let items: ParsedCatalogItem[] = []
+  const styles: (string | null)[] = []
   let section: string | null = null
   let skipped = 0
   let fenced = false
@@ -189,8 +217,16 @@ export function parseCatalog(text: string): ParsedCatalog {
       break
     }
     items.push({ ...item, section })
-    if (section) sectionsWithItems.add(section)
+    styles.push(markerStyle(line))
   }
+
+  const style = opts.outline ? commonStyle(styles) : null
+  if (style) {
+    const kept = items.filter((_, i) => styles[i] === style)
+    skipped += items.length - kept.length
+    items = kept
+  }
+  const sectionsWithItems = new Set(items.map((it) => it.section).filter((s): s is string => !!s))
 
   // Numbers: the order numbers a catalog without them, or one whose numbers repeat.
   const numbered = items.filter((it) => it.number !== null)

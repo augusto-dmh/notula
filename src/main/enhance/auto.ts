@@ -256,7 +256,7 @@ export class AutoGeneration {
    * becomes the summary panel. Resolves once the panel
    * exists; the outcome follows on bus `enhance:completed`. Null when nothing was generated.
    */
-  async autoGenerate(noteId: string, opts: { transcriptText?: string; fallbackMarkdown?: string } = {}): Promise<{ panelId: string } | null> {
+  async autoGenerate(noteId: string, opts: { transcriptText?: string; fallbackMarkdown?: string; lengthChecked?: boolean } = {}): Promise<{ panelId: string } | null> {
     const note = await this.ctx.storage.getNote(noteId)
     if (!note) return null
     if (await this.hasSummaryPanel(noteId)) {
@@ -277,7 +277,7 @@ export class AutoGeneration {
     }
     const transcriptText = opts.transcriptText?.trim() ? opts.transcriptText : undefined
     if (!transcriptText) {
-      const blockedBy = await this.preflight(noteId)
+      const blockedBy = await this.preflight(noteId, opts.lengthChecked === true)
       if (blockedBy) {
         this.skip(noteId, `auto-generate-${blockedBy}`)
         return null
@@ -289,9 +289,10 @@ export class AutoGeneration {
     return { panelId }
   }
 
-  /** A summary panel already exists, or the transcript is too short. */
-  private async preflight(noteId: string): Promise<string | null> {
+  /** A summary panel already exists, or the transcript is too short (unless the caller checked it). */
+  private async preflight(noteId: string, lengthChecked = false): Promise<string | null> {
     if (await this.hasSummaryPanel(noteId)) return 'has-panel'
+    if (lengthChecked) return null
     const wordLevel = await this.ctx.settings.get('transcription.diarization').catch(() => false)
     const transcript = formatTranscript(await readerTranscript(this.ctx, noteId, await this.ctx.storage.getTranscript(noteId)), { wordLevel })
     if (transcript.text.length < MIN_TRANSCRIPT_CHARS) return 'transcript_too_short'

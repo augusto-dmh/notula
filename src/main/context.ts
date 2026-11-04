@@ -271,12 +271,13 @@ export interface EnhanceApi {
   /**
    * The end-of-meeting generation path, used by the demo meeting and by imports.
    * `transcriptText` replaces the transcript input; `fallbackMarkdown` becomes the panel
-   * when no LLM is set up. Resolves `null` when nothing
-   * was generated.
+   * when no LLM is set up. `lengthChecked`: the caller already checked the transcript's length by
+   * its own rule (lesson notes: 150 words), so the meeting minimum doesn't apply. Resolves `null`
+   * when nothing was generated.
    */
   autoGenerate(
     noteId: string,
-    opts?: { transcriptText?: string; fallbackMarkdown?: string }
+    opts?: { transcriptText?: string; fallbackMarkdown?: string; lengthChecked?: boolean }
   ): Promise<{ panelId: string } | null>
 }
 
