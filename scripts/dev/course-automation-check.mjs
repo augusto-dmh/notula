@@ -487,5 +487,12 @@ test('QA: Notula’s own capture of the last lesson yields to the next lesson’
   check(!/auto\.playbackId === playbackId/.test(fn), 'not only the same playback')
 })
 
+test('QA: a lesson note started by itself offers Undo in its menu (§4.5.3)', () => {
+  check(/canUndo\(noteId: string\): boolean \{\n\s*return this\.autoNotes\.has\(noteId\)/.test(autoTs), 'main knows which notes can still be undone')
+  check(/undoable: course\.canUndo\(noteId\)/.test(src('src/main/sources/index.ts')), 'the note source view carries it')
+  const chip = src('src/renderer/src/features/sources/note/SourceChip.tsx')
+  check(/course && view\.undoable \? \(/.test(chip) && /window\.notula\.sources\.undoAuto\(\{ noteId \}\)/.test(chip), 'the menu shows Undo automatic start and calls undo-auto')
+})
+
 console.log(`\n${checks} checks, ${failures} failed`)
 process.exit(failures ? 1 : 0)

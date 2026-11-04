@@ -118,6 +118,21 @@ async function confirmGuess(noteId: string, seriesId: string, number: number | n
 }
 
 /** The guess's "Same as <note>?" line, once per note until answered. */
+/** The note's Undo of an automatic start (§4.5.3): a new note is deleted, a continued one loses the new run. */
+async function undoAutomaticStart(noteId: string): Promise<void> {
+  try {
+    const r = await window.notula.sources.undoAuto({ noteId })
+    if (r.deleted) {
+      showToast({ kind: 'success', title: 'Recording undone', description: 'The note was deleted.' })
+      navigate('/')
+    } else {
+      showToast({ kind: 'success', title: 'Recording undone', description: 'This lesson’s new recording was removed.' })
+    }
+  } catch (err) {
+    showToast({ kind: 'error', title: 'Couldn’t undo', description: failure(err, 'undo the recording') })
+  }
+}
+
 function SameAsPrompt({ noteId, otherId }: { noteId: string; otherId: string }): JSX.Element | null {
   const [title, setTitle] = useState<string | null>(null)
   const [gone, setGone] = useState(false)
@@ -348,6 +363,20 @@ export function SourceChipView({ noteId, noteTitle }: { noteId: string; noteTitl
                 </button>
               ) : null}
               <div className="src-menu__divider" role="separator" />
+              {course && view.undoable ? (
+                <button
+                  type="button"
+                  role="menuitem"
+                  id="source-chip-undo-auto"
+                  className="src-menu__item"
+                  onClick={() => {
+                    setMenuOpen(false)
+                    void undoAutomaticStart(noteId)
+                  }}
+                >
+                  Undo automatic start
+                </button>
+              ) : null}
               <button type="button" role="menuitem" className="src-menu__item" onClick={() => (setMenuOpen(false), setDialog('unlink'))}>
                 Unlink source…
               </button>

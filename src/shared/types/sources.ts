@@ -162,6 +162,8 @@ export interface NoteSourceView {
   watched: { percent: number | null; spans: number; lastWatchedAt: IsoTime | null }
   /** The newest other non-trashed note with this key (the chip's "Same as <note>?"). */
   sameKeyNoteIds: string[]
+  /** A lesson note this run of Notula started by itself, so its ⋯ menu offers Undo (main still refuses once it has your notes). */
+  undoable?: boolean
 }
 
 // ---------- series, catalog, spans ----------

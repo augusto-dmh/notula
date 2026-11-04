@@ -509,6 +509,11 @@ export class CourseAutomation {
 
   // ---------- Undo and Stop ----------
 
+  /** The note started by itself in this run and can still be undone (the note's ⋯ menu shows Undo). */
+  canUndo(noteId: string): boolean {
+    return this.autoNotes.has(noteId)
+  }
+
   /** `sources:undo-auto`, and the card's Undo. */
   async undo(noteId: string, fromCard = false): Promise<{ deleted: boolean }> {
     const auto = this.autoNotes.get(noteId)

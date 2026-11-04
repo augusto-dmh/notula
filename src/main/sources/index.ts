@@ -629,7 +629,8 @@ export function registerSources(ctx: MainContext): void {
   ipcMain.handle('sources:get-for-note' satisfies InvokeChannel, async (_e, req: unknown): Promise<InvokeRes<'sources:get-for-note'>> => {
     const { noteId } = noteIdRequest(req)
     if (!active) return null
-    return storage.getNoteSourceView(noteId)
+    const view = await storage.getNoteSourceView(noteId)
+    return view ? { ...view, undoable: course.canUndo(noteId) } : null
   })
 
   ipcMain.handle('sources:link' satisfies InvokeChannel, (_e, req: unknown) => link(req))
