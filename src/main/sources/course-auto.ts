@@ -226,11 +226,13 @@ export class CourseAutomation {
     await this.decideFor(e.playback, e.recognition, e.immediate)
   }
 
-  private async capturingNote(playbackId: string): Promise<CapturingNote | null> {
+  private async capturingNote(_playbackId: string): Promise<CapturingNote | null> {
     const id = this.ctx.capture.currentNoteId()
     if (!id) return null
     const auto = this.autoNotes.get(id)
-    if (auto) return { noteId: id, ownAuto: auto.playbackId === playbackId, linkable: false }
+    // Notula's own automatic capture, whichever playback started it: the next lesson is a new
+    // playback (a new tab, or a course app's new title), and it takes over (§4.6.4).
+    if (auto) return { noteId: id, ownAuto: true, linkable: false }
     const [note, source] = await Promise.all([this.ctx.storage.getNote(id).catch(() => null), this.ctx.storage.getNoteSource(id).catch(() => null)])
     const c = this.capture?.noteId === id ? this.capture : null
     const linkable = qualifiesForLink({ captureStartedAt: c?.at ?? null, byHand: !!c && !c.byMain, hasEvent: !!note?.linked_event, hasSource: source !== null }, Date.now())

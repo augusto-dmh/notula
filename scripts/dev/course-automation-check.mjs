@@ -479,5 +479,11 @@ test('QA: a course card asks its question once', () => {
   check(/<div className="src-card__title" title=\{course\.line\}>/.test(card), 'the lesson line is the card’s title')
 })
 
+test('QA: Notula’s own capture of the last lesson yields to the next lesson’s playback', () => {
+  const fn = body(autoTs, 'private async capturingNote(')
+  check(/if \(auto\) return \{ noteId: id, ownAuto: true, linkable: false \}/.test(fn), 'own whichever playback started it (a new tab or title is a new playback)')
+  check(!/auto\.playbackId === playbackId/.test(fn), 'not only the same playback')
+})
+
 console.log(`\n${checks} checks, ${failures} failed`)
 process.exit(failures ? 1 : 0)
