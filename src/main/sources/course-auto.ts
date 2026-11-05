@@ -331,9 +331,11 @@ export class CourseAutomation {
   private async continueTarget(state: LessonState, draft: SourceDraft, series: SourceSeries, rec: Recognition): Promise<string | null> {
     if (state !== 'numbered') return null
     if (!draft.canonicalKey.startsWith(GUESS_KEY_PREFIX)) {
-      return (await this.ctx.storage.findNotesBySource(draft.canonicalKey, { limit: 1 }).catch(() => []))[0]?.noteId ?? null
+      const byKey = (await this.ctx.storage.findNotesBySource(draft.canonicalKey, { limit: 1 }).catch(() => []))[0]?.noteId ?? null
+      if (byKey) return byKey
     }
-    // A numbered lesson without a URL key: the course's note of that lesson.
+    // The course's note of that numbered lesson: a lesson without a URL key, or one whose earlier
+    // note was made before its address was known (it has a guessed key).
     if (rec.lesson.number === null) return null
     const rows = await this.ctx.storage.listNoteSources({ seriesId: series.id }).catch(() => [])
     for (const r of rows.filter((x) => x.lesson_state === 'numbered' && x.lesson_number === rec.lesson.number).sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1))) {

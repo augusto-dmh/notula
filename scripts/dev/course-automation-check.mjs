@@ -500,5 +500,11 @@ test('QA: an exact recognition in a course app links that app to the course', ()
   check(/match: \{ \.\.\.match, titles: titles \?\? match\.titles, apps \}/.test(learnFn), 'saved with the learned titles')
 })
 
+test('QA: a lesson whose address became known continues its earlier note', () => {
+  const fn = body(autoTs, 'private async continueTarget(')
+  check(/const byKey = [^\n]*\n\s*if \(byKey\) return byKey/.test(fn), 'by address first')
+  check(fn.indexOf('if (byKey) return byKey') < fn.indexOf('x.lesson_number === rec.lesson.number'), 'then the course note of that lesson number')
+})
+
 console.log(`\n${checks} checks, ${failures} failed`)
 process.exit(failures ? 1 : 0)
