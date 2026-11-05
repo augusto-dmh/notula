@@ -90,6 +90,12 @@ export interface FeedHooks {
   watchingEnded(noteId: string): void
   /** A note stopped at the end of watching: its video plays again (in this playback). */
   resumed(noteId: string, playback: Playback): void
+  /**
+   * The playback an automatic start began this note from (course-auto), or null. The watch counts
+   * it whatever its key: a course app's note can carry the address History found while the
+   * playback's own draft still has a guessed key.
+   */
+  startedFrom?(noteId: string): string | null
 }
 
 export class SourceFeed implements FeedView {
@@ -514,7 +520,10 @@ export class SourceFeed implements FeedView {
     const w = this.watch
     if (w.stopped) return
     const now = Date.now()
-    const tracks = this.hooks.tracks().filter((t) => t.draft?.canonicalKey === source.canonical_key || (this.note?.noteId === capturing && t.playback.id === this.bound?.playbackId))
+    const startedFrom = this.hooks.startedFrom?.(capturing) ?? null
+    const tracks = this.hooks
+      .tracks()
+      .filter((t) => t.draft?.canonicalKey === source.canonical_key || t.playback.id === startedFrom || (this.note?.noteId === capturing && t.playback.id === this.bound?.playbackId))
     // A mid-roll ad suspends the playback (paused, `ad`): that isn't the user pausing.
     const playing = tracks.some((t) => t.playback.status === 'playing' || t.playback.ad)
     const paused = !playing && tracks.some((t) => t.playback.status === 'paused')

@@ -229,7 +229,8 @@ export function registerSources(ctx: MainContext): void {
     settings: current,
     tracks: () => offers?.current() ?? [],
     watchingEnded: (noteId) => void offerGenerate(noteId).catch((err: unknown) => log('warn', 'sources:generate-offer-failed', { err })),
-    resumed: (noteId, playback) => void course.resumed(noteId, playback).catch((err: unknown) => log('warn', 'sources:auto-continue-failed', { name: err instanceof Error ? err.name : 'error' }))
+    resumed: (noteId, playback) => void course.resumed(noteId, playback).catch((err: unknown) => log('warn', 'sources:auto-continue-failed', { name: err instanceof Error ? err.name : 'error' })),
+    startedFrom: (noteId) => course.playbackOf(noteId)
   })
   offers = new SourceOffers(ctx, {
     settings: current,

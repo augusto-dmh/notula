@@ -506,5 +506,11 @@ test('QA: a lesson whose address became known continues its earlier note', () =>
   check(fn.indexOf('if (byKey) return byKey') < fn.indexOf('x.lesson_number === rec.lesson.number'), 'then the course note of that lesson number')
 })
 
+test('QA: the end of watching counts the playback an automatic start came from', () => {
+  const feedSrc = src('src/main/sources/feed.ts')
+  check(/const startedFrom = this\.hooks\.startedFrom\?\.\(capturing\) \?\? null/.test(feedSrc) && /t\.playback\.id === startedFrom/.test(feedSrc), 'whatever its key (a course app note keyed by the address History found)')
+  check(/startedFrom: \(noteId\) => course\.playbackOf\(noteId\)/.test(src('src/main/sources/index.ts')), 'course-auto supplies it')
+})
+
 console.log(`\n${checks} checks, ${failures} failed`)
 process.exit(failures ? 1 : 0)

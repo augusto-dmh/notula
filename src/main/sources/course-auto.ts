@@ -516,6 +516,11 @@ export class CourseAutomation {
     return this.autoNotes.has(noteId)
   }
 
+  /** The playback this note's automatic start came from (the feed's end-of-watching counts it), or null. */
+  playbackOf(noteId: string): string | null {
+    return this.autoNotes.get(noteId)?.playbackId ?? null
+  }
+
   /** `sources:undo-auto`, and the card's Undo. */
   async undo(noteId: string, fromCard = false): Promise<{ deleted: boolean }> {
     const auto = this.autoNotes.get(noteId)
