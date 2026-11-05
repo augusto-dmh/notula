@@ -477,16 +477,25 @@ export function registerCourses(ctx: MainContext): void {
     }
   }
 
-  /** After an `exact` recognition: the title it saw is learned; lesson rules 2–3 fill the item's key from a known URL. */
+  /**
+   * After an `exact` recognition: the title it saw is learned, and so is the course app it played
+   * in (a course added from a browser tab then opens its lessons in the app); lesson rules 2–3
+   * fill the item's key from a known URL.
+   */
   async function learn(rec: Recognition, signals: Signals, courses: readonly RecognizableCourse[]): Promise<void> {
     const course = courses.find((c) => c.series.id === rec.courseId)
     if (!course?.series.match) return
     if (rec.confidence === 'exact') {
+      const match = course.series.match
       const titles = learnTitles(signals, course)
-      if (titles) {
-        await storage.updateCourse(course.series.id, { match: { ...course.series.match, titles } })
+      const a = signals.app
+      const newApp = a && a.mapping?.state === 'mapped' && !match.apps.some((x) => x.appUserModelId === a.appUserModelId) ? a : null
+      if (titles || newApp) {
+        const apps = newApp && newApp.mapping ? [...match.apps, { browser: newApp.mapping.browser, appUserModelId: newApp.appUserModelId, profile: newApp.mapping.profile, appId: newApp.mapping.appId }] : match.apps
+        await storage.updateCourse(course.series.id, { match: { ...match, titles: titles ?? match.titles, apps } })
         invalidate()
-        log('info', 'sources:title-learned', { titles: titles.length })
+        if (titles) log('info', 'sources:title-learned', { titles: titles.length })
+        if (newApp) log('info', 'sources:app-learned', { apps: apps.length })
       }
     }
     const filled = rec.signals.includes('lesson:2') || rec.signals.includes('lesson:3')

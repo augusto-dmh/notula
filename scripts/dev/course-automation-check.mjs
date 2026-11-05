@@ -494,5 +494,11 @@ test('QA: a lesson note started by itself offers Undo in its menu (§4.5.3)', ()
   check(/course && view\.undoable \? \(/.test(chip) && /window\.notula\.sources\.undoAuto\(\{ noteId \}\)/.test(chip), 'the menu shows Undo automatic start and calls undo-auto')
 })
 
+test('QA: an exact recognition in a course app links that app to the course', () => {
+  const learnFn = body(src('src/main/sources/courses.ts'), 'async function learn(')
+  check(/a\.mapping\?\.state === 'mapped' && !match\.apps\.some\(\(x\) => x\.appUserModelId === a\.appUserModelId\)/.test(learnFn), 'a mapped app not yet linked')
+  check(/match: \{ \.\.\.match, titles: titles \?\? match\.titles, apps \}/.test(learnFn), 'saved with the learned titles')
+})
+
 console.log(`\n${checks} checks, ${failures} failed`)
 process.exit(failures ? 1 : 0)
