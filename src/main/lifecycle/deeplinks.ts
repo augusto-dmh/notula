@@ -47,6 +47,8 @@ export function shippedSettingsSections(packaged: boolean): SettingsSection[] {
     'speaker-tags',
     'voice-typing',
     'voice-typing-history',
+    'voice-typing-styles',
+    'voice-typing-dictionary',
     'integrations',
     'connectors',
     'labs',
