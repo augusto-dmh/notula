@@ -22,6 +22,7 @@ import { enhanceError, EnhanceError } from '../enhance/errors'
 import { log } from '../log'
 import { checkIntercepted, LlmInterceptedError } from './intercept'
 import { noteRetiredModel } from './retired'
+import { openAiUsage } from './usage'
 import {
   LlmImagesUnsupportedError,
   LlmToolsUnsupportedError,
@@ -80,6 +81,8 @@ interface OpenAiReplay {
 const TOOL_TEXT_LEAD = /^(\{|\[\s*\{|<tool_call>|\[TOOL_CALLS\]|```(?:json)?\s*\{)/
 const TOOL_ERROR_HINT = /\b(tools?|tool_choice|function[s_]?|function calling)\b/i
 /** A 400 about the output budget (errorFromResponse puts the status in the message). */
+/** A 400 naming `stream_options`: the server takes no usage request on a stream. */
+const STREAM_OPTIONS_HINT = /\bstream_options\b/i
 const TOKEN_LIMIT_HINT = /\(400\).*\b(max_tokens|max_completion_tokens|max_output_tokens|output limit|token limit)\b/i
 
 function label(id: Options['id']): string {
@@ -137,6 +140,8 @@ const QUICK_MODEL_TTL_MS = 60 * 60_000
 const quickModels = new Map<string, { model: string | null; at: number }>()
 /** `baseUrl|model` pairs that refused `minimal`; they get `low`. */
 const minimalRejected = new Set<string>()
+/** Base URLs that refused `stream_options`; their streams are sent without it from then on. */
+const streamOptionsRejected = new Set<string>()
 
 /**
  * Drops a leading `<think>…</think>` block, which many local reasoning models write
@@ -272,7 +277,7 @@ export function createOpenAiCompatibleProvider(opts: Options): LlmProvider {
     return h
   }
 
-  function body(req: LlmRequest, stream: boolean): string {
+  function body(req: LlmRequest, stream: boolean, withUsage: boolean): string {
     return JSON.stringify({
       model: req.model?.trim() || model,
       messages: [
@@ -280,6 +285,7 @@ export function createOpenAiCompatibleProvider(opts: Options): LlmProvider {
         { role: 'user', content: userContent(req.user, req.images) }
       ],
       stream,
+      ...(withUsage ? { stream_options: { include_usage: true } } : {}),
       ...(typeof req.temperature === 'number' ? { temperature: req.temperature } : {}),
       ...effortField(baseUrl, minimalFor(req) ? 'minimal' : PURPOSE_EFFORT[req.purpose]),
       [tokenField(baseUrl)]: req.maxTokens
@@ -308,26 +314,39 @@ export function createOpenAiCompatibleProvider(opts: Options): LlmProvider {
     return lite ? { ...req, model: lite } : req
   }
 
-  async function post(given: LlmRequest, stream: boolean, signal: AbortSignal): Promise<Response> {
+  /** Once per base URL for the process: its streams go without `stream_options` and report no usage. */
+  function rejectStreamOptions(): void {
+    if (streamOptionsRejected.has(baseUrl)) return
+    streamOptionsRejected.add(baseUrl)
+    log('info', 'llm:usage-unsupported', { provider: opts.id })
+  }
+
+  /** The reply, and the model id actually sent (a quick task may run on a lighter one). */
+  async function post(given: LlmRequest, stream: boolean, signal: AbortSignal): Promise<{ res: Response; sent: string }> {
     if (!baseUrl) throw enhanceError('no-model', 'No base URL is set for this provider.')
     if (!model && !given.model?.trim()) throw enhanceError('no-model', 'No model is selected for this provider.')
     const req = await quickModel(given, signal)
+    const withUsage = stream && !streamOptionsRejected.has(baseUrl)
     let res: Response
     try {
       res = await fetch(`${baseUrl}/chat/completions`, {
         method: 'POST',
         headers: await headers(),
-        body: body(req, stream),
+        body: body(req, stream, withUsage),
         signal: AbortSignal.any([signal, AbortSignal.timeout(CONNECT_TIMEOUT_MS)])
       })
     } catch (err) {
       throw networkError(opts.id, baseUrl, err)
     }
-    if (!res.ok && res.status === 400 && minimalFor(req)) {
+    if (!res.ok && res.status === 400 && (minimalFor(req) || withUsage)) {
       const text = await res.text().catch(() => '')
-      if (/reasoning|thinking/i.test(text)) {
+      if (minimalFor(req) && /reasoning|thinking/i.test(text)) {
         minimalRejected.add(`${baseUrl}|${used(req)}`)
         log('info', 'llm:minimal-effort-unsupported', { provider: opts.id, model: used(req) })
+        return post(given, stream, signal)
+      }
+      if (withUsage && STREAM_OPTIONS_HINT.test(text)) {
+        rejectStreamOptions()
         return post(given, stream, signal)
       }
       res = new Response(text, { status: res.status })
@@ -344,10 +363,10 @@ export function createOpenAiCompatibleProvider(opts: Options): LlmProvider {
     } catch (err) {
       throw networkError(opts.id, baseUrl, err)
     }
-    return res
+    return { res, sent: used(req) }
   }
 
-  function chatBody(req: LlmChatRequest, use: string): string {
+  function chatBody(req: LlmChatRequest, use: string, withUsage: boolean): string {
     const tools = req.tools.map((t) => ({
       type: 'function',
       function: { name: t.name, description: t.description, parameters: t.inputSchema }
@@ -356,6 +375,7 @@ export function createOpenAiCompatibleProvider(opts: Options): LlmProvider {
       model: use,
       messages: [{ role: 'system', content: req.system }, ...toOpenAiMessages(req.messages)],
       stream: true,
+      ...(withUsage ? { stream_options: { include_usage: true } } : {}),
       ...(tools.length > 0 ? { tools, tool_choice: 'auto' } : {}),
       ...effortField(baseUrl, PURPOSE_EFFORT.chat),
       [tokenField(baseUrl)]: req.maxTokens
@@ -368,16 +388,26 @@ export function createOpenAiCompatibleProvider(opts: Options): LlmProvider {
     if (!baseUrl) throw enhanceError('no-model', 'No base URL is set for this provider.')
     if (!use) throw enhanceError('no-model', 'No model is selected for this provider.')
     const withTools = req.tools.length > 0
+    const withUsage = !streamOptionsRejected.has(baseUrl)
     let res: Response
     try {
       res = await fetch(`${baseUrl}/chat/completions`, {
         method: 'POST',
         headers: await headers(),
-        body: chatBody(req, use),
+        body: chatBody(req, use, withUsage),
         signal: AbortSignal.any([signal, AbortSignal.timeout(CONNECT_TIMEOUT_MS)])
       })
     } catch (err) {
       throw networkError(opts.id, baseUrl, err)
+    }
+    if (!res.ok && res.status === 400 && withUsage) {
+      const text = await res.text().catch(() => '')
+      if (STREAM_OPTIONS_HINT.test(text)) {
+        rejectStreamOptions()
+        yield* chat(req, signal, onActivity)
+        return
+      }
+      res = new Response(text, { status: res.status })
     }
     if (!res.ok) {
       if (withTools && (res.status === 400 || res.status === 422)) {
@@ -399,6 +429,7 @@ export function createOpenAiCompatibleProvider(opts: Options): LlmProvider {
     const calls = new Map<number, { id: string; name: string; args: string; started: boolean }>()
     let finish: string | null | undefined
     let answeredBy = use
+    let usage: unknown
     let text = ''
     // With tools offered, text that opens like a tool call is held back until the end:
     // a server that ignored `tools` may be writing the call out.
@@ -406,7 +437,7 @@ export function createOpenAiCompatibleProvider(opts: Options): LlmProvider {
     try {
       for await (const data of sseData(res.body)) {
         if (data === '[DONE]') break
-        let chunk: { model?: string; choices?: ChatChoice[]; error?: { message?: string } }
+        let chunk: { model?: string; choices?: ChatChoice[]; usage?: unknown; error?: { message?: string } }
         try {
           chunk = JSON.parse(data) as typeof chunk
         } catch {
@@ -416,6 +447,8 @@ export function createOpenAiCompatibleProvider(opts: Options): LlmProvider {
           throw enhanceError('provider-error', (chunk.error.message ?? 'The stream reported an error.').slice(0, MAX_ERROR_CHARS))
         }
         if (typeof chunk.model === 'string' && chunk.model) answeredBy = chunk.model
+        // The usage chunk comes last, with an empty `choices` list.
+        if (chunk.usage) usage = chunk.usage
         const choice = chunk.choices?.[0]
         if (!choice) {
           onActivity?.()
@@ -494,19 +527,21 @@ export function createOpenAiCompatibleProvider(opts: Options): LlmProvider {
           : replay.toolCalls.length > 0
             ? 'tool_use'
             : 'end'
+    log('info', 'llm:usage', { purpose: req.purpose, provider: opts.id, model: use, ...openAiUsage(usage) })
     yield { type: 'stop', reason, replay, model: answeredBy }
   }
 
   async function* stream(req: LlmRequest, signal: AbortSignal, onActivity?: () => void): AsyncIterable<LlmStreamEvent> {
     checkImages(req)
-    const res = await post(req, true, signal)
+    const { res, sent } = await post(req, true, signal)
     if (!res.body) throw enhanceError('provider-error', `${label(opts.id)} sent an empty response.`)
     const think = new ThinkFilter()
     let finish: string | null | undefined
+    let usage: unknown
     try {
       for await (const data of sseData(res.body)) {
         if (data === '[DONE]') break
-        let chunk: { choices?: ChatChoice[]; error?: { message?: string } }
+        let chunk: { choices?: ChatChoice[]; usage?: unknown; error?: { message?: string } }
         try {
           chunk = JSON.parse(data) as typeof chunk
         } catch {
@@ -515,6 +550,8 @@ export function createOpenAiCompatibleProvider(opts: Options): LlmProvider {
         if (chunk.error) {
           throw enhanceError('provider-error', (chunk.error.message ?? 'The stream reported an error.').slice(0, MAX_ERROR_CHARS))
         }
+        // The usage chunk comes last, with an empty `choices` list.
+        if (chunk.usage) usage = chunk.usage
         const choice = chunk.choices?.[0]
         if (!choice) {
           onActivity?.()
@@ -531,18 +568,20 @@ export function createOpenAiCompatibleProvider(opts: Options): LlmProvider {
     }
     const rest = think.end()
     if (rest) yield { type: 'text', delta: rest }
+    log('info', 'llm:usage', { purpose: req.purpose, provider: opts.id, model: sent, ...openAiUsage(usage) })
     yield { type: 'stop', reason: stopReason(finish) }
   }
 
   async function complete(req: LlmRequest, signal: AbortSignal): Promise<string> {
     checkImages(req)
-    const res = await post(req, false, signal)
-    let json: { choices?: ChatChoice[] }
+    const { res, sent } = await post(req, false, signal)
+    let json: { choices?: ChatChoice[]; usage?: unknown }
     try {
       json = (await res.json()) as typeof json
     } catch (err) {
       throw networkError(opts.id, baseUrl, err)
     }
+    log('info', 'llm:usage', { purpose: req.purpose, provider: opts.id, model: sent, ...openAiUsage(json.usage) })
     const choice = json.choices?.[0]
     if (choice?.finish_reason === 'content_filter' || choice?.message?.refusal) {
       throw enhanceError('refusal', 'The model declined this request.')

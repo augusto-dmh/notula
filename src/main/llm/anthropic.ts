@@ -38,6 +38,7 @@ import type {
 import { app } from 'electron'
 import { enhanceError, EnhanceError } from '../enhance/errors'
 import { log } from '../log'
+import { anthropicUsage } from './usage'
 import { interceptingFetch, LlmInterceptedError } from './intercept'
 import {
   LlmImagesUnsupportedError,
@@ -225,6 +226,7 @@ export function createAnthropicProvider(opts: { model: string; getKey(): Promise
         }
       }
       const message = await s.finalMessage()
+      log('info', 'llm:usage', { purpose: req.purpose, provider: 'anthropic', model: req.model?.trim() || model, ...anthropicUsage(message.usage) })
       yield { type: 'stop', reason: stopReason(message.stop_reason) }
     } catch (err) {
       throw mapError(err)
@@ -236,6 +238,7 @@ export function createAnthropicProvider(opts: { model: string; getKey(): Promise
     try {
       const c = await client()
       const message = await c.beta.messages.stream(params(req), { signal }).finalMessage()
+      log('info', 'llm:usage', { purpose: req.purpose, provider: 'anthropic', model: req.model?.trim() || model, ...anthropicUsage(message.usage) })
       if (message.stop_reason === 'refusal') throw enhanceError('refusal', 'The model declined this request.')
       return message.content.map((b) => (b.type === 'text' ? b.text : '')).join('')
     } catch (err) {
@@ -286,6 +289,7 @@ export function createAnthropicProvider(opts: { model: string; getKey(): Promise
           }
         }
         const message = await s.finalMessage()
+        log('info', 'llm:usage', { purpose: req.purpose, provider: 'anthropic', model: req.model?.trim() || model, ...anthropicUsage(message.usage) })
         // The caller reads the stop reason before it trusts any tool call.
         if (message.stop_reason === 'refusal') {
           log('info', 'chat:anthropic-refusal', { model: message.model, category: message.stop_details?.category ?? null })
