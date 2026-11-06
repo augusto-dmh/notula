@@ -149,6 +149,9 @@ export function registerEnhance(ctx: MainContext): EnhanceApi {
   // A sleep stop is summarized after the wake.
   ctx.bus.on('power:suspended', () => auto.onSuspended())
   ctx.bus.on('power:resumed', (e) => auto.onResumed(e))
+  // The title reads the summary: ask once a generation ends. With none made, it falls back to
+  // the transcript's start; its own gates make repeats harmless.
+  ctx.bus.on('enhance:completed', (e) => void generateTitle(ctx, e.noteId))
 
   // ---------- startup housekeeping, once storage is ready ----------
 

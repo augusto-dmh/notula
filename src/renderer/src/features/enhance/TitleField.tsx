@@ -77,7 +77,8 @@ export function TitleField({ noteId, readOnly, onEnter }: TitleFieldProps): JSX.
       .generateTitle({ noteId })
       .then((r) => {
         debugLog('title-autofill', { noteId, status: r.status, reason: r.reason })
-        // Too short: inputs changing (more transcript) may make it eligible again.
+        // Too short: inputs changing (more transcript) may make it eligible again. Not on
+        // `no-summary`: main asks again itself once the summary ends.
         if (r.status === 'skipped' && (r.reason === 'transcript-too-short' || r.reason === 'transcribing')) attempted.current = false
       })
       .catch((err: unknown) => debugLog('title-autofill-failed', { noteId, err: parseError(err) }))
