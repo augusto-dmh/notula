@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-// The cards inside the bubble window, one at a time: off the record first (it has a
-// 30 s clock), then the inactivity warning, then a screen-snapshot notice. Main grows the
-// classic window, or holds the docked strip, while one shows; this only draws it.
+// The cards inside the bubble window, one at a time: the privacy card first (off the record:
+// the choice with its 30 s clock, then the paused card), then the inactivity warning, then a
+// screen-snapshot notice. Main grows the classic window, or holds the docked strip, while one
+// shows; this only draws it.
 
-import { useEffect, useState, type JSX } from 'react'
+import { useState, type JSX } from 'react'
 import type { ScreenSnapshotsNotice, ScreenSnapshotsState } from '@shared/types/snapshots'
 import { InactivityCard } from '../capture/MeetingPrompts'
-import { countdownText } from '../capture/live'
+import { OffRecordCard } from '../off-record'
 import { useScreenSnapshots } from '../snapshots'
-import { answerOffRecord, cardPrompt, useOffRecord } from './off-record'
 import { useBubbleState } from './state'
 
 const NOTICE: Record<ScreenSnapshotsNotice, { title: string; body: string | null; action: 'choose' | 'off' | null }> = {
@@ -67,89 +67,27 @@ function SnapshotNotice({ state }: { state: ScreenSnapshotsState }): JSX.Element
   )
 }
 
-/** Re-renders four times a second while `on`: the countdown never pauses, hover or not. */
-function useClock(on: boolean): number {
-  const [now, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    if (!on) return
-    setNow(Date.now())
-    const t = window.setInterval(() => setNow(Date.now()), 250)
-    return () => clearInterval(t)
-  }, [on])
-  return now
-}
-
-function OffRecordCard({
-  noteId,
-  promptId,
-  expiresAt,
-  requestText,
-  heldText
-}: {
-  noteId: string
-  promptId: string
-  expiresAt: string
-  requestText: string | null
-  heldText: string | null
-}): JSX.Element {
-  const now = useClock(true)
-  const [busy, setBusy] = useState(false)
-  const [failed, setFailed] = useState(false)
-  const countdown = countdownText(expiresAt, now)
-  const answer = async (a: 'keep' | 'pause'): Promise<void> => {
-    if (busy) return
-    setBusy(true)
-    setFailed(false)
-    const ok = await answerOffRecord(noteId, promptId, a)
-    setBusy(false)
-    if (!ok) setFailed(true)
-  }
-  // The prompt's own text when it came; plain wording when only the hold is known.
-  const body = requestText?.trim() || 'Someone may have asked to go off the record. Pause transcription for now?'
-  const held = heldText?.trim()
-  return (
-    <div className="nt-prompt nt-prompt--compact bubble-offrecord" role="alertdialog" aria-labelledby="bubble-offrecord-title" aria-describedby="bubble-offrecord-body">
-      <div className="nt-prompt__head">
-        <h2 className="nt-prompt__title" id="bubble-offrecord-title">
-          Leave what comes next out of the notes?
-        </h2>
-        {countdown ? (
-          <span className="nt-prompt__badge" aria-label={`${countdown} left to answer`}>
-            {countdown}
-          </span>
-        ) : null}
-      </div>
-      <p className="nt-prompt__body" id="bubble-offrecord-body">
-        {failed ? 'Couldn’t send your answer. Try again, or answer in the note.' : body}
-      </p>
-      {held && !failed ? <p className="bubble-offrecord__held">{held}</p> : null}
-      <div className="nt-prompt__actions">
-        <button type="button" className="n-btn n-btn--sm" disabled={busy} onClick={() => void answer('keep')}>
-          Transcribe as usual
-        </button>
-        <button type="button" className="n-btn n-btn--sm n-btn--primary" disabled={busy} onClick={() => void answer('pause')}>
-          Pause
-        </button>
-      </div>
-    </div>
-  )
+/**
+ * The bubble can't start capture (the main window runs it), so its Resume opens the note,
+ * where the same card offers Resume.
+ */
+async function resumeInNote(noteId: string): Promise<null> {
+  window.notula.bubble.openNote({ noteId })
+  return null
 }
 
 /** Whichever card applies now, or null. */
 export function BubbleCard(): JSX.Element | null {
-  const { document: doc, offRecord: hold } = useBubbleState()
-  const { prompt } = useOffRecord()
+  const { document: doc, offRecord } = useBubbleState()
   const snaps = useScreenSnapshots(doc?.noteId ?? null)
-  const offRecord = cardPrompt(hold, prompt)
   if (offRecord) {
     return (
       <OffRecordCard
-        key={offRecord.promptId}
-        noteId={offRecord.noteId}
-        promptId={offRecord.promptId}
-        expiresAt={offRecord.expiresAt}
-        requestText={offRecord.requestText}
-        heldText={offRecord.heldText}
+        key={`${offRecord.state}:${offRecord.promptId}`}
+        surface="bubble"
+        card={offRecord}
+        onResume={() => resumeInNote(offRecord.noteId)}
+        resumeLabel="Resume in note"
       />
     )
   }

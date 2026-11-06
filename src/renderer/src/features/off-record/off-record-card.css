@@ -1,0 +1,159 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* The privacy card: the same small dark card on the note (above the note dock) and in the
+   bubble's card slot. Its colours are fixed so both surfaces look alike in either theme. */
+
+.nt-offcard {
+  width: 224px;
+  padding: 12px;
+  box-sizing: border-box;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: rgba(26, 26, 25, 0.97);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+  color: #f4f4f1;
+  font-size: 12.5px;
+  line-height: 1.4;
+  animation: nt-offcard-in 180ms var(--ease);
+}
+
+.nt-offcard--note {
+  box-shadow: var(--shadow-lg);
+}
+
+@keyframes nt-offcard-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+.nt-offcard__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.nt-offcard__icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  background: rgba(230, 169, 72, 0.16);
+  color: #e6a948;
+}
+
+.nt-offcard__title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.nt-offcard__body {
+  margin: 6px 0 10px;
+  color: rgba(244, 244, 241, 0.72);
+}
+
+.nt-offcard__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.nt-offcard__primary {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  background: #f4f4f1;
+  color: #141413;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.nt-offcard__primary:hover:not(:disabled) {
+  background: #ffffff;
+}
+
+.nt-offcard__keep,
+.nt-offcard__dismiss {
+  flex: none;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: rgba(244, 244, 241, 0.78);
+  cursor: pointer;
+}
+
+.nt-offcard__keep {
+  position: relative;
+  width: 34px;
+  height: 34px;
+}
+
+.nt-offcard__keep > svg,
+.nt-offcard__keep-mark {
+  grid-area: 1 / 1;
+}
+
+.nt-offcard__keep-mark {
+  display: grid;
+  place-items: center;
+}
+
+.nt-offcard__ring-track,
+.nt-offcard__ring {
+  fill: none;
+  stroke-width: 2.5;
+}
+
+.nt-offcard__ring-track {
+  stroke: rgba(255, 255, 255, 0.14);
+}
+
+.nt-offcard__ring {
+  stroke: #f4f4f1;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 250ms linear;
+}
+
+.nt-offcard__dismiss {
+  width: 22px;
+  height: 22px;
+}
+
+.nt-offcard__keep:hover:not(:disabled),
+.nt-offcard__dismiss:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  color: #f4f4f1;
+}
+
+.nt-offcard button:focus-visible {
+  outline: 2px solid #e6a948;
+  outline-offset: 2px;
+}
+
+.nt-offcard button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nt-offcard {
+    animation: none;
+  }
+  .nt-offcard__ring {
+    transition: none;
+  }
+}

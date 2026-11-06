@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // The pill's face, for the classic pill and the docked tab: the app glyph, live audio bars
-// from the normalized meter (or a spinner while starting or in error, a pause mark while off
-// the record), the snapshot button when asked, and a "!" badge for a warning.
+// from the normalized meter (or a spinner while starting or in error, the transcript-off glyph
+// while paused for privacy), the snapshot button when asked, and a "!" badge for a warning.
 
 import { useEffect, useState, type JSX } from 'react'
 import { useMeterLevels } from '../capture/store'
 import { BubbleSnapshotButton } from './BubbleSnapshot'
-import { useOffRecord } from './off-record'
+import { useOffRecord } from '../off-record'
 import { useBubbleState } from './state'
 
 /** A release within this many px of the press is a click. */
@@ -27,14 +27,27 @@ function useWobble(active: boolean): number {
   return t
 }
 
-/** The glyph, the meter (or spinner, or pause mark) and the warning badge. */
+/** Notula's transcript mark struck through: the transcript is paused for privacy. */
+function TranscriptOffGlyph(): JSX.Element {
+  return (
+    <svg className="bubble-privacy" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
+      <path d="M4 7h16M4 12h10M4 17h13" />
+      <path d="M4.5 3.5 19.5 20.5" />
+    </svg>
+  )
+}
+
+/** The glyph, the meter (or spinner, or transcript-off glyph) and the warning badge. */
 export function PillFace({ snapshotButton }: { snapshotButton: boolean }): JSX.Element {
-  const { document: doc } = useBubbleState()
+  const { document: doc, offRecord: card } = useBubbleState()
   const { paused } = useOffRecord()
   const levels = useMeterLevels()
   const transcription = doc?.transcription ?? 'starting'
   const busy = transcription === 'starting' || transcription === 'error'
-  const offRecord = !!doc && paused?.noteId === doc.noteId
+  // The push, or the hub's paused card for a window that opened after it. Once capture stops
+  // there is no document, so the paused note is the one the bubble follows; a start clears both.
+  const pausedNoteId = paused?.noteId ?? (card?.state === 'paused' ? card.noteId : null)
+  const offRecord = pausedNoteId !== null && (!doc || doc.noteId === pausedNoteId)
   const level = Math.max(levels.microphone, levels.system)
   const tick = useWobble(!busy && !offRecord && level > 0.02)
   return (
@@ -46,10 +59,7 @@ export function PillFace({ snapshotButton }: { snapshotButton: boolean }): JSX.E
       </span>
       <span className="bubble-center" aria-hidden="true">
         {offRecord ? (
-          <span className="bubble-paused" title="Notes on hold for privacy">
-            <span />
-            <span />
-          </span>
+          <TranscriptOffGlyph />
         ) : busy ? (
           <span className={`bubble-spinner${transcription === 'error' ? ' is-error' : ''}`} />
         ) : (
@@ -69,7 +79,7 @@ export function PillFace({ snapshotButton }: { snapshotButton: boolean }): JSX.E
           !
         </span>
       ) : null}
-      {offRecord ? <span className="bubble-sr">Notes on hold for privacy</span> : null}
+      {offRecord ? <span className="bubble-sr">Transcript paused for privacy</span> : null}
     </>
   )
 }

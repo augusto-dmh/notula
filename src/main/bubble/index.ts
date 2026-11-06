@@ -4,8 +4,9 @@
 //
 // - Shows (inactive, never focused) while transcribing and the main window is not in
 //   front, unless "Live meeting indicator" is off (`bubble.blocked`); hides when the
-//   main window gains focus or the meeting ends. The off-the-record card shows it even
-//   over a focused main window, unless that window shows the very note.
+//   main window gains focus or the meeting ends. The privacy card (off the record: the
+//   open choice, then the paused card until dismissed) shows it even over a focused main
+//   window, unless that window shows the very note.
 // - Cards (the inactivity warning, the screen-snapshot notices, off the record) render
 //   inside the bubble window. The classic pill window grows to hold the card beside the
 //   pill, the pill keeping its place on screen; it ignores the mouse outside the two.
@@ -152,10 +153,10 @@ export function registerBubble(ctx: MainContext): void {
   const mainFocused = (): boolean =>
     alive(mainWin) && mainWin.isVisible() && !mainWin.isMinimized() && mainWin.isFocused()
 
-  /** Any card: the inactivity warning, a snapshot notice, or the off-the-record prompt. */
+  /** Any card: the inactivity warning, a snapshot notice, or the privacy card (asking or paused). */
   const cardWanted = (): boolean => doc?.inactivity != null || bubbleHub.snapshotNotice || bubbleHub.offRecord !== null
 
-  /** The off-the-record card shows the bubble over everything but its own note. */
+  /** The privacy card, asking or paused, shows the bubble over everything but its own note. */
   const offRecordForced = (): boolean => {
     const o = bubbleHub.offRecord
     return o !== null && ctx.ui.viewingNoteId() !== o.noteId

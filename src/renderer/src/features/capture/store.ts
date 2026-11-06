@@ -23,7 +23,7 @@ import { currentRoute, navigate } from '../../app/navigation'
 import { dismissToast, showToast } from '../../app/toast'
 import { CaptureEngine } from './engine'
 import { clearResumePrompt } from './live'
-import { watchOffRecord } from './OffRecordCard'
+import { watchOffRecord } from '../off-record'
 import { startBubbleDocument } from './bubble-document'
 import { sounds } from './sounds'
 

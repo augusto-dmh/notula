@@ -13,7 +13,8 @@
 //   Keep, or no answer: the hold lifts and a 5-minute cooldown starts. Erase and pause: the held
 //   chunks go, stored chunks after the phrase go, the phrase's chunk ends at the phrase, the store
 //   flushes and capture stops with `off_record`; the session's late results are dropped.
-// - Logs never carry transcript text.
+// - The paused card (`off-record:paused`) stays until any start or a `dismiss` answer.
+// - Neither the pushes nor the logs carry transcript text.
 
 import { randomUUID } from 'node:crypto'
 import { ipcMain } from 'electron'
@@ -78,8 +79,6 @@ interface Candidate {
   chunkId: string
   /** Epoch ms where the phrase ends. */
   phraseEndMs: number
-  /** The line up to and including the phrase. */
-  requestText: string
   /** What the phrase's chunk keeps on an erase: its text up to the phrase's end. */
   keptText: string
 }
@@ -103,7 +102,7 @@ interface Run {
   /** A partial with a phrase started a hold; that source's next final confirms or lifts it. */
   earlyHold: AudioSource | null
   candidate: Candidate | null
-  heldText: string
+  /** Words said since the request, for the log; the text itself stays in the store's hold. */
   heldWords: number
   offer: Offer | null
   /** Bumped whenever the run moves on, so a late check answer is ignored. */
@@ -137,7 +136,7 @@ export function registerOffRecord(
   ipcMain.handle('off-record:answer' satisfies InvokeChannel, (_e, req: InvokeReq<'off-record:answer'>): InvokeRes<'off-record:answer'> => {
     const noteId = typeof req?.noteId === 'string' ? req.noteId : ''
     const promptId = typeof req?.promptId === 'string' ? req.promptId : ''
-    const answer = req?.answer === 'keep' || req?.answer === 'pause' ? req.answer : null
+    const answer = req?.answer === 'keep' || req?.answer === 'pause' || req?.answer === 'dismiss' ? req.answer : null
     const surface = req?.surface === 'note' || req?.surface === 'bubble' ? req.surface : null
     if (!noteId || !promptId || !answer || !surface) {
       log('warn', 'off-record:answer-invalid')
@@ -174,7 +173,6 @@ class Detector implements OffRecordDetector {
       lines: [],
       earlyHold: null,
       candidate: null,
-      heldText: '',
       heldWords: 0,
       offer: null,
       token: 0,
@@ -263,14 +261,11 @@ class Detector implements OffRecordDetector {
       return
     }
     const phraseEndMs = phraseEnd(chunk, r, match.end)
-    const before = match.start < 0 ? prev.slice(match.start) + ' ' : ''
     run.candidate = {
       chunkId: chunk.id,
       phraseEndMs,
-      requestText: (before + chunk.text.slice(0, match.end)).trim(),
       keptText: chunk.text.slice(0, match.end)
     }
-    run.heldText = ''
     run.heldWords = 0
     // The candidate owns the hold now, whichever source held early.
     run.earlyHold = null
@@ -293,11 +288,7 @@ class Detector implements OffRecordDetector {
 
   private addHeld(run: Run, text: string): void {
     const t = text.trim()
-    if (!t) return
-    run.heldWords += t.split(/\s+/).length
-    const joined = run.heldText ? `${run.heldText} ${t}` : t
-    run.heldText = joined.length > OFF_RECORD_LIMITS.heldTextMax ? joined.slice(-OFF_RECORD_LIMITS.heldTextMax) : joined
-    if (run.offer) this.pushPrompt(run)
+    if (t) run.heldWords += t.split(/\s+/).length
   }
 
   // ---------- the check ----------
@@ -341,7 +332,6 @@ class Detector implements OffRecordDetector {
   private backToListening(run: Run): void {
     run.phase = 'listening'
     run.candidate = null
-    run.heldText = ''
     run.heldWords = 0
     this.store.lift(run.noteId)
   }
@@ -364,23 +354,38 @@ class Detector implements OffRecordDetector {
     const o = run.offer
     const c = run.candidate
     const p: OffRecordPrompt | null =
-      o && c
-        ? {
-            noteId: run.noteId,
-            promptId: o.promptId,
-            expiresAt: new Date(o.expiresAt).toISOString(),
-            requestText: c.requestText,
-            heldText: run.heldText
-          }
-        : null
+      o && c ? { noteId: run.noteId, promptId: o.promptId, expiresAt: new Date(o.expiresAt).toISOString() } : null
     for (const wc of this.ctx.windows.targets()) wc.send('off-record:prompt' satisfies PushChannel, p)
     this.ctx.bus.emit('off-record:prompt', p)
-    // The bubble shows its card from the hub, even over a focused main window.
-    bubbleHub.offRecord = p ? { noteId: p.noteId, promptId: p.promptId, expiresAt: p.expiresAt } : null
+    // The bubble shows its card from the hub, even over a focused main window. A cleared prompt
+    // leaves a paused card alone.
+    if (p) bubbleHub.offRecord = { state: 'asking', ...p }
+    else if (bubbleHub.offRecord?.state === 'asking') bubbleHub.offRecord = null
+    else return
+    bubbleHub.emit('side-card')
+  }
+
+  /** Every window, and the bubble's card through the hub. */
+  private pushPaused(paused: OffRecordPaused | null): void {
+    this.paused = paused
+    for (const wc of this.ctx.windows.targets()) wc.send('off-record:paused' satisfies PushChannel, paused)
+    if (paused) bubbleHub.offRecord = { state: 'paused', ...paused }
+    else if (bubbleHub.offRecord?.state === 'paused') bubbleHub.offRecord = null
+    else return
     bubbleHub.emit('side-card')
   }
 
   answer(noteId: string, promptId: string, answer: OffRecordAnswer, surface: OffRecordSurface): boolean {
+    if (answer === 'dismiss') {
+      // Only the pause it was shown for; a dismiss while asking, or for another note, is stale.
+      if (this.paused?.noteId !== noteId || this.paused.promptId !== promptId) {
+        log('info', 'off-record:answer-ignored', { answer })
+        return false
+      }
+      log('info', 'off-record:resolved', { outcome: 'dismiss', surface })
+      this.pushPaused(null)
+      return true
+    }
     const run = this.run
     if (!run || run.noteId !== noteId || run.offer?.promptId !== promptId) return false
     this.resolve(run, answer, surface)
@@ -398,7 +403,7 @@ class Detector implements OffRecordDetector {
     if (outcome === 'pause') {
       run.phase = 'pausing'
       run.token++
-      void this.pause(run, c).catch((err: unknown) => log('error', 'off-record:pause-failed', { noteId: run.noteId, err }))
+      void this.pause(run, c, o.promptId).catch((err: unknown) => log('error', 'off-record:pause-failed', { noteId: run.noteId, err }))
       return
     }
     if (outcome !== 'session_ended') this.cooldown.set(run.noteId, Date.now() + OFF_RECORD_LIMITS.cooldownMs)
@@ -406,7 +411,7 @@ class Detector implements OffRecordDetector {
   }
 
   /** Erase and pause, in order. */
-  private async pause(run: Run, c: Candidate): Promise<void> {
+  private async pause(run: Run, c: Candidate, promptId: string): Promise<void> {
     const noteId = run.noteId
     // Whatever these sessions still return is never stored.
     for (const id of run.sessions) this.store.discardSession(id)
@@ -424,15 +429,12 @@ class Detector implements OffRecordDetector {
     log('info', 'off-record:discarded', { noteId, chunkCount: dropped + after.length })
     // 5. stop capture; 6. its late results are already discarded above. The notice shows once
     // the note stops transcribing, not after the whole drain.
-    this.paused = { noteId }
-    for (const wc of this.ctx.windows.targets()) wc.send('off-record:paused' satisfies PushChannel, this.paused)
+    this.pushPaused({ noteId, promptId })
     await this.stop('off_record')
   }
 
   clearPaused(): void {
-    if (!this.paused) return
-    this.paused = null
-    for (const wc of this.ctx.windows.targets()) wc.send('off-record:paused' satisfies PushChannel, null)
+    if (this.paused) this.pushPaused(null)
   }
 }
 

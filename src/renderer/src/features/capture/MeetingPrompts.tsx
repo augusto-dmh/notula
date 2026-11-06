@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-// Above the note dock: the off-the-record choice, the inactivity card and "Resume transcript?"
-// after a sleep stop. At the top of the note: the inactivity stop and the pause for privacy,
-// each with Resume and Dismiss. Main owns these states; this only draws them. The reload
-// notice stays a toast.
+// Above the note dock: the privacy card (the off-the-record choice, then the pause for privacy),
+// the inactivity card and "Resume transcript?" after a sleep stop. At the top of the note: the
+// inactivity stop, with Resume and Dismiss. Main owns these states; this only draws them. The
+// reload notice stays a toast.
 
 import { useEffect, useState, type JSX } from 'react'
 import { answerResumePrompt, countdownText, useLiveSignals } from './live'
-import { dismissOffRecordPaused, OffRecordCard, useOffRecord } from './OffRecordCard'
+import { OffRecordCard, useOffRecord } from '../off-record'
 import { dismissInactivityStop, inactivityStopText, startTranscription, useCaptureSnapshot, useInactivityStop, type StartResult } from './store'
+import './off-record.css'
 import './prompts.css'
 
 /** Re-renders once a second while `on`, for the countdown. */
@@ -110,7 +111,20 @@ export function MeetingPrompts({ noteId }: { noteId: string }): JSX.Element | nu
   if (offRecord.prompt?.noteId === noteId && capture.transcribingNoteId === noteId) {
     return (
       <div className="nt-prompt-dock">
-        <OffRecordCard prompt={offRecord.prompt} />
+        <OffRecordCard key={offRecord.prompt.promptId} surface="note" card={{ state: 'asking', ...offRecord.prompt }} onResume={async () => null} />
+      </div>
+    )
+  }
+  // Until Dismiss (in either surface) or any start; the note's own start control still works.
+  if (offRecord.paused?.noteId === noteId && capture.transcribingNoteId !== noteId) {
+    return (
+      <div className="nt-prompt-dock">
+        <OffRecordCard
+          key={offRecord.paused.promptId}
+          surface="note"
+          card={{ state: 'paused', ...offRecord.paused }}
+          onResume={async () => resumeError(await startTranscription(noteId))}
+        />
       </div>
     )
   }
@@ -170,19 +184,8 @@ function NoteBanner({ title, body, onDismiss, noteId }: { title: string; body: s
 
 export function MeetingBanners({ noteId }: { noteId: string }): JSX.Element | null {
   const capture = useCaptureSnapshot()
-  const { paused } = useOffRecord()
   const stop = useInactivityStop()
   if (capture.transcribingNoteId === noteId) return null
-  if (paused?.noteId === noteId) {
-    return (
-      <NoteBanner
-        noteId={noteId}
-        title="Transcription paused for privacy"
-        body="Notula erased what was said after the request to go off the record."
-        onDismiss={() => dismissOffRecordPaused(noteId)}
-      />
-    )
-  }
   if (stop?.noteId === noteId) {
     return (
       <NoteBanner

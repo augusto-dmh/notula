@@ -366,24 +366,14 @@
 .bubble-card > * {
   width: 100%;
 }
-.bubble-offrecord .nt-prompt__body {
-  margin-bottom: 0;
+/* The privacy card keeps its own 224 px inside the shared card slot. */
+.bubble-card > .nt-offcard {
+  width: 224px;
+  margin: 0 auto;
 }
-.bubble-offrecord__held {
-  margin: 4px 0 0;
-  color: var(--fg-2);
-  font-size: var(--text-xs);
-  line-height: 1.4;
-}
-.bubble-paused {
-  display: flex;
-  gap: 3px;
-  height: 12px;
-}
-.bubble-paused > span {
-  width: 3px;
-  border-radius: 1px;
-  background: #e6a948;
+/* The transcript-off glyph, in the muted status colour. */
+.bubble-privacy {
+  color: rgba(244, 244, 241, 0.55);
 }
 
 /* ---------- the docked strip ---------- */

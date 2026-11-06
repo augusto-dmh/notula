@@ -2,8 +2,9 @@
 // The bubble: the floating live-meeting pill and its panels, its cards, and its docked mode.
 
 import type { InactivityWarning } from './capture'
-import type { IsoTime, Rect, SourceState } from './common'
+import type { Rect, SourceState } from './common'
 import type { CalendarEvent } from './notes'
+import type { OffRecordCardState } from './off-record'
 
 /**
  * What the bubble shows, computed by the main window's capture store (`bubble:set-document`).
@@ -28,7 +29,7 @@ export interface BubbleState {
   layout: BubbleLayout | null
   /** The docked layout; null for the classic pill. */
   docked: BubbleDocked | null
-  /** The off-the-record hold main knows about, for the card's fallback. */
+  /** The privacy card main wants shown (off the record), whether or not its push arrived. */
   offRecord: BubbleOffRecord | null
 }
 
@@ -42,11 +43,8 @@ export interface BubbleLayout {
 }
 
 /** The off-the-record slice sets this on the bubble hub; the bubble only shows its card. */
-export interface BubbleOffRecord {
-  noteId: string
-  promptId: string
-  expiresAt: IsoTime
-}
+/** The privacy card main wants in the bubble: the open choice, or the paused card until dismissed. */
+export type BubbleOffRecord = OffRecordCardState
 
 export type BubbleDockSide = 'left' | 'right'
 

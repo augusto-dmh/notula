@@ -25,9 +25,10 @@ class BubbleHub extends EventEmitter<HubEvents> {
   /** Screen snapshots have a notice for the bubble's card. */
   snapshotNotice = false
   /**
-   * Set by the off-the-record module while its prompt waits for an answer; it emits
-   * `side-card` after each change. The card shows the bubble even over a focused main
-   * window, unless that window shows this very note.
+   * Set by the off-the-record module while its prompt waits for an answer, and after a pause
+   * for privacy until the paused card is dismissed or a capture starts; it emits `side-card`
+   * after each change. Either card shows the bubble even over a focused main window, unless
+   * that window shows this very note.
    */
   offRecord: BubbleOffRecord | null = null
 }
