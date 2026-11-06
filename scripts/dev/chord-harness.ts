@@ -4,7 +4,7 @@
 // read; no hook, no injected keys or mouse events.
 // Run: node scripts/dev/chord-harness.ts   (Node's type stripping; exits 1 on a failure)
 
-import { derivedHandsFree, parseChord, shortcutLabel } from '../../src/shared/types/dictation-bar.ts'
+import { derivedHandsFree, hasMouseButton, parseChord, shortcutLabel } from '../../src/shared/types/dictation-bar.ts'
 import { IDLE, rearm, sessionEnded, sessionStartedElsewhere, setSuspended, step, type ChordConfig, type ChordEffect, type ChordState } from '../../src/main/dictation/chord-machine.ts'
 
 const WIN: ChordConfig = { hold: [['ctrl', 'win']], handsFree: [['ctrl', 'space', 'win']], tapMs: 150 }
@@ -262,6 +262,29 @@ const CASES: Case[] = [
     events: [d('mouse4', 0), d('shift', 300), u('shift', 350), u('mouse4', 900), d('mouse4', 2000), u('mouse4', 2700)],
     effects: ['start-hold', 'cancel', 'start-hold', 'finish'],
     mode: 'idle'
+  },
+  // A release that never arrived (a removed hook, the lock screen): the helper reports it up
+  // when it finds the button up, or just before the button's next press.
+  {
+    name: 'stale mouse4 hold: the helper reports the missed release → finish',
+    cfg: MOUSE,
+    events: [d('mouse4', 0), u('mouse4', 4000)],
+    effects: ['start-hold', 'finish'],
+    mode: 'idle'
+  },
+  {
+    name: 'mouse4 pressed while still marked down: missed up first, then a new hold',
+    cfg: MOUSE,
+    events: [d('mouse4', 0), u('mouse4', 9000), d('mouse4', 9000), u('mouse4', 9800)],
+    effects: ['start-hold', 'finish', 'start-hold', 'finish'],
+    mode: 'idle'
+  },
+  {
+    name: 'ctrl + mouse5, the Ctrl release lost: re-armed; the late button up ends it, alone it fires nothing',
+    cfg: { hold: [['ctrl', 'mouse5']], handsFree: [], tapMs: 150 },
+    events: [d('ctrl', 0), d('mouse5', 10), ['@rearm'], u('mouse5', 4000), d('mouse5', 5000), u('mouse5', 5600)],
+    effects: ['start-hold', 'finish'],
+    mode: 'idle'
   }
 ]
 
@@ -274,6 +297,7 @@ const PARSE: [text: string, platform: string, want: string | null][] = [
   ['Mouse1', 'win32', null],
   ['Mouse2', 'win32', null],
   ['Mouse33', 'win32', null],
+  ['Mouse100', 'win32', null],
   ['Mouse4+Mouse5', 'win32', null],
   ['Ctrl+Mouse4+A', 'win32', null],
   ['Mouse4+Space', 'win32', null],
@@ -282,6 +306,15 @@ const PARSE: [text: string, platform: string, want: string | null][] = [
   ['Win+Mouse4', 'darwin', null],
   ['A', 'win32', null],
   ['Ctrl+Win', 'win32', 'ctrl+win']
+]
+/** Refused texts that name a mouse button get the mouse refusal, not the chord one. */
+const HAS_MOUSE: [text: string, want: boolean][] = [
+  ['Mouse100', true],
+  ['Ctrl+Mouse1234567', true],
+  ['Mouse0', true],
+  ['Mouse1', true],
+  ['Ctrl+Space', false],
+  ['Mouse', false]
 ]
 const LABELS: [text: string, want: string][] = [
   ['Mouse3', 'Middle button'],
@@ -321,6 +354,12 @@ for (const [text, platform, want] of PARSE) {
   if (!ok) failed++
   console.log(`${ok ? 'PASS' : 'FAIL'}  parse ${text} (${platform}) → ${want ?? 'refused'}${ok ? '' : `, got ${got}`}`)
 }
+for (const [text, want] of HAS_MOUSE) {
+  const got = hasMouseButton(text)
+  const ok = got === want
+  if (!ok) failed++
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${text} ${want ? 'gets' : 'does not get'} the mouse refusal`)
+}
 for (const [text, want] of LABELS) {
   const got = shortcutLabel(text, 'win32')
   const ok = got === want
@@ -335,6 +374,6 @@ for (const [text, want] of LABELS) {
   if (!ok) failed++
   console.log(`${ok ? 'PASS' : 'FAIL'}  derived hands-free of Mouse4: its double tap, no Space${ok ? '' : `, got ${win} / ${mac}`}`)
 }
-const total = CASES.length + PARSE.length + LABELS.length + 1
+const total = CASES.length + PARSE.length + HAS_MOUSE.length + LABELS.length + 1
 console.log(`\n${total - failed}/${total} passed`)
 process.exit(failed ? 1 : 0)

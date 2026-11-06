@@ -11,8 +11,9 @@
 # is removed as soon as the list empties: with key chords only there is no mouse hook at all.
 # Its callback returns at once for anything but a bound button (moves, wheel, the primary
 # buttons): no allocation, no queueing. A bound button's press that completes one of its chords
-# (the chord's modifiers held and no other modifier) is swallowed, and so is its release, so
-# Back does not also go back; any other press passes untouched. Injected input always passes,
+# (the chord's modifiers held, and no other key or button) is swallowed, and so is its release,
+# so Back does not also go back; any other press passes untouched. A release is swallowed only
+# when its press was, even when the button is unbound in between. Injected input always passes,
 # and nothing is swallowed while suspended (a shortcut is being recorded in Settings).
 #
 # Protocol: JSON lines on stdin
@@ -38,8 +39,10 @@
 # preceded by a dummy VK 0xE8 down/up (unassigned), so the shell sees a chord, not a lone Win.
 # Windows silently removes a hook whose callback overruns LowLevelHooksTimeout; the hook thread
 # re-installs itself every 60 s (new hook first, then the old one removed) and reports "lost"
-# only when installing fails. The mouse hook follows the same cycle; failing it reports only
-# the mouse part, and the next cycle tries again.
+# only when installing fails. The mouse hook follows the same cycle; failing it removes the old
+# one too and reports only the mouse part, and the next cycle tries again.
+# Releases can go unseen (a removed hook, the lock screen): when nothing has arrived for 2 s, and
+# on each cycle, a key or button still marked down that the OS says is up is reported up.
 
 param([int]$OwnerPid = 0)
 
@@ -59,7 +62,7 @@ public static class NotulaKeyHook {
   const int WH_KEYBOARD_LL = 13, WH_MOUSE_LL = 14;
   const int WM_KEYDOWN = 0x100, WM_KEYUP = 0x101, WM_SYSKEYDOWN = 0x104, WM_SYSKEYUP = 0x105;
   const int WM_MBUTTONDOWN = 0x207, WM_MBUTTONUP = 0x208, WM_XBUTTONDOWN = 0x20B, WM_XBUTTONUP = 0x20C;
-  const uint WM_QUIT = 0x12, WM_APP_REINSTALL = 0x8001, WM_APP_MOUSE = 0x8002;
+  const uint WM_QUIT = 0x12, WM_APP_REINSTALL = 0x8001, WM_APP_MOUSE = 0x8002, WM_APP_CHECK = 0x8003;
   const int LLKHF_INJECTED = 0x10;
   const uint LLMHF_INJECTED = 0x1, LLMHF_LOWER_IL_INJECTED = 0x2;
   const byte VK_MASK = 0xE8;
@@ -80,6 +83,7 @@ public static class NotulaKeyHook {
   [DllImport("user32.dll")] static extern int GetMessage(out MSG m, IntPtr hwnd, uint min, uint max);
   [DllImport("user32.dll")] static extern bool PostThreadMessage(uint thread, uint msg, IntPtr w, IntPtr l);
   [DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+  [DllImport("user32.dll")] static extern short GetAsyncKeyState(int vk);
   [DllImport("kernel32.dll")] static extern IntPtr GetModuleHandle(string name);
   [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
 
@@ -106,8 +110,11 @@ public static class NotulaKeyHook {
   // Hook-thread state: buttons down, and presses swallowed (their release is swallowed too).
   static readonly bool[] mouseDown = new bool[33];
   static readonly bool[] mouseSwallowed = new bool[33];
-  static int mouseHeld;
   static bool mouseFailed;
+  // The last transition seen, for the check that finds releases that never arrived.
+  static int lastEventTick = Environment.TickCount;
+  // The OS's key state may leave out a press a hook swallowed; it counts once it has shown one.
+  static bool asyncSeesSwallowed;
 
   /** The writer thread: stdout lines in order, flushed one by one. */
   public static void StartWriter() {
@@ -209,12 +216,66 @@ public static class NotulaKeyHook {
     return true;
   }
 
+  static bool IsModifierVk(int vk) { return (vk >= 0x10 && vk <= 0x12) || (vk >= 0xA0 && vk <= 0xA5) || vk == 0x5B || vk == 0x5C; }
+
+  /** A bound button is down (keys are then reported as if a modifier were held). */
+  static bool BoundMouseDown() {
+    var bound = boundMouse;
+    if (bound == null) return false;
+    for (int b = 3; b <= 5; b++) { if (mouseDown[b] && bound[b]) return true; }
+    return false;
+  }
+
+  /** Nothing is down but modifiers: no other key, no other button. */
+  static bool OnlyModifiers(int button) {
+    for (int vk = 0; vk < 256; vk++) { if (down[vk] && !IsModifierVk(vk)) return false; }
+    for (int b = 3; b <= 5; b++) { if (b != button && mouseDown[b]) return false; }
+    return true;
+  }
+
+  /** A swallowed press still waits for its release. */
+  static bool MousePending() {
+    for (int b = 3; b <= 5; b++) { if (mouseDown[b] && mouseSwallowed[b]) return true; }
+    return false;
+  }
+
+  /** Hook thread: a button's release won't be seen. Forget it, and report it up while bound. */
+  static void ReleaseMouse(int b) {
+    if (!mouseDown[b]) return;
+    mouseDown[b] = false;
+    mouseSwallowed[b] = false;
+    var bound = boundMouse;
+    if (bound != null && bound[b]) Emit("mouse" + b, false);
+  }
+
+  static int MouseVk(int b) { return b == 3 ? 0x04 : b == 4 ? 0x05 : 0x06; }
+
+  /** Hook thread: keys and buttons marked down that the OS says are up were released unseen. */
+  static void CheckReleases() {
+    for (int vk = 1; vk < 256; vk++) {
+      if (!down[vk] || (GetAsyncKeyState(vk) & 0x8000) != 0) continue;
+      down[vk] = false;
+      if (reported[vk]) Emit(UpName(Name((uint)vk)), false);
+      reported[vk] = false;
+      if (vk == 0x5B || vk == 0x5C) maskArmed = false;
+    }
+    for (int b = 3; b <= 5; b++) {
+      if (!mouseDown[b]) continue;
+      if ((GetAsyncKeyState(MouseVk(b)) & 0x8000) != 0) {
+        if (mouseSwallowed[b]) asyncSeesSwallowed = true;
+        continue;
+      }
+      // "Up" may only mean the press was swallowed; until that is ruled out, its next press settles it.
+      if (mouseSwallowed[b] && !asyncSeesSwallowed) continue;
+      ReleaseMouse(b);
+    }
+  }
+
   static IntPtr MouseCallback(int nCode, IntPtr wParam, IntPtr lParam) {
     int msg = wParam.ToInt32();
     // Moves, the wheel and the primary buttons go straight on, with nothing else done.
     if (nCode < 0 || msg < WM_MBUTTONDOWN || msg > WM_XBUTTONUP) return CallNextHookEx(IntPtr.Zero, nCode, wParam, lParam);
     var bound = boundMouse;
-    if (bound == null) return CallNextHookEx(IntPtr.Zero, nCode, wParam, lParam);
     bool swallow = false;
     try {
       int button = 0;
@@ -228,25 +289,36 @@ public static class NotulaKeyHook {
         button = x == 1 ? 4 : x == 2 ? 5 : 0;
       }
       if ((flags & (LLMHF_INJECTED | LLMHF_LOWER_IL_INJECTED)) != 0) button = 0;
-      if (button != 0 && bound[button] && mouseDown[button] != isDown) {
-        mouseDown[button] = isDown;
-        mouseHeld += isDown ? 1 : -1;
-        if (mouseHeld < 0) mouseHeld = 0;
-        if (isDown) {
-          bool completes = false;
-          var sets = mouseChords[button];
-          if (sets != null) { foreach (var mods in sets) { if (ModsExactly(mods)) { completes = true; break; } } }
-          mouseSwallowed[button] = completes && !suspended;
-          swallow = mouseSwallowed[button];
-        } else {
-          swallow = mouseSwallowed[button];
-          mouseSwallowed[button] = false;
-        }
-        Emit("mouse" + button, isDown);
+      bool isBound = button != 0 && bound != null && bound[button];
+      // A press while marked down: its release was never seen.
+      if (button != 0 && isDown && mouseDown[button]) ReleaseMouse(button);
+      if (isBound && isDown) {
+        lastEventTick = Environment.TickCount;
+        mouseDown[button] = true;
+        bool completes = false;
+        var sets = mouseChords[button];
+        if (sets != null && !suspended && OnlyModifiers(button)) { foreach (var mods in sets) { if (ModsExactly(mods)) { completes = true; break; } } }
+        mouseSwallowed[button] = completes;
+        swallow = completes;
+        Emit("mouse" + button, true);
+      } else if (button != 0 && !isDown && mouseDown[button]) {
+        // Also the release of a press made before its button was unbound.
+        lastEventTick = Environment.TickCount;
+        swallow = mouseSwallowed[button];
+        mouseDown[button] = false;
+        mouseSwallowed[button] = false;
+        if (isBound) Emit("mouse" + button, false);
       }
+      // The hook stayed for a swallowed release only: it can go now.
+      if (button != 0 && bound == null && !MousePending()) PostThreadMessage(hookThread, WM_APP_MOUSE, IntPtr.Zero, IntPtr.Zero);
     } catch { }
     if (swallow) return (IntPtr)1;
     return CallNextHookEx(IntPtr.Zero, nCode, wParam, lParam);
+  }
+
+  /** The name a reported key's release goes under. */
+  static string UpName(string name) {
+    return IsModifier(name) || name == "esc" || (name != null && chordKeys.Contains(name)) ? name : "other";
   }
 
   static void Emit(string k, bool d) {
@@ -266,8 +338,9 @@ public static class NotulaKeyHook {
         }
         if ((info.flags & LLKHF_INJECTED) == 0 && (isDown || isUp) && down[vk] != isDown) {
           string name = Name(vk);
-          bool modBefore = ModifierDown() || mouseHeld > 0;
+          bool modBefore = ModifierDown() || BoundMouseDown();
           down[vk] = isDown;
+          lastEventTick = Environment.TickCount;
           if (isDown) {
             bool report = false;
             string k = name;
@@ -284,7 +357,7 @@ public static class NotulaKeyHook {
               if (all) { maskArmed = true; break; }
             }
           } else {
-            if (reported[vk]) Emit(IsModifier(name) || name == "esc" || (name != null && chordKeys.Contains(name)) ? name : "other", false);
+            if (reported[vk]) Emit(UpName(name), false);
             reported[vk] = false;
             if ((vk == 0x5B || vk == 0x5C) && maskArmed) {
               maskArmed = false;
@@ -308,11 +381,20 @@ public static class NotulaKeyHook {
 
   /** Hook thread: the mouse hook follows the config (on while buttons are bound, off when not). */
   static void SyncMouse(bool reinstall) {
-    bool wanted = boundMouse != null;
-    if (wanted && (mouseHook == IntPtr.Zero || reinstall)) {
+    var bound = boundMouse;
+    // A button unbound while down: a press that passed is forgotten (its release passes too); a
+    // swallowed one stays marked, and the hook with it, until its release is swallowed as well.
+    for (int b = 3; b <= 5; b++) {
+      if (mouseDown[b] && !mouseSwallowed[b] && (bound == null || !bound[b])) mouseDown[b] = false;
+    }
+    if (bound != null && (mouseHook == IntPtr.Zero || reinstall)) {
       IntPtr fresh = InstallMouse();
-      // Failing: report the mouse part only; the next 60 s cycle tries again.
+      // Failing: the old hook goes too, so nothing is swallowed while the mouse part reports
+      // failed, and buttons marked down are reported up. The next 60 s cycle tries again.
       if (fresh == IntPtr.Zero) {
+        if (mouseHook != IntPtr.Zero) UnhookWindowsHookEx(mouseHook);
+        mouseHook = IntPtr.Zero;
+        for (int b = 3; b <= 5; b++) ReleaseMouse(b);
         mouseFailed = true;
         outbox.TryAdd("{\"event\":\"mouse\",\"on\":false,\"failed\":true}");
         return;
@@ -322,12 +404,11 @@ public static class NotulaKeyHook {
       if (old != IntPtr.Zero) UnhookWindowsHookEx(old);
       if (old == IntPtr.Zero || mouseFailed) outbox.TryAdd("{\"event\":\"mouse\",\"on\":true}");
       mouseFailed = false;
-    } else if (!wanted && mouseHook != IntPtr.Zero) {
+    } else if (bound == null && mouseHook != IntPtr.Zero && !MousePending()) {
       UnhookWindowsHookEx(mouseHook);
       mouseHook = IntPtr.Zero;
       mouseFailed = false;
       for (int i = 0; i < mouseDown.Length; i++) { mouseDown[i] = false; mouseSwallowed[i] = false; }
-      mouseHeld = 0;
       outbox.TryAdd("{\"event\":\"mouse\",\"on\":false}");
     }
   }
@@ -343,11 +424,20 @@ public static class NotulaKeyHook {
       ready.Set();
       if (!ok) return;
       var timer = new Timer(_ => PostThreadMessage(hookThread, WM_APP_REINSTALL, IntPtr.Zero, IntPtr.Zero), null, 60000, 60000);
+      var check = new Timer(_ => PostThreadMessage(hookThread, WM_APP_CHECK, IntPtr.Zero, IntPtr.Zero), null, 1000, 1000);
       MSG m;
       while (GetMessage(out m, IntPtr.Zero, 0, 0) > 0) {
         if (m.message == WM_APP_MOUSE) { SyncMouse(false); continue; }
+        if (m.message == WM_APP_CHECK) {
+          if (unchecked(Environment.TickCount - lastEventTick) < 2000) continue;
+          CheckReleases();
+          // A hook kept only for a swallowed release goes once that release is settled.
+          if (boundMouse == null) SyncMouse(false);
+          continue;
+        }
         if (m.message == WM_APP_REINSTALL) {
-          if (boundMouse != null) SyncMouse(true);
+          CheckReleases();
+          SyncMouse(boundMouse != null);
           IntPtr fresh = Install();
           if (fresh == IntPtr.Zero) { outbox.TryAdd("{\"event\":\"lost\"}"); continue; }
           IntPtr old = hook;
@@ -356,6 +446,7 @@ public static class NotulaKeyHook {
         }
       }
       timer.Dispose();
+      check.Dispose();
       if (mouseHook != IntPtr.Zero) UnhookWindowsHookEx(mouseHook);
       mouseHook = IntPtr.Zero;
       if (hook != IntPtr.Zero) UnhookWindowsHookEx(hook);

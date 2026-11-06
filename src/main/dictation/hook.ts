@@ -147,11 +147,13 @@ export class HookShortcuts {
     if (this.suspended) this.desk.sendHook({ op: 'suspend', on: true })
   }
 
-  /** Keys held with no event for a while: ask the OS, and re-arm when nothing is down. A held
-   *  mouse button sends nothing while it is held (and the OS's modifier check can't see it). */
+  /** Keys held with no event for a while: ask the OS, and re-arm when nothing is down. The check
+   *  covers the keys held with a mouse button too; a button held on its own sends nothing and the
+   *  OS's modifier check can't see it, so the helper checks the buttons itself and reports a
+   *  release it missed as a key-up. */
   private checkStale(): void {
     if (!this.machine.held.length || Date.now() - this.lastKeyAt < STALE_KEYS_MS) return
-    if (this.machine.held.some((k) => mouseButtonOf(k) !== null)) return
+    if (this.machine.held.every((k) => mouseButtonOf(k) !== null)) return
     this.lastKeyAt = Date.now()
     void this.desk.modifiersHeld().then((held) => {
       if (held !== false || !this.machine.held.length || Date.now() - this.lastKeyAt < STALE_KEYS_MS - 100) return
