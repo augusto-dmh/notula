@@ -9,7 +9,7 @@ import type { AsrProviderId } from '@shared/types/transcript'
 import type { SecretsApi, SettingsApi } from '../../context'
 import { log } from '../../log'
 import { cleanKeywords } from '../keywords'
-import { assemblyMultiModel, cloudLanguage, languageHints } from '../languages'
+import { assemblyMultiModel, cloudLanguage, hintSource } from '../languages'
 import { CloudConnection, logLanguageHints, num, str } from './connection'
 import { devAsrEndpoint } from './dev-endpoint'
 import { probeSocket } from './probe'
@@ -28,7 +28,7 @@ const TERMINATION_WAIT_MS = 5_000
 interface AssemblyDeps {
   secrets: SecretsApi
   settings: SettingsApi
-  /** The OS preferred languages, for the Labs language hints. */
+  /** The OS preferred languages, for the Labs language hints while no list is saved. */
   systemLanguages(): string[]
 }
 
@@ -87,7 +87,7 @@ function speakerIndex(map: Map<string, number>, raw: unknown): number | undefine
 async function hintsFor(deps: AssemblyDeps, o: UrlOptions, sessionId: string): Promise<string[]> {
   if (o.language !== 'multi' || !(await deps.settings.get('transcription.languageHints'))) return []
   // With `multi`, the speech model is the multilingual model chosen in settings.
-  const hints = languageHints(deps.systemLanguages(), MULTI_LANGUAGE_SETS[assemblyMultiModel(o.model as AssemblyAiMultilingualModel)])
+  const hints = hintSource(await deps.settings.get('transcription.languages'), deps.systemLanguages(), MULTI_LANGUAGE_SETS[assemblyMultiModel(o.model as AssemblyAiMultilingualModel)])
   logLanguageHints(sessionId, 'assemblyai', hints)
   return hints
 }
@@ -115,7 +115,7 @@ class AssemblyConnection extends CloudConnection {
     super(
       {
         name: `assemblyai:${o.source}`,
-        // The language hints switch changed mid-session applies at the next connection.
+        // The language hints switch and list changed mid-session apply at the next connection.
         url: async () => buildUrl({ ...opts, languageCodes: await hintsFor(deps, opts, o.sessionId) }),
         headers: () => authHeaders(deps.secrets),
         minDelayMs: 200,

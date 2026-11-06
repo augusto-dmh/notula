@@ -9,7 +9,7 @@ import type { AsrProviderId } from '@shared/types/transcript'
 import type { SecretsApi, SettingsApi } from '../../context'
 import { log } from '../../log'
 import { deepgramKeyterms } from '../keywords'
-import { cloudLanguage, deepgramMultiModel, languageHints } from '../languages'
+import { cloudLanguage, deepgramMultiModel, hintSource } from '../languages'
 import { CloudConnection, logLanguageHints, num, str } from './connection'
 import { devAsrEndpoint } from './dev-endpoint'
 import { probeSocket } from './probe'
@@ -25,7 +25,7 @@ const HINT_TAGS: Record<string, string> = { yue: 'zh-HK' }
 interface DeepgramDeps {
   secrets: SecretsApi
   settings: SettingsApi
-  /** The OS preferred languages, for the Labs language hints. */
+  /** The OS preferred languages, for the Labs language hints while no list is saved. */
   systemLanguages(): string[]
 }
 
@@ -73,7 +73,7 @@ function buildUrl(o: UrlOptions): string {
 async function hintsFor(deps: DeepgramDeps, o: UrlOptions, sessionId: string): Promise<string[]> {
   if (o.language !== 'multi' || o.version || o.model !== 'nova-3') return []
   if (!(await deps.settings.get('transcription.languageHints'))) return []
-  const hints = languageHints(deps.systemLanguages(), MULTI_LANGUAGE_SETS[deepgramMultiModel('default')])
+  const hints = hintSource(await deps.settings.get('transcription.languages'), deps.systemLanguages(), MULTI_LANGUAGE_SETS[deepgramMultiModel('default')])
   logLanguageHints(sessionId, 'deepgram', hints)
   return hints
 }
@@ -98,7 +98,7 @@ class DeepgramConnection extends CloudConnection {
     super(
       {
         name: `deepgram:${o.source}`,
-        // Keywords and the language hints switch changed mid-session apply at the next connection.
+        // Keywords and the language hints switch and list changed mid-session apply at the next connection.
         url: async () => buildUrl({ ...urlOpts, hints: await hintsFor(deps, urlOpts, o.sessionId) }),
         headers: () => authHeaders(deps.secrets)
       },

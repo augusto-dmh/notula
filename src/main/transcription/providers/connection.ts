@@ -149,10 +149,11 @@ export abstract class CloudConnection extends EventEmitter<AsrConnectionEvents> 
 
 const hintsLoggedFor = new Map<AsrProviderId, string>()
 
-/** Logs a session's language hints once per provider; local only. */
+/** Logs a session's language hints once per provider, and again when they change; local only. */
 export function logLanguageHints(sessionId: string, provider: AsrProviderId, hints: readonly string[]): void {
-  if (hintsLoggedFor.get(provider) === sessionId) return
-  hintsLoggedFor.set(provider, sessionId)
+  const key = `${sessionId}|${hints.join(',')}`
+  if (hintsLoggedFor.get(provider) === key) return
+  hintsLoggedFor.set(provider, key)
   log('info', 'asr:language-hints', { sessionId, provider, hints: hints.join(',') })
 }
 

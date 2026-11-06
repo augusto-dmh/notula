@@ -110,6 +110,9 @@ export function registerLocalAsr(ctx: MainContext): void {
   )
 
   ipcMain.handle('system:get-languages' satisfies InvokeChannel, (): string[] => systemLanguages())
+  ctx.bus.on('settings:changed', ({ keys, settings }) => {
+    if (keys.includes('transcription.languages')) log('info', 'transcription:languages-set', { count: settings['transcription.languages']?.length ?? 0 })
+  })
 
   // At most one push per 250 ms per model, and the final state always.
   models.onState((state) => {

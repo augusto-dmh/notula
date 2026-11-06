@@ -277,7 +277,7 @@ export const LABS_FEATURES: readonly LabsFeature[] = [
   {
     key: 'transcription.languageHints',
     label: 'Language hints',
-    description: 'Tell multi-language transcription in advance which languages you speak, from your computer’s language settings.',
+    description: 'Tell multi-language transcription in advance which languages you speak. Name them in Settings ▸ Preferences, or Notula uses your computer’s language settings.',
     section: 'transcription',
     kind: 'switch'
   },

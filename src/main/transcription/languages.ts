@@ -6,6 +6,7 @@
 import {
   FALLBACK_MIN_WORDS,
   LANGUAGE_ALIASES,
+  MAX_TRANSCRIPTION_LANGUAGES,
   MULTI_LANGUAGE_SETS,
   TRANSCRIPTION_LANGUAGE_NAMES
 } from '@shared/types/languages'
@@ -59,6 +60,21 @@ export function languageHints(systemLanguages: readonly string[], set: readonly 
     if (code && set.includes(code) && !out.includes(code)) out.push(code)
   }
   return out
+}
+
+/**
+ * The hints sent for one dial, from `transcription.languages`: never saved (null), the OS
+ * languages as `languageHints` gives them; a list, its codes in stored order, kept to the
+ * model's set, at most 10; an empty list, none.
+ */
+export function hintSource(stored: readonly string[] | null, systemLanguages: readonly string[], set: readonly string[]): string[] {
+  if (stored === null) return languageHints(systemLanguages, set)
+  const out: string[] = []
+  for (const tag of stored) {
+    const code = baseCode(tag)
+    if (code && set.includes(code) && !out.includes(code)) out.push(code)
+  }
+  return out.slice(0, MAX_TRANSCRIPTION_LANGUAGES)
 }
 
 /** The languages a provider declares (adapted: AssemblyAI's pro models cover `multi`; local per its model). */

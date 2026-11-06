@@ -1,0 +1,28 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Labs: the transcription languages editor. Chips, input and counts reuse the jargon styles. */
+
+.tx-langs__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 148px;
+  margin: 0;
+  padding: 2px;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.tx-langs__option {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px dashed var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+}
+
+.tx-langs__option:hover {
+  background: var(--surface-2);
+  color: var(--fg);
+}

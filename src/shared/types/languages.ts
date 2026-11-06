@@ -67,3 +67,43 @@ export const MULTI_LANGUAGE_SETS: Record<
 
 /** Words a language needs before it counts as language evidence. */
 export const FALLBACK_MIN_WORDS = 10
+
+/** The most languages `transcription.languages` keeps. */
+export const MAX_TRANSCRIPTION_LANGUAGES = 10
+
+const intlNames = (() => {
+  try {
+    return new Intl.DisplayNames(['en'], { type: 'language' })
+  } catch {
+    return null
+  }
+})()
+
+/** A base code's English display name: the table's name first, then the platform's, then the code. */
+export function languageDisplayName(code: string): string {
+  const named = TRANSCRIPTION_LANGUAGE_NAMES[code]
+  if (named) return named
+  try {
+    return intlNames?.of(code) ?? code
+  } catch {
+    return code
+  }
+}
+
+/** Codes ordered by display name. */
+export function byDisplayName(codes: readonly string[]): string[] {
+  return [...codes].sort((a, b) => languageDisplayName(a).localeCompare(languageDisplayName(b), 'en'))
+}
+
+/**
+ * A `transcription.languages` list as saved: lower-case codes without duplicates,
+ * at most 10 (the first 10 given), ordered by display name.
+ */
+export function normalizeLanguageList(codes: readonly string[]): string[] {
+  const out: string[] = []
+  for (const c of codes) {
+    const code = c.trim().toLowerCase()
+    if (code && !out.includes(code)) out.push(code)
+  }
+  return byDisplayName(out.slice(0, MAX_TRANSCRIPTION_LANGUAGES))
+}

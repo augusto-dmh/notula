@@ -215,6 +215,9 @@ const VALIDATORS: { [K in SettingKey]: Validator } = {
   'capture.offRecordPrompt': bool,
   'transcription.diarization': bool,
   'transcription.languageHints': bool,
+  'transcription.languages': nullOr(
+    (v) => Array.isArray(v) && v.length <= 10 && new Set(v).size === v.length && v.every((x) => typeof x === 'string' && /^[a-z]{2,3}$/.test(x))
+  ),
   'asr.deepgram.multilingualVersion': oneOf('default', '58-lang-beta'),
   'asr.assemblyai.multilingualModel': oneOf('universal-3-5-pro', 'universal-3-6-pro'),
   'templates.favoriteIds': (v) => Array.isArray(v) && v.length <= 500 && v.every((x) => typeof x === 'string' && UUID.test(x)),

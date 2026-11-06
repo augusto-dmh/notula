@@ -8,6 +8,7 @@ import { AppIconRow } from '../app-icon'
 import { Group, Row, Select, Switch } from './controls'
 import { JargonEditor } from './JargonEditor'
 import { setPrefs } from './prefs-store'
+import { TranscriptionLanguagesRow } from './TranscriptionLanguages'
 import { localLanguageInstalled, useLocalAsrStates } from '../transcript/speech-state'
 
 
@@ -124,6 +125,8 @@ export function PreferencesSection({ prefs }: { prefs: Settings }): JSX.Element 
             }
           />
         </Row>
+        {/* Labs: only with language hints on and Multi-language; turning either off keeps the list. */}
+        {prefs['transcription.languageHints'] && prefs['asr.language'] === 'multi' ? <TranscriptionLanguagesRow prefs={prefs} /> : null}
         <Row label="Summary language" hint="The language Notula writes your notes in" htmlFor={summaryId}>
           <Select<SummaryLanguage>
             id={summaryId}

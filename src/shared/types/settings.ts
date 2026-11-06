@@ -108,6 +108,8 @@ export interface Settings {
   'transcription.diarization': boolean
   /** Labs: multi-language cloud transcription is told the OS preferred languages. */
   'transcription.languageHints': boolean
+  /** Labs: the languages the user named for the hints (lower-case base codes, at most 10); null when never saved. */
+  'transcription.languages': string[] | null
   'asr.deepgram.multilingualVersion': DeepgramMultilingualVersion
   'asr.assemblyai.multilingualModel': AssemblyAiMultilingualModel
   /** Favourite template ids. */
@@ -469,6 +471,7 @@ export const DEFAULT_SETTINGS: Settings = {
   'capture.offRecordPrompt': false,
   'transcription.diarization': true,
   'transcription.languageHints': false,
+  'transcription.languages': null,
   'asr.deepgram.multilingualVersion': 'default',
   'asr.assemblyai.multilingualModel': 'universal-3-5-pro',
   'templates.favoriteIds': [],
