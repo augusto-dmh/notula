@@ -61,6 +61,7 @@ import {
 } from '../media/match'
 import { egressFetch } from '../net/egress'
 import { egressBlocked } from '../privacy'
+import { useSnapshot, type FileStat, type Shared as SharedSnapshot } from './history-copy-policy'
 import { pickLessonVisit } from './recognize'
 import { runYtDlp } from './tools'
 
@@ -181,18 +182,8 @@ async function profileDir(root: string, profileName: string | null): Promise<str
 
 const HISTORY_EXTRAS = ['-journal', '-wal'] as const
 
-/** Size and mtime of the History file and its journal/WAL: a copy is made again only when they change. */
-async function historySignature(source: string): Promise<string> {
-  const parts: string[] = []
-  for (const ext of ['', ...HISTORY_EXTRAS]) {
-    try {
-      const st = await stat(source + ext)
-      parts.push(`${st.size}:${st.mtimeMs}`)
-    } catch {
-      parts.push('-')
-    }
-  }
-  return parts.join('|')
+async function historyStats(source: string): Promise<(FileStat | null)[]> {
+  return Promise.all(['', ...HISTORY_EXTRAS].map((ext) => stat(source + ext).then((st) => ({ size: st.size, mtimeMs: st.mtimeMs }), () => null)))
 }
 
 async function removeHistoryCopy(base: string): Promise<void> {
@@ -202,38 +193,54 @@ async function removeHistoryCopy(base: string): Promise<void> {
 interface HistoryCopy {
   /** The matching rows; null when History can't be read now. */
   rows: () => Promise<HistoryRow[] | null>
+  /** Copies this lookup made, and their bytes. */
   copies: () => number
+  bytes: () => number
   dispose: () => Promise<void>
 }
 
+/** The snapshots running lookups share, by History path. */
+const historySnapshots = new Map<string, SharedSnapshot>()
+
 /**
- * One temp copy of a profile's History for one History read. `rows()` copies again only when the
- * source's size or mtime changed since the last copy, else re-queries the copy it has.
- * `dispose()` deletes it. The copy is opened read-write on purpose: a copied hot journal is then
- * rolled back into the copy (never the live file), which gives a consistent snapshot; a read-only
- * open would refuse such a copy.
+ * A temp copy of a profile's History for one History read, shared with the other lookups of the
+ * same file running now. `rows()` copies again only as `copyDecision` allows: after the source's
+ * size or mtime changed, 5 s after the last copy at the soonest, at most 3 times; otherwise it
+ * re-queries the copy it has. The last `dispose()` deletes it. The copy is opened read-write on
+ * purpose: a copied hot journal is then rolled back into the copy (never the live file), which
+ * gives a consistent snapshot; a read-only open would refuse such a copy. `share: false` keeps a
+ * one-time read on a fresh copy of its own.
  */
-function historyCopy(ctx: MainContext, source: string, query: (path: string) => Promise<HistoryRow[]>): HistoryCopy {
+function historyCopy(
+  ctx: MainContext,
+  source: string,
+  query: (path: string) => Promise<HistoryRow[]>,
+  { share = true, now = Date.now }: { share?: boolean; now?: () => number } = {}
+): HistoryCopy {
   const dir = historyTempDir(ctx)
-  let base: string | null = null
-  let signature: string | null = null
-  let copies = 0
+  const use = useSnapshot(historySnapshots, share ? source : `${source}#${randomUUID()}`, {
+    stat: () => historyStats(source),
+    async copy() {
+      const base = join(dir, `h-${randomUUID()}`)
+      try {
+        await mkdir(dir, { recursive: true })
+        await copyFile(source, base)
+        for (const ext of HISTORY_EXTRAS) if (existsSync(source + ext)) await copyFile(source + ext, base + ext).catch(() => undefined)
+        return base
+      } catch (err) {
+        await removeHistoryCopy(base)
+        throw err
+      }
+    },
+    remove: removeHistoryCopy,
+    now
+  })
   return {
-    copies: () => copies,
+    copies: use.copies,
+    bytes: use.bytes,
     async rows() {
       try {
-        const now = await historySignature(source)
-        if (base === null || now !== signature) {
-          if (base !== null) await removeHistoryCopy(base)
-          base = join(dir, `h-${randomUUID()}`)
-          signature = null
-          await mkdir(dir, { recursive: true })
-          await copyFile(source, base)
-          for (const ext of HISTORY_EXTRAS) if (existsSync(source + ext)) await copyFile(source + ext, base + ext).catch(() => undefined)
-          signature = now
-          copies++
-        }
-        return await query(base)
+        return await use.read(query)
       } catch (err) {
         // Locked, being written, or not a database: skip History for a while; never read the live file.
         historySkipUntil = Date.now() + HISTORY_LOCKED_SKIP_MS
@@ -242,10 +249,7 @@ function historyCopy(ctx: MainContext, source: string, query: (path: string) => 
         return null
       }
     },
-    async dispose() {
-      if (base !== null) await removeHistoryCopy(base)
-      base = null
-    }
+    dispose: () => use.dispose()
   }
 }
 
@@ -367,6 +371,7 @@ async function historyStep(
           rows: rows.length,
           attempts,
           copies: copy.copies(),
+          bytes: copy.bytes(),
           how: m?.how ?? null,
           ids: m ? 1 + m.alternatives.length : 0,
           mapped: true,
@@ -419,7 +424,7 @@ export async function courseHistory(
       if (!rows) return null
       const hit = pickLessonVisit(rows, seenAtMs)
       if (hit || Date.now() + HISTORY_RETRY_MS > until || signal?.aborted) {
-        log('info', 'sources:course-history', { rows: rows.length, attempts, copies: copy.copies(), found: !!hit, hosts: grant.courseHosts.length, excluded: grant.excluded, ms: Date.now() - t0 })
+        log('info', 'sources:course-history', { rows: rows.length, attempts, copies: copy.copies(), bytes: copy.bytes(), found: !!hit, hosts: grant.courseHosts.length, excluded: grant.excluded, ms: Date.now() - t0 })
         return hit
       }
       await sleep(HISTORY_RETRY_MS, signal)
@@ -458,7 +463,7 @@ export async function findAppAddress(ctx: MainContext, profileDirName: string, p
     } finally {
       db.close()
     }
-  })
+  }, { share: false })
   try {
     const rows = (await copy.rows()) ?? []
     const hit = rows.find((r) => /^https?:\/\//i.test(r.url)) ?? null
