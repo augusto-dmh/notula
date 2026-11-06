@@ -11,9 +11,11 @@ import { Modal } from '../folders/Modal'
 import { NuxTip } from '../nux'
 import { Select } from '../settings/controls'
 import { SettingsCard, SettingsRow } from '../settings/primitives'
+import { retentionLabel } from './retention-label'
 import './retention.css'
 
-type Choice = 'off' | `${RetentionHours}`
+/** `custom`: a stored value that matches no preset; choosing it changes nothing. */
+type Choice = 'off' | `${RetentionHours}` | 'custom'
 
 let state: RetentionState | null = null
 const listeners = new Set<() => void>()
@@ -42,7 +44,12 @@ function useRetention(): RetentionState | null {
 }
 
 function label(h: RetentionHours | null): string {
-  return RETENTION_OPTIONS.find((o) => o.hours === h)?.label ?? 'Off'
+  return retentionLabel(h, RETENTION_OPTIONS).label
+}
+
+/** The period alone, for prose: "older than 2 days". */
+function period(h: RetentionHours | null): string {
+  return retentionLabel(h, RETENTION_OPTIONS).period
 }
 
 function day(iso: string | null): string {
@@ -67,7 +74,7 @@ function ArmDialog({
 }): JSX.Element {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const period = label(hours).toLowerCase()
+  const after = period(hours).toLowerCase()
   const enable = (): void => {
     setBusy(true)
     setError(null)
@@ -90,7 +97,7 @@ function ArmDialog({
     <Modal label="Delete transcripts automatically" onClose={onClose}>
       <div className="h-modal__body retention-dialog">
         <h2 className="h-modal__title">{from === null ? 'Delete transcripts automatically?' : 'Delete transcripts sooner?'}</h2>
-        <p className="h-modal__subtitle">Transcripts will be deleted automatically after {period}.</p>
+        <p className="h-modal__subtitle">Transcripts will be deleted automatically after {after}.</p>
         <p className="retention-dialog__counts">{counts}</p>
         <p className="retention-dialog__warn">
           Once deleted, transcripts and recordings can’t be recovered. Chat and new enhanced notes won’t be able to use them.
@@ -120,8 +127,12 @@ export function RetentionRows(): JSX.Element {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   if (!s) return <></>
-  const value: Choice = s.hours === null ? 'off' : `${s.hours}`
+  const current = retentionLabel(s.hours, RETENTION_OPTIONS)
+  const value: Choice = current.custom ? 'custom' : s.hours === null ? 'off' : `${s.hours}`
+  const options: { value: Choice; label: string }[] = RETENTION_OPTIONS.map((o) => ({ value: o.hours === null ? 'off' : (`${o.hours}` as Choice), label: o.label }))
+  if (current.custom) options.push({ value: 'custom', label: current.label })
   const change = (next: Choice): void => {
+    if (next === 'custom') return
     const hours = next === 'off' ? null : (Number(next) as RetentionHours)
     if (hours === s.hours && s.pendingHours === null) return
     setError(null)
@@ -149,7 +160,7 @@ export function RetentionRows(): JSX.Element {
               label="Delete transcripts after"
               value={value}
               disabled={busy}
-              options={RETENTION_OPTIONS.map((o) => ({ value: o.hours === null ? 'off' : (`${o.hours}` as Choice), label: o.label }))}
+              options={options}
               onChange={change}
             />
           }
@@ -199,7 +210,7 @@ export function DeletionLog(): JSX.Element {
                 {new Date(r.ran_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}
               </span>
               <span className="retention-log__what">
-                {runLine(r)} <span className="retention-log__period">Older than {label(r.period_hours).toLowerCase()}.</span>
+                {runLine(r)} <span className="retention-log__period">Older than {period(r.period_hours).toLowerCase()}.</span>
                 {r.errors.length ? <span className="retention-log__errors"> {r.errors.length} could not be deleted and will be retried.</span> : null}
               </span>
             </li>
@@ -243,7 +254,7 @@ export function TranscriptDeletedNotice({ noteId }: { noteId: string }): JSX.Ele
         <NuxTip
           id={`retention-first-purge:${first.id}`}
           title="Old transcripts deleted"
-          body={`Notula deleted the transcripts of ${first.notes} ${first.notes === 1 ? 'note' : 'notes'} older than ${label(first.period_hours).toLowerCase()}.`}
+          body={`Notula deleted the transcripts of ${first.notes} ${first.notes === 1 ? 'note' : 'notes'} older than ${period(first.period_hours).toLowerCase()}.`}
           onAction={openLog}
         />
       ) : null}
