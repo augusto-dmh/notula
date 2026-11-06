@@ -627,14 +627,19 @@ function Poll {
       $fresh = $g.el.GetUpdatedCache($cache)
       if ($g.whole) { foreach ($t in (Scan-Tiles $fresh).tiles) { $tiles.Add($t) } } else { $tiles.Add($fresh) }
     }
-    if ($tiles.Count -eq 0) { throw 'no tiles left' }
   } catch {
-    # A tile left (someone hung up, the layout changed): find them again next poll. A transient
-    # failure: the loop posts nothing for it.
+    # A tile went away mid-read (someone hung up, the layout changed): find them again next poll.
+    # A transient failure: the loop posts nothing for it.
     $state.container = $null
     $state.nextScanMs = 0
     $state.failed = $true
     return $null
+  }
+  if ($tiles.Count -eq 0) {
+    # Tiles were known and none remain: that describes the meeting, so it posts (on change).
+    $state.container = $null
+    $state.nextScanMs = 0
+    return (Roster @() $null $false $true 'no-tiles' $now)
   }
   if ($App -eq 'zoom') {
     $parts = @(foreach ($t in $tiles) { Zoom-Parse $t })
