@@ -1,14 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 // Dev-only harness for the dictation bar shortcut engine. Feeds
-// scripted key-event sequences to the pure state machine; no hook, no injected keys.
+// scripted key-event sequences to the pure state machine, and checks how mouse chords parse and
+// read; no hook, no injected keys or mouse events.
 // Run: node scripts/dev/chord-harness.ts   (Node's type stripping; exits 1 on a failure)
 
+import { derivedHandsFree, parseChord, shortcutLabel } from '../../src/shared/types/dictation-bar.ts'
 import { IDLE, rearm, sessionEnded, sessionStartedElsewhere, setSuspended, step, type ChordConfig, type ChordEffect, type ChordState } from '../../src/main/dictation/chord-machine.ts'
 
 const WIN: ChordConfig = { hold: [['ctrl', 'win']], handsFree: [['ctrl', 'space', 'win']], tapMs: 150 }
 const MAC: ChordConfig = { hold: [['alt', 'ctrl']], handsFree: [['alt', 'ctrl', 'space']], tapMs: 150 }
 /** The derived hands-free list: the hold chord's double tap, and chord+Space. */
 const WIN_DT: ChordConfig = { ...WIN, doubleTap: [['ctrl', 'win']], doubleTapMs: 400 }
+/** The back button on its own as the hold chord. */
+const MOUSE: ChordConfig = { hold: [['mouse4']], handsFree: [], tapMs: 150 }
 
 type Ev = [key: string, down: boolean, at: number] | ['@ended'] | ['@elsewhere'] | ['@suspend', boolean] | ['@rearm']
 
@@ -221,7 +225,69 @@ const CASES: Case[] = [
     events: [d('ctrl', 0), d('win', 10), u('win', 500), d('win', 700), u('win', 1400), u('ctrl', 1500)],
     effects: ['start-hold', 'finish'],
     masks: 1
+  },
+  // Mouse buttons arrive as keys (`mouse4` is the back button).
+  {
+    name: 'bare mouse4 held 900 ms → start-hold, release → finish',
+    cfg: MOUSE,
+    events: [d('mouse4', 0), u('mouse4', 900)],
+    effects: ['start-hold', 'finish'],
+    masks: 0,
+    mode: 'idle'
+  },
+  {
+    name: 'ctrl + mouse5 → hold; mouse5 alone → nothing',
+    cfg: { hold: [['ctrl', 'mouse5']], handsFree: [], tapMs: 150 },
+    events: [d('mouse5', 0), u('mouse5', 700), d('ctrl', 1000), d('mouse5', 1010), u('mouse5', 1800), u('ctrl', 1810)],
+    effects: ['start-hold', 'finish'],
+    mode: 'idle'
+  },
+  {
+    name: 'double tap of mouse4 within the interval → hands-free, locked after release',
+    cfg: { ...MOUSE, doubleTap: [['mouse4']], doubleTapMs: 400 },
+    events: [d('mouse4', 0), u('mouse4', 90), d('mouse4', 250), u('mouse4', 320)],
+    effects: ['start-hold', 'discard', 'start-hands-free'],
+    mode: 'handsFree'
+  },
+  {
+    name: 'a key joining a held mouse4 → cancel silently',
+    cfg: MOUSE,
+    events: [d('mouse4', 0), d('other', 400), u('other', 450), u('mouse4', 900)],
+    effects: ['start-hold', 'cancel'],
+    mode: 'idle'
+  },
+  {
+    name: 'a modifier joining a held mouse4 → cancel; no restart until the button is up',
+    cfg: MOUSE,
+    events: [d('mouse4', 0), d('shift', 300), u('shift', 350), u('mouse4', 900), d('mouse4', 2000), u('mouse4', 2700)],
+    effects: ['start-hold', 'cancel', 'start-hold', 'finish'],
+    mode: 'idle'
   }
+]
+
+/** Parsing and labels of mouse chords (the stored form, point by point). */
+const PARSE: [text: string, platform: string, want: string | null][] = [
+  ['Mouse4', 'win32', 'mouse4'],
+  ['Ctrl+Mouse5', 'win32', 'ctrl+mouse5'],
+  ['Ctrl+Shift+Win+Mouse3', 'win32', 'ctrl+mouse3+shift+win'],
+  ['Mouse32', 'win32', 'mouse32'],
+  ['Mouse1', 'win32', null],
+  ['Mouse2', 'win32', null],
+  ['Mouse33', 'win32', null],
+  ['Mouse4+Mouse5', 'win32', null],
+  ['Ctrl+Mouse4+A', 'win32', null],
+  ['Mouse4+Space', 'win32', null],
+  ['Ctrl+Alt+Shift+Win+Mouse4', 'win32', null],
+  ['Ctrl+Option+Mouse4', 'darwin', 'alt+ctrl+mouse4'],
+  ['Win+Mouse4', 'darwin', null],
+  ['A', 'win32', null],
+  ['Ctrl+Win', 'win32', 'ctrl+win']
+]
+const LABELS: [text: string, want: string][] = [
+  ['Mouse3', 'Middle button'],
+  ['Ctrl+Mouse4', 'Ctrl + Back button'],
+  ['Mouse5', 'Forward button'],
+  ['Mouse7', 'Mouse button 7']
 ]
 
 let failed = 0
@@ -249,5 +315,26 @@ for (const c of CASES) {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${c.name}`)
   if (!ok) console.log(`      effects ${JSON.stringify(effects)} masks ${masks} mode ${s.mode}`)
 }
-console.log(`\n${CASES.length - failed}/${CASES.length} passed`)
+for (const [text, platform, want] of PARSE) {
+  const got = parseChord(text, platform)?.join('+') ?? null
+  const ok = got === want
+  if (!ok) failed++
+  console.log(`${ok ? 'PASS' : 'FAIL'}  parse ${text} (${platform}) → ${want ?? 'refused'}${ok ? '' : `, got ${got}`}`)
+}
+for (const [text, want] of LABELS) {
+  const got = shortcutLabel(text, 'win32')
+  const ok = got === want
+  if (!ok) failed++
+  console.log(`${ok ? 'PASS' : 'FAIL'}  label ${text} → ${want}${ok ? '' : `, got ${got}`}`)
+}
+{
+  // A bare mouse hold derives its double tap only, never "+Space"; macOS derives nothing.
+  const win = JSON.stringify(derivedHandsFree(['Mouse4'], 'win32'))
+  const mac = JSON.stringify(derivedHandsFree(['Ctrl+Mouse4'], 'darwin'))
+  const ok = win === JSON.stringify([{ keys: 'Mouse4', doubleTap: true }]) && mac === '[]'
+  if (!ok) failed++
+  console.log(`${ok ? 'PASS' : 'FAIL'}  derived hands-free of Mouse4: its double tap, no Space${ok ? '' : `, got ${win} / ${mac}`}`)
+}
+const total = CASES.length + PARSE.length + LABELS.length + 1
+console.log(`\n${total - failed}/${total} passed`)
 process.exit(failed ? 1 : 0)

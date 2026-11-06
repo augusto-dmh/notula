@@ -20,6 +20,9 @@
 // - A hook entry is refused when it is already in its list, used by the other mode, reserved
 //   or another Notula shortcut (sides merged, Meta counted as Control), or recorded on macOS
 //   without Accessibility.
+// - A hook chord may hold one extra mouse button (`Mouse3` … `Mouse32`), alone or after
+//   modifiers. The primary buttons, two buttons, or a button with another key are refused with
+//   `SHORTCUT_COPY.mouse`, and so is any mouse button on an accelerator row.
 //
 // Handlers and pushes write their channel literal.
 
@@ -28,7 +31,7 @@ import { notulaError } from '@shared/errors'
 import type { InvokeChannel, InvokeRes, PushChannel } from '@shared/ipc'
 import { DICTATION_LIMITS, type DictationHandsFreeEntry } from '@shared/types/dictation'
 import { DEFAULT_SETTINGS, type SettingKey, type Settings } from '@shared/types/settings'
-import { derivedHandsFree, parseChord, sameHookEntry, toHookEntry, type HookEntry } from '@shared/types/dictation-bar'
+import { derivedHandsFree, hasMouseButton, parseChord, sameHookEntry, toHookEntry, type HookEntry } from '@shared/types/dictation-bar'
 import {
   CUSTOMISABLE_SHORTCUTS,
   isHookShortcut,
@@ -62,7 +65,8 @@ export const SHORTCUT_COPY = {
   listFull: 'You can add up to 3 shortcuts. Remove one to add another.',
   doubleTapMac: 'Double tap isn’t available on macOS yet.',
   doubleTapHold: 'A double tap can only start hands-free dictation.',
-  accessibility: 'Allow accessibility access for Notula, then record the shortcut again.'
+  accessibility: 'Allow accessibility access for Notula, then record the shortcut again.',
+  mouse: 'Notula can’t use that mouse button here. Try another button or key.'
 } as const
 
 type Applier = (accelerator: string) => Promise<{ ok: boolean; error: string | null }>
@@ -142,7 +146,7 @@ export function registerShortcuts(ctx: MainContext): ShortcutsApi {
   /** One hook entry against the entries already accepted for its list. */
   function validateEntry(id: HookShortcutId, e: HookEntry, before: readonly HookEntry[]): string | null {
     const chord = parseChord(e.keys, platform)
-    if (!chord) return isMac ? SHORTCUT_COPY.chordMac : SHORTCUT_COPY.chord
+    if (!chord) return hasMouseButton(e.keys) ? SHORTCUT_COPY.mouse : isMac ? SHORTCUT_COPY.chordMac : SHORTCUT_COPY.chord
     if (e.doubleTap && id === 'dictationHold') return SHORTCUT_COPY.doubleTapHold
     if (e.doubleTap && isMac) return SHORTCUT_COPY.doubleTapMac
     if (isMac && !systemPreferences.isTrustedAccessibilityClient(false)) return SHORTCUT_COPY.accessibility
@@ -167,6 +171,7 @@ export function registerShortcuts(ctx: MainContext): ShortcutsApi {
       if (accelerator === '') return null
       return validateEntry(id, { keys: accelerator, doubleTap: false }, [])
     }
+    if (hasMouseButton(accelerator)) return SHORTCUT_COPY.mouse
     const parsed = parseAccelerator(accelerator, platform)
     if (!parsed) return SHORTCUT_COPY.invalid
     if (parsed.key === null) return SHORTCUT_COPY.modifierOnly

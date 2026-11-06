@@ -6,7 +6,8 @@
 // - Keys arrive by name with sides (`ctrl`, `ctrl_r`, `win_r`, …). A chord token without a side
 //   (`ctrl`) matches either side; a right-side token (`ctrl_r`) only that side. The helper names
 //   every modifier and the chords' keys; `other` is any other key while a modifier is down (it
-//   never says which).
+//   never says which). Mouse buttons arrive as keys too (`mouse3` middle, `mouse4` back,
+//   `mouse5` forward …), so a chord may be one bare button (`['mouse4']`) or modifiers plus one.
 // - Up to 3 hold chords and 3 hands-free chords. A hold chord fully down (and nothing else) →
 //   `start-hold`. Any of its keys up → `finish`, or `discard` when the press was a tap (under
 //   `tapMs`, or under 300 ms for a chord that also has a double tap). A hands-free chord added

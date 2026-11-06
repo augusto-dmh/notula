@@ -11,9 +11,14 @@
 //   can't say). When keys stop arriving for 2 s while some are held and the OS reports no
 //   modifier down, the machine forgets them and re-arms (a lock screen eats key-ups).
 // - While a paste is watched (./observe.ts), the helper reports Return and Tab as `commit`.
+// - Mouse buttons (`mouse4` …) are keys to the chord machine. The helper is told which ones the
+//   chords use (`mouse` in its config; on Windows only 3–5, the ones its events can name) and
+//   holds a mouse hook only while that list is non-empty; it reports the hook going on and off
+//   (`dictation-bar:hook-mouse`), and a failed install marks `HookStatus.mouse` without touching
+//   the key chords. While a shortcut is recorded the helper is told to swallow nothing.
 
 import { systemPreferences } from 'electron'
-import type { HookStatus } from '@shared/types/dictation-bar'
+import { mouseButtonOf, WINDOWS_MOUSE_MAX, type HookStatus } from '@shared/types/dictation-bar'
 import { log } from '../log'
 import { IDLE, rearm, sessionEnded, sessionStartedElsewhere, setSuspended, step, type ChordConfig, type ChordEffect, type ChordState } from './chord-machine'
 import type { Desk } from './desk'
@@ -37,6 +42,11 @@ export class HookShortcuts {
   private lastKeyAt = 0
   private doubleTapMs = DOUBLE_TAP_FALLBACK_MS
   private watching = false
+  private suspended = false
+  /** The mouse buttons the helper is told to watch. */
+  private mouseButtons: number[] = []
+  private mouseOn = false
+  private mouseFailed = false
   /** Return or Tab while a paste is watched. */
   onCommit: (() => void) | null = null
   status: HookStatus = { available: false }
@@ -53,7 +63,8 @@ export class HookShortcuts {
     return process.platform === 'win32' || process.platform === 'darwin'
   }
 
-  private setStatus(s: HookStatus): void {
+  private setStatus(next: HookStatus): void {
+    const s: HookStatus = next.available && this.mouseFailed ? { ...next, mouse: 'failed' } : next
     if (JSON.stringify(s) === JSON.stringify(this.status)) return
     this.status = s
     log('info', 'dictation-bar:hook-status', { ...s })
@@ -105,6 +116,18 @@ export class HookShortcuts {
     this.running = false
     this.ready = false
     this.machine = { ...IDLE, suspended: this.machine.suspended }
+    this.setMouse(false)
+  }
+
+  /** The helper's mouse hook went on or off (the helper stopping takes it off). */
+  private setMouse(on: boolean, failed = false): void {
+    const wasFailed = this.mouseFailed
+    this.mouseFailed = failed
+    if (on !== this.mouseOn) {
+      this.mouseOn = on
+      log('info', 'dictation-bar:hook-mouse', { on, buttons: on ? this.mouseButtons.length : 0 })
+    }
+    if (failed !== wasFailed && this.status.available) this.setStatus({ ...this.status, mouse: undefined })
   }
 
   private sendConfig(): void {
@@ -112,15 +135,23 @@ export class HookShortcuts {
     if (!cfg || !this.ready) return
     const chords = [...cfg.hold, ...cfg.handsFree, ...(cfg.doubleTap ?? []), ...(cfg.record ? [cfg.record] : [])]
     const mods = new Set(['ctrl', 'alt', 'shift', 'win', 'cmd'])
-    const keys = [...new Set(chords.flat().filter((k) => !mods.has(k.replace(/_r$/, ''))))]
-    this.desk.sendHook({ op: 'config', keys, chords })
+    const keys = [...new Set(chords.flat().filter((k) => !mods.has(k.replace(/_r$/, '')) && mouseButtonOf(k) === null))]
+    // Windows' low-level mouse events name only the middle and the two extra buttons.
+    const reach = (b: number): boolean => process.platform !== 'win32' || b <= WINDOWS_MOUSE_MAX
+    const mouse = [...new Set(chords.flat().map(mouseButtonOf))].filter((b): b is number => b !== null && reach(b)).sort((a, b) => a - b)
+    this.mouseButtons = mouse
+    if (!mouse.length) this.setMouse(false)
+    this.desk.sendHook({ op: 'config', keys, chords, mouse })
     this.desk.sendHook({ op: 'active', on: this.active })
     if (this.watching) this.desk.sendHook({ op: 'watch', on: true })
+    if (this.suspended) this.desk.sendHook({ op: 'suspend', on: true })
   }
 
-  /** Keys held with no event for a while: ask the OS, and re-arm when nothing is down. */
+  /** Keys held with no event for a while: ask the OS, and re-arm when nothing is down. A held
+   *  mouse button sends nothing while it is held (and the OS's modifier check can't see it). */
   private checkStale(): void {
     if (!this.machine.held.length || Date.now() - this.lastKeyAt < STALE_KEYS_MS) return
+    if (this.machine.held.some((k) => mouseButtonOf(k) !== null)) return
     this.lastKeyAt = Date.now()
     void this.desk.modifiersHeld().then((held) => {
       if (held !== false || !this.machine.held.length || Date.now() - this.lastKeyAt < STALE_KEYS_MS - 100) return
@@ -136,6 +167,7 @@ export class HookShortcuts {
       this.running = false
       this.ready = false
       this.machine = { ...IDLE, suspended: this.machine.suspended }
+      this.setMouse(false)
       if (this.readyTimer) clearTimeout(this.readyTimer)
       if (!wanted || !this.cfg) return
       // It died on its own: report, then try again.
@@ -162,6 +194,11 @@ export class HookShortcuts {
         return
       case 'commit':
         this.onCommit?.()
+        return
+      case 'mouse':
+        // {on} after the mouse hook went on or off; {failed} when installing it failed.
+        this.setMouse(m['on'] === true, m['failed'] === true)
+        if (m['failed'] === true) log('warn', 'dictation-bar:hook-mouse-failed', { buttons: this.mouseButtons.length })
         return
       case 'lost':
         // Re-installing failed: restart the helper.
@@ -206,8 +243,12 @@ export class HookShortcuts {
     return this.ready
   }
 
+  /** A shortcut is being recorded: nothing fires, and the helper swallows no mouse button. */
   setSuspended(on: boolean): void {
     this.machine = setSuspended(this.machine, on)
+    if (on === this.suspended) return
+    this.suspended = on
+    if (this.ready) this.desk.sendHook({ op: 'suspend', on })
   }
 
   sessionEnded(): void {

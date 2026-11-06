@@ -6,7 +6,12 @@
 // Monitoring / Accessibility; without it no events arrive and main keeps the globalShortcut
 // fallback. Fn is never reported. Same JSON-lines protocol and reporting rules as keyhook.ps1;
 // no Start-menu masking. `{"event":"secure-input","on":true}` while secure input blocks events.
-// Not yet tested on real hardware.
+// Mouse buttons: while the config names some (`"mouse":[3,4]`), a second listen-only monitor
+// reports the other-mouse buttons among them, by number (`mouse3` the middle button, then
+// `mouse<buttonNumber + 1>`), down and up, with or without a modifier; it is removed as soon as
+// the list empties and reports `{"event":"mouse","on":…}` like keyhook.ps1. It can't swallow:
+// the button keeps its usual action. Keys are reported while a bound button is down, too.
+// Not yet tested on real hardware (the mouse part neither).
 
 ObjC.import('Cocoa')
 ObjC.import('Carbon')
@@ -37,7 +42,40 @@ let chordKeys = {}
 let active = false
 const down = {}
 const reported = {}
-const modDown = () => Object.keys(MODS).some((k) => down[k])
+let mouseBound = {}
+const mouseDown = {}
+const modDown = () => Object.keys(MODS).some((k) => down[k]) || Object.keys(mouseDown).some((b) => mouseDown[b])
+
+const OTHER_MOUSE_DOWN = 25
+const OTHER_MOUSE_UP = 26
+let mouseMonitor = null
+
+function onMouse(ev) {
+  const button = Number(ev.buttonNumber) + 1
+  if (!mouseBound[button]) return
+  const isDown = ev.type === OTHER_MOUSE_DOWN
+  if (!!mouseDown[button] === isDown) return
+  mouseDown[button] = isDown
+  send({ event: 'key', k: 'mouse' + button, d: isDown ? 1 : 0 })
+}
+
+/** The mouse monitor exists only while some button is bound. */
+function syncMouse(buttons) {
+  mouseBound = {}
+  for (const b of buttons) if (b >= 3 && b <= 32) mouseBound[b] = true
+  const wanted = Object.keys(mouseBound).length > 0
+  if (wanted && !mouseMonitor) {
+    const m = $.NSEvent.addGlobalMonitorForEventsMatchingMaskHandler((1 << OTHER_MOUSE_DOWN) | (1 << OTHER_MOUSE_UP), onMouse)
+    if (!m || m.isNil()) return send({ event: 'mouse', on: false, failed: true })
+    mouseMonitor = m
+    send({ event: 'mouse', on: true })
+  } else if (!wanted && mouseMonitor) {
+    $.NSEvent.removeMonitor(mouseMonitor)
+    mouseMonitor = null
+    for (const b of Object.keys(mouseDown)) delete mouseDown[b]
+    send({ event: 'mouse', on: false })
+  }
+}
 
 function onEvent(ev) {
   const type = ev.type
@@ -97,6 +135,7 @@ function readSome() {
       if (req.op === 'config') {
         chordKeys = {}
         for (const k of req.keys || []) chordKeys[k] = true
+        syncMouse(req.mouse || [])
       } else if (req.op === 'active') active = !!req.on
       else if (req.op === 'stop') return false
     } catch (e) {
@@ -125,3 +164,4 @@ while (running) {
   }
 }
 if (monitor && !monitor.isNil()) $.NSEvent.removeMonitor(monitor)
+if (mouseMonitor) $.NSEvent.removeMonitor(mouseMonitor)

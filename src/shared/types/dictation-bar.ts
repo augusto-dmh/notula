@@ -53,6 +53,8 @@ export interface HookStatus {
   available: boolean
   lost?: boolean
   reason?: 'unsupported' | 'helper-failed' | 'permission' | 'secure-input'
+  /** The mouse part failed to install; key chords keep working. */
+  mouse?: 'failed'
 }
 
 export const DICTATION_BAR_LIMITS = {
@@ -125,21 +127,43 @@ const TOKENS: Record<string, string> = {
   win_r: 'win_r'
 }
 
+/** Mouse buttons a chord may use: 3 is the middle button, 4 back, 5 forward. 1 and 2 never. */
+export const MOUSE_BUTTONS = { min: 3, max: 32 } as const
+/** The mouse buttons Windows' low-level mouse events can name (middle, back, forward). */
+export const WINDOWS_MOUSE_MAX = 5
+
+/** A key name's mouse button number (`mouse4` → 4, any case), or null for a key. */
+export function mouseButtonOf(key: string): number | null {
+  const m = /^mouse([0-9]{1,2})$/i.exec(key.trim())
+  return m ? Number(m[1]) : null
+}
+
+/** The text names a mouse button anywhere ("Ctrl+Mouse4"), valid or not. */
+export const hasMouseButton = (text: string): boolean => typeof text === 'string' && text.split('+').some((t) => mouseButtonOf(t) !== null)
+
 /**
- * A hook chord ("Ctrl+Win", "Ctrl+Option+Space") as sorted normalised key names, or null.
- * Rules: 2–4 keys, at least one modifier, at most one other key (Space, a letter, a digit
- * or F1–F24), never Escape. `win` is Windows-only and `cmd` macOS-only.
+ * A hook chord ("Ctrl+Win", "Ctrl+Option+Space", "Mouse4") as sorted normalised key names, or
+ * null. Rules: 2–4 keys, at least one modifier, at most one other key (Space, a letter, a digit
+ * or F1–F24), never Escape. Or one mouse button (`mouse3` … `mouse32`) on its own or with up to
+ * three modifiers, and no other key. `win` is Windows-only and `cmd` macOS-only.
  */
 export function parseChord(text: string, platform: string): string[] | null {
   if (typeof text !== 'string' || text.length === 0 || text.length > 60) return null
   const keys = new Set<string>()
   let others = 0
+  let mice = 0
   for (const raw of text.split('+')) {
     const t = raw.trim().toLowerCase()
     let k = TOKENS[t]
     if (!k && /^[a-z0-9]$/.test(t)) k = t
     if (!k && /^f([1-9]|1[0-9]|2[0-4])$/.test(t)) k = t
     if (!k && /^num[0-9]$/.test(t)) k = t
+    const button = mouseButtonOf(t)
+    if (!k && button !== null) {
+      if (button < MOUSE_BUTTONS.min || button > MOUSE_BUTTONS.max) return null
+      k = `mouse${button}`
+      mice++
+    }
     if (!k) return null
     if (chordBase(k) === 'win' && platform === 'darwin') return null
     if (k === 'cmd' && platform !== 'darwin') return null
@@ -148,8 +172,17 @@ export function parseChord(text: string, platform: string): string[] | null {
     if (!ALL_MODIFIERS.includes(k)) others++
     keys.add(k)
   }
+  if (mice > 0) return mice === 1 && others === 1 && keys.size <= 4 ? [...keys].sort() : null
   if (keys.size < 2 || keys.size > 4 || others > 1 || others === keys.size) return null
   return [...keys].sort()
+}
+
+/** A mouse button as the lists and keytips name it. */
+export function mouseButtonLabel(button: number): string {
+  if (button === 3) return 'Middle button'
+  if (button === 4) return 'Back button'
+  if (button === 5) return 'Forward button'
+  return `Mouse button ${button}`
 }
 
 const DISPLAY: Record<string, { win: string; mac: string }> = {
@@ -181,7 +214,9 @@ export function shortcutLabel(text: string, platform: string): string {
     else key = raw.trim().length === 1 ? raw.trim().toUpperCase() : raw.trim()
   }
   const parts = DISPLAY_ORDER.filter((m) => mods.has(m)).map((m) => DISPLAY[m]![mac ? 'mac' : 'win'])
-  if (key) parts.push(key.toLowerCase() === 'space' ? 'Space' : /^num[0-9]$/i.test(key) ? `Num ${key.slice(3)}` : key)
+  const button = key ? mouseButtonOf(key) : null
+  if (button !== null) parts.push(mouseButtonLabel(button))
+  else if (key) parts.push(key.toLowerCase() === 'space' ? 'Space' : /^num[0-9]$/i.test(key) ? `Num ${key.slice(3)}` : key)
   return parts.join(' + ')
 }
 
@@ -203,7 +238,7 @@ export function allModifiers(chord: readonly string[]): boolean {
 
 /**
  * The hands-free entries a hold list implies: each chord's double tap, plus chord+Space when it
- * is all modifiers. A list holds at most 3 entries, so the first 3 apply.
+ * is all modifiers (so never for a mouse button). A list holds at most 3 entries, so the first 3 apply.
  */
 export function derivedHandsFree(hold: readonly string[], platform: string): HookEntry[] {
   const out: HookEntry[] = []
