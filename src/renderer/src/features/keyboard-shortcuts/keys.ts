@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 // Key chips and the shortcut recorder's key reading. Glyphs on macOS, words elsewhere; every
-// chip has a spoken name for screen readers.
+// chip has a spoken name for screen readers. A mouse button (`Mouse4`) is a chip with a small
+// mouse drawn beside its name.
 
+import { mouseButtonLabel, mouseButtonOf } from '@shared/types/dictation-bar'
 import { isMac } from '../../app/platform'
 
 export interface Chip {
   text: string
   /** The accessible name. */
   name: string
+  /** A mouse button chip: its number (3 middle, 4 back, 5 forward). */
+  mouse?: number
 }
 
 const MAC: Record<string, Chip> = {
@@ -152,10 +156,23 @@ export function chordKeyOf(e: KeyboardEvent): string | null {
   return null
 }
 
-/** Chord keys as stored text: modifiers first ("Ctrl+Win+Space"). */
+/**
+ * A mouse press in the settings window as a chord key (`Mouse3` middle, `Mouse4` back, `Mouse5`
+ * forward), or null for the primary and secondary buttons, which stay free for clicking.
+ */
+export function mouseKeyOf(e: MouseEvent): string | null {
+  if (e.button === 1) return 'Mouse3'
+  if (e.button === 3) return 'Mouse4'
+  if (e.button === 4) return 'Mouse5'
+  return null
+}
+
+/** Chord keys as stored text: modifiers first ("Ctrl+Win+Space"), a mouse button last. */
 export function chordText(keys: readonly string[]): string {
   const mods = CHORD_ORDER.filter((m) => keys.includes(m))
-  return [...mods, ...keys.filter((k) => !CHORD_ORDER.includes(k))].join('+')
+  const rest = keys.filter((k) => !CHORD_ORDER.includes(k))
+  const isMouse = (k: string): boolean => mouseButtonOf(k) !== null
+  return [...mods, ...rest.filter((k) => !isMouse(k)), ...rest.filter(isMouse)].join('+')
 }
 
 const CHORD_CHIPS: Record<string, { mac: Chip; win: Chip }> = {
@@ -184,6 +201,11 @@ export function chordChips(keys: string): Chip[] {
       const named = CHORD_CHIPS[t] ?? CHORD_CHIPS[t.replace(/^(ctrl|alt|shift|win)_r$/, 'right$1')]
       if (named) return isMac ? named.mac : named.win
       if (/^num[0-9]$/.test(t)) return { text: `Num ${t.slice(3)}`, name: `Numpad ${t.slice(3)}` }
+      const button = mouseButtonOf(t)
+      if (button !== null) {
+        const label = mouseButtonLabel(button)
+        return { text: button <= 5 ? label : `Button ${button}`, name: button <= 5 ? label.replace(' button', ' mouse button') : label, mouse: button }
+      }
       const text = raw.length === 1 ? raw.toUpperCase() : raw
       return { text, name: text }
     })

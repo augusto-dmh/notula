@@ -162,3 +162,15 @@
   background: var(--surface-2);
   color: var(--fg);
 }
+
+/* A mouse button chip: the small mouse, then the button's name. */
+.ks-chip--mouse {
+  grid-auto-flow: column;
+  gap: 4px;
+}
+
+.ks-mouse {
+  display: block;
+  flex: none;
+  opacity: 0.85;
+}

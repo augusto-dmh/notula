@@ -16,16 +16,20 @@
 // with "Needs the keyboard helper." while the helper is unavailable (`shortcuts:hook-status`),
 // and show the neutral conflict note while main reports one. The voice typing toggle is the
 // fallback and is listed only while the helper is unavailable (or its conflict note is up).
+// A hold or hands-free chord may be one extra mouse button (middle, back, forward), alone or
+// after modifiers: the recorder takes it from this window's own mouse events (the primary and
+// secondary buttons stay free for clicking), and the row says what the button does while voice
+// typing is on. Every other row's recorder takes the press too, so main refuses it in words.
 // `StandaloneShortcut` is one row's control for Settings ▸ Voice typing.
 
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react'
 import { parseError } from '@shared/errors'
 import { DICTATION_LIMITS } from '@shared/types/dictation'
-import type { HookEntry, HookStatus } from '@shared/types/dictation-bar'
+import { mouseButtonLabel, mouseButtonOf, WINDOWS_MOUSE_MAX, type HookEntry, type HookStatus } from '@shared/types/dictation-bar'
 import { isHookShortcut, type CustomisableShortcutId, type HookShortcutId, type ShortcutGroup, type ShortcutRow } from '@shared/types/shortcuts'
 import { navigateToSettings } from '../../app/navigation'
 import { debugLog, isMac } from '../../app/platform'
-import { chipsFor, chordChips, chordKeyOf, chordText, readKey, type Chip } from './keys'
+import { chipsFor, chordChips, chordKeyOf, chordText, mouseKeyOf, readKey, type Chip } from './keys'
 import './keyboard-shortcuts.css'
 
 const GROUPS: readonly { id: ShortcutGroup; title: string }[] = [
@@ -38,6 +42,8 @@ const GROUPS: readonly { id: ShortcutGroup; title: string }[] = [
 ]
 
 const RECORD_MS = 10_000
+/** The recorder's mouse events: a press, its release, and the click that would follow. */
+const MOUSE_EVENTS = ['mousedown', 'mouseup', 'auxclick'] as const
 /** After a chord comes up, a second press this soon makes it a double tap. */
 const DOUBLE_TAP_WINDOW_MS = 450
 
@@ -75,11 +81,26 @@ function hookBroken(s: HookStatus | null): boolean {
   return !!s && !s.available && (!!s.reason || !!s.lost)
 }
 
+/** A small mouse with the button marked: the wheel, the rear or front side button, or a dot. */
+function MouseGlyph({ button }: { button: number }): JSX.Element {
+  return (
+    <svg className="ks-mouse" viewBox="0 0 12 16" width="10" height="14" aria-hidden="true" focusable="false">
+      <rect x="2" y="1" width="9" height="14" rx="4.5" fill="none" stroke="currentColor" strokeWidth="1.2" />
+      <path d="M6.5 1v5M2 6h9" stroke="currentColor" strokeWidth="1" />
+      {button === 3 ? <rect x="5.5" y="2.6" width="2" height="3" rx="1" fill="currentColor" /> : null}
+      {button === 4 ? <rect x="0.4" y="8.6" width="2.2" height="2.6" rx="0.8" fill="currentColor" /> : null}
+      {button === 5 ? <rect x="0.4" y="5.4" width="2.2" height="2.6" rx="0.8" fill="currentColor" /> : null}
+      {button > 5 ? <circle cx="6.5" cy="10.5" r="1.4" fill="currentColor" /> : null}
+    </svg>
+  )
+}
+
 function Chips({ chips }: { chips: Chip[] }): JSX.Element {
   return (
     <span className="ks-chips" role="img" aria-label={chips.map((c) => c.name).join(' + ')}>
       {chips.map((c, i) => (
-        <kbd key={i} className="ks-chip" title={c.name} aria-hidden="true">
+        <kbd key={i} className={`ks-chip${c.mouse ? ' ks-chip--mouse' : ''}`} title={c.name} aria-hidden="true">
+          {c.mouse ? <MouseGlyph button={c.mouse} /> : null}
           {c.text}
         </kbd>
       ))}
@@ -103,6 +124,23 @@ export function EntryChips({ entry }: { entry: HookEntry }): JSX.Element {
 
 const entryName = (e: HookEntry): string => `${chordChips(e.keys).map((c) => c.name).join(' + ')}${e.doubleTap ? ', twice' : ''}`
 
+const isMouseKey = (k: string): boolean => mouseButtonOf(k) !== null
+/** The recorder's hint for the keys held so far; with a mouse button, chip text ("Back button"). */
+const heldHint = (keys: readonly string[]): string => {
+  const text = chordText(keys)
+  return keys.some(isMouseKey) ? chordChips(text).map((c) => c.text).join(' + ') : text
+}
+
+/** The modifiers a mouse event says are down, as chord keys. */
+function eventModifiers(e: MouseEvent): string[] {
+  const out: string[] = []
+  if (e.ctrlKey) out.push('Ctrl')
+  if (e.altKey) out.push(isMac ? 'Option' : 'Alt')
+  if (e.shiftKey) out.push('Shift')
+  if (e.metaKey) out.push(isMac ? 'Cmd' : 'Win')
+  return out
+}
+
 /** Records one accelerator (`onSave`) or, for a hook row, one chord entry. */
 function Recorder({
   row,
@@ -116,7 +154,7 @@ function Recorder({
   onSave(value: { accelerator: string } | { entry: HookEntry }): void
   onCancel(error: string | null): void
 }): JSX.Element {
-  const [hint, setHint] = useState('Press keys')
+  const [hint, setHint] = useState(isHookShortcut(row.id) ? 'Press keys or a mouse button' : 'Press keys')
   const doneRef = useRef(false)
 
   useEffect(() => {
@@ -138,6 +176,35 @@ function Recorder({
     let peak: string[] = []
     let first: string | null = null
     let pending: ReturnType<typeof setTimeout> | null = null
+    // Modifiers a mouse press says are down though their key-down came before recording began.
+    let implied: string[] = []
+    const press = (k: string): void => {
+      if (pending) {
+        clearTimeout(pending)
+        pending = null
+      }
+      held.add(k)
+      const now = [...held, ...implied.filter((m) => !held.has(m) && !held.has(`Right${m}`))]
+      if (now.length > peak.length) peak = now
+      setHint(heldHint(peak))
+    }
+    const release = (k: string): void => {
+      held.delete(k)
+      if (isMouseKey(k)) implied = []
+      if (held.size > 0 || peak.length === 0) return
+      const keys = peak
+      peak = []
+      if (keys.length < 2 && !keys.some(isMouseKey)) {
+        setHint(isMac ? 'Hold two or more keys, like ⌃ ⌥, or press a mouse button' : 'Hold two or more keys, like Ctrl + Win, or press a mouse button')
+        return
+      }
+      const text = chordText(keys)
+      if (first === text) return finish({ entry: { keys: text, doubleTap: true } })
+      first = text
+      if (!doubleTap) return finish({ entry: { keys: text, doubleTap: false } })
+      setHint(`${heldHint(keys)} — press again for a double tap`)
+      pending = setTimeout(() => finish({ entry: { keys: text, doubleTap: false } }), DOUBLE_TAP_WINDOW_MS)
+    }
     const onChordKey = (e: KeyboardEvent): void => {
       e.preventDefault()
       e.stopPropagation()
@@ -148,30 +215,29 @@ function Recorder({
         if (e.type === 'keydown') setHint('That key can’t be used. Try another')
         return
       }
-      if (e.type === 'keydown') {
-        if (pending) {
-          clearTimeout(pending)
-          pending = null
-        }
-        held.add(k)
-        if (held.size > peak.length) peak = [...held]
-        setHint(chordText(peak))
-        return
-      }
-      held.delete(k)
-      if (held.size > 0 || peak.length === 0) return
-      const keys = peak
-      peak = []
-      if (keys.length < 2) {
-        setHint(isMac ? 'Hold two or more keys, like ⌃ ⌥' : 'Hold two or more keys, like Ctrl + Win')
-        return
-      }
-      const text = chordText(keys)
-      if (first === text) return finish({ entry: { keys: text, doubleTap: true } })
-      first = text
-      if (!doubleTap) return finish({ entry: { keys: text, doubleTap: false } })
-      setHint(`${text} — press again for a double tap`)
-      pending = setTimeout(() => finish({ entry: { keys: text, doubleTap: false } }), DOUBLE_TAP_WINDOW_MS)
+      if (e.type === 'keydown') press(k)
+      else release(k)
+    }
+    // The middle, back and forward buttons record; their default (scrolling, going back) never runs.
+    const onChordMouse = (e: MouseEvent): void => {
+      const k = mouseKeyOf(e)
+      if (!k) return
+      e.preventDefault()
+      e.stopPropagation()
+      if (e.type === 'mousedown') {
+        implied = eventModifiers(e)
+        press(k)
+      } else if (e.type === 'mouseup' && held.has(k)) release(k)
+    }
+    // Any other row takes the press as it is, and main refuses a mouse button in words.
+    const onMouse = (e: MouseEvent): void => {
+      const k = mouseKeyOf(e)
+      if (!k) return
+      e.preventDefault()
+      e.stopPropagation()
+      if (e.type !== 'mousedown') return
+      const mods = eventModifiers(e).map((m) => (m === 'Option' ? 'Alt' : m === 'Win' ? 'Super' : m === 'Cmd' ? 'Command' : m))
+      finish({ accelerator: [...mods, k].join('+') })
     }
 
     const onKey = (e: KeyboardEvent): void => {
@@ -199,16 +265,19 @@ function Recorder({
       }
     }
 
+    const onMouseEvent = isHookShortcut(id) ? onChordMouse : onMouse
     if (isHookShortcut(id)) {
       window.addEventListener('keydown', onChordKey, true)
       window.addEventListener('keyup', onChordKey, true)
     } else window.addEventListener('keydown', onKey, true)
+    for (const type of MOUSE_EVENTS) window.addEventListener(type, onMouseEvent, true)
     return () => {
       clearTimeout(timer)
       if (pending) clearTimeout(pending)
       window.removeEventListener('keydown', onKey, true)
       window.removeEventListener('keydown', onChordKey, true)
       window.removeEventListener('keyup', onChordKey, true)
+      for (const type of MOUSE_EVENTS) window.removeEventListener(type, onMouseEvent, true)
       if (suspends) window.notula.dictation.suspendShortcut({ suspended: false })
     }
   }, [row.id, doubleTap, onSave, onCancel])
@@ -353,6 +422,21 @@ function Control(p: ControlProps): JSX.Element {
   )
 }
 
+/** The mouse buttons of a row's entries. */
+const rowButtons = (row: ShortcutRow): number[] =>
+  (row.entries ?? []).flatMap((e) => e.keys.split('+').map(mouseButtonOf)).filter((b): b is number => b !== null)
+
+/** A hook row holding a mouse button: what the button does while voice typing is on. */
+function mouseNote(row: ShortcutRow, hook: HookStatus | null): string | null {
+  const buttons = rowButtons(row)
+  if (!isHookShortcut(row.id) || !row.available || !buttons.length || hookBroken(hook)) return null
+  if (hook?.mouse === 'failed') return 'The mouse button shortcut isn’t working right now. Your key shortcuts still work.'
+  const far = isMac ? undefined : buttons.find((b) => b > WINDOWS_MOUSE_MAX)
+  if (far !== undefined) return `This computer can’t detect ${mouseButtonLabel(far).toLowerCase()}. Try the middle, back or forward button.`
+  if (isMac) return 'The mouse button also keeps its usual action.'
+  return 'While voice typing is on, the mouse button in this shortcut does nothing else.'
+}
+
 /** The row's note: an error, the helper, the conflict, or the derived defaults. */
 function noteFor(row: ShortcutRow, hook: HookStatus | null, error: string | null): { text: string; error: boolean } | null {
   if (error) return { text: error, error: true }
@@ -365,6 +449,7 @@ function noteFor(row: ShortcutRow, hook: HookStatus | null, error: string | null
 function Row({ error, ...p }: ControlProps & { error: string | null }): JSX.Element | null {
   if (!keysFor(p.row) && !p.row.multiple) return null
   const note = noteFor(p.row, p.hook, error)
+  const mouse = mouseNote(p.row, p.hook)
   return (
     <div className="settings-row ks-row">
       <div className="settings-row__text">
@@ -374,6 +459,7 @@ function Row({ error, ...p }: ControlProps & { error: string | null }): JSX.Elem
             {note.text}
           </div>
         ) : null}
+        {mouse ? <div className="settings-row__hint">{mouse}</div> : null}
       </div>
       <Control {...p} />
     </div>
@@ -411,6 +497,7 @@ export function StandaloneShortcut({ id }: { id: CustomisableShortcutId }): JSX.
   )
   if (!row) return null
   const note = noteFor(row, hook, error)
+  const mouse = mouseNote(row, hook)
   return (
     <div className="ks-standalone">
       <Control
@@ -428,6 +515,7 @@ export function StandaloneShortcut({ id }: { id: CustomisableShortcutId }): JSX.
           {note.text}
         </p>
       ) : null}
+      {mouse ? <p className="ks-standalone__note">{mouse}</p> : null}
     </div>
   )
 }
