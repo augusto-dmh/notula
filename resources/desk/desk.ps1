@@ -14,8 +14,9 @@
 #                  result: read | no-focus | secure | no-text | wide-selection
 #   modifiers   -> {held:bool}   (Shift, Ctrl, Alt, Win)
 #   paste       -> {sent:bool}   (Ctrl+V into the foreground window)
-#   fullscreen  -> {fullscreen:bool, x, y}  (the foreground window covers its whole monitor;
-#                  x, y = that monitor's top-left in physical pixels)
+#   watch-foreground {args:{on}} -> {}  starts or stops the full-screen watcher
+#                  (foreground-watch.cs), whose unsolicited lines have no id:
+#                  {"event":"fullscreen","full":bool,"x":int,"y":int}, once at start, then on change
 #   dblclick    -> {ms}          (the double-click interval, GetDoubleClickTime)
 #   duck        {args:{root, only?, factor?, ms?}} -> {entries:[{key, saved, set, device, process}]}
 #                  lowers every active app session on every output device outside root's
@@ -27,7 +28,8 @@
 #                  when given; only for the dev check, on its own player)
 #   unmute      -> {changed:bool} (the default output's mute; only for an older build's marker)
 # The script exits when its owner process is gone (Windows does not end children with
-# their parent) or when stdin closes, raising whatever it still holds lowered.
+# their parent) or when stdin closes, raising whatever it still holds lowered. The notula-desk
+# process starts it on the first request that needs it and closes its stdin after 10 idle minutes.
 
 param([int]$OwnerPid = 0)
 
@@ -38,7 +40,9 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 Add-Type -AssemblyName System.Windows.Forms
-Add-Type -TypeDefinition @'
+# The full-screen watcher's source joins this one: one compile for both (each compile costs a
+# compiler run, which is most of the script's cold start).
+$deskSource = @'
 using System;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -49,14 +53,7 @@ public static class NotulaDesk {
   [DllImport("user32.dll")] public static extern short GetAsyncKeyState(int vKey);
   public static string Title(IntPtr h) { var sb = new StringBuilder(512); GetWindowText(h, sb, 512); return sb.ToString(); }
   public static bool Held(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
-  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
-  [StructLayout(LayoutKind.Sequential)] public struct MONITORINFO { public int cbSize; public RECT rcMonitor; public RECT rcWork; public uint dwFlags; }
-  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
-  [DllImport("user32.dll")] public static extern IntPtr MonitorFromWindow(IntPtr h, uint flags);
-  [DllImport("user32.dll")] public static extern bool GetMonitorInfo(IntPtr m, ref MONITORINFO mi);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr h, StringBuilder s, int n);
-  [DllImport("user32.dll")] public static extern IntPtr GetShellWindow();
-  [DllImport("user32.dll")] public static extern IntPtr GetDesktopWindow();
   [DllImport("user32.dll", EntryPoint = "GetWindowLongW")] public static extern int GetWindowLong(IntPtr h, int index);
   // ES_MULTILINE (0x4) is an edit-class style bit, so only edit windows are read; -1 = unknown.
   public static int EditMultiline(IntPtr h) {
@@ -65,22 +62,12 @@ public static class NotulaDesk {
     if (cls.ToString().IndexOf("edit", StringComparison.OrdinalIgnoreCase) < 0) return -1;
     return (GetWindowLong(h, -16) & 0x4) != 0 ? 1 : 0;
   }
-  // The monitor's top-left when the foreground window covers it entirely (not the desktop or the shell).
-  public static int[] FullscreenMonitor() {
-    IntPtr h = GetForegroundWindow();
-    if (h == IntPtr.Zero || h == GetShellWindow() || h == GetDesktopWindow()) return null;
-    var cls = new StringBuilder(64); GetClassName(h, cls, 64);
-    string c = cls.ToString();
-    if (c == "Progman" || c == "WorkerW" || c == "Shell_TrayWnd") return null;
-    RECT r; if (!GetWindowRect(h, out r)) return null;
-    var mi = new MONITORINFO(); mi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
-    if (!GetMonitorInfo(MonitorFromWindow(h, 2), ref mi)) return null;
-    var m = mi.rcMonitor;
-    if (r.Left <= m.Left && r.Top <= m.Top && r.Right >= m.Right && r.Bottom >= m.Bottom) return new int[] { m.Left, m.Top };
-    return null;
-  }
+}
+public static class NotulaDeskTime {
+  [DllImport("user32.dll")] public static extern uint GetDoubleClickTime();
 }
 '@
+Add-Type -TypeDefinition ($deskSource + [Environment]::NewLine + [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot 'foreground-watch.cs')))
 
 # Other apps' audio (Core Audio). Optional: without it, duck, unduck, levels and unmute fail.
 # Ducking lowers each app's own session volume on every active output device, so headphones
@@ -475,13 +462,6 @@ public static class NotulaDuck {
   $script:AudioOk = $true
 } catch {}
 
-Add-Type -TypeDefinition @'
-using System.Runtime.InteropServices;
-public static class NotulaDeskTime {
-  [DllImport("user32.dll")] public static extern uint GetDoubleClickTime();
-}
-'@
-
 function Reply($obj) {
   [Console]::Out.WriteLine(($obj | ConvertTo-Json -Compress -Depth 5))
   [Console]::Out.Flush()
@@ -660,9 +640,9 @@ while ($true) {
         if (-not $script:AudioOk) { throw "audio unavailable" }
         $r = @{ changed = [bool][NotulaAudio]::SetMute($false) }
       }
-      'fullscreen' {
-        $m = [NotulaDesk]::FullscreenMonitor()
-        if ($null -eq $m) { $r = @{ fullscreen = $false } } else { $r = @{ fullscreen = $true; x = $m[0]; y = $m[1] } }
+      'watch-foreground' {
+        if ([bool]$req.args.on) { [Notula.Desk.ForegroundWatch]::Start() } else { [Notula.Desk.ForegroundWatch]::Stop() }
+        $r = @{}
       }
       default { throw "unknown op" }
     }
@@ -674,6 +654,7 @@ while ($true) {
   }
 }
 
+[Notula.Desk.ForegroundWatch]::Stop()
 if ($script:AudioOk) {
   try {
     [void][NotulaDuck]::Unduck($null, $null, $null, 100)

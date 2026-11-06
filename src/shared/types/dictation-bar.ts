@@ -80,8 +80,7 @@ export const DICTATION_BAR_LIMITS = {
   /** The expand's longest transition (the record button's 200 ms spring), plus a frame. */
   expandSettleMs: 210,
   errorMs: 4_000,
-  snoozeMs: 3_600_000,
-  fullscreenPollMs: 2_000
+  snoozeMs: 3_600_000
 } as const
 
 /**

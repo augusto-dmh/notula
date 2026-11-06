@@ -7,9 +7,11 @@
 //   (the helper is not started); a helper that fails before `ready` is `helper-failed`; one that
 //   dies or reports `lost` afterwards is `lost` and is restarted (up to 3 times in a row).
 // - The helper is told which keys the chords use and, while a dictation runs, to report Esc.
-// - Double tap waits the OS double-click interval (the desk helper's `dblclick`, 400 ms when it
-//   can't say). When keys stop arriving for 2 s while some are held and the OS reports no
-//   modifier down, the machine forgets them and re-arms (a lock screen eats key-ups).
+// - Double tap waits the OS double-click interval (the hook's ready line carries it; 400 ms when
+//   it can't say). When keys stop arriving for 2 s while some are held and the OS reports no
+//   modifier down, the machine forgets them and re-arms (a lock screen eats key-ups). The hook
+//   process answers that question on Windows (`modifiers`), so a held key never starts the desk
+//   helper's ops script; the desk helper answers only while the hook is not up.
 // - While a paste is watched (./observe.ts), the helper reports Return and Tab as `commit`.
 // - Mouse buttons (`mouse4` …) are keys to the chord machine. The helper is told which ones the
 //   chords use (`mouse` in its config; on Windows only 3–5, the ones its events can name) and
@@ -31,6 +33,8 @@ const READY_MS = 20_000
 const RETRY_MS = 5_000
 const MAX_RETRIES = 3
 const STALE_KEYS_MS = 2_000
+/** The hook's answer to `modifiers`; it reads one OS key state, so this is generous. */
+const MODIFIERS_MS = 500
 const DOUBLE_TAP_FALLBACK_MS = 400
 
 export class HookShortcuts {
@@ -52,6 +56,8 @@ export class HookShortcuts {
   private mouseOn = false
   private mouseFailed = false
   private unlockWatched = false
+  /** Waiting for the hook's `modifiers` answer. */
+  private modifiersWaiter: ((held: boolean | null) => void) | null = null
   /** Return or Tab while a paste is watched. */
   onCommit: (() => void) | null = null
   status: HookStatus = { available: false }
@@ -164,10 +170,26 @@ export class HookShortcuts {
     if (!this.machine.held.length || Date.now() - this.lastKeyAt < STALE_KEYS_MS) return
     if (this.machine.held.every((k) => mouseButtonOf(k) !== null)) return
     this.lastKeyAt = Date.now()
-    void this.desk.modifiersHeld().then((held) => {
+    void this.modifiersHeld().then((held) => {
       if (held !== false || !this.machine.held.length || Date.now() - this.lastKeyAt < STALE_KEYS_MS - 100) return
       log('info', 'dictation-bar:hook-rearmed', { held: this.machine.held.length })
       this.machine = rearm(this.machine)
+    })
+  }
+
+  /** The OS's modifier state: from the hook process while it runs (Windows), else the desk helper. */
+  private modifiersHeld(): Promise<boolean | null> {
+    if (process.platform !== 'win32' || !this.ready) return this.desk.modifiersHeld()
+    this.modifiersWaiter?.(null)
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => done(null), MODIFIERS_MS)
+      const done = (held: boolean | null): void => {
+        clearTimeout(timer)
+        if (this.modifiersWaiter === done) this.modifiersWaiter = null
+        resolve(held)
+      }
+      this.modifiersWaiter = done
+      this.desk.sendHook({ op: 'modifiers' })
     })
   }
 
@@ -197,18 +219,19 @@ export class HookShortcuts {
       return
     }
     switch (m['event']) {
-      case 'ready':
+      case 'ready': {
         if (this.readyTimer) clearTimeout(this.readyTimer)
         this.ready = true
         this.sendConfig()
         this.setStatus({ available: true })
         if (!this.staleTimer) this.staleTimer = setInterval(() => this.checkStale(), 1_000)
-        if (process.platform === 'win32') {
-          void this.desk.ask('dblclick', 1_500).then((r) => {
-            const ms = Number(r?.['ms'])
-            this.doubleTapMs = Number.isFinite(ms) && ms >= 100 && ms <= 5_000 ? ms : DOUBLE_TAP_FALLBACK_MS
-          })
-        }
+        // Windows' ready line carries the double-click interval.
+        const ms = Number(m['dblclick'])
+        this.doubleTapMs = Number.isFinite(ms) && ms >= 100 && ms <= 5_000 ? ms : DOUBLE_TAP_FALLBACK_MS
+        return
+      }
+      case 'modifiers':
+        this.modifiersWaiter?.(typeof m['held'] === 'boolean' ? m['held'] : null)
         return
       case 'commit':
         this.onCommit?.()

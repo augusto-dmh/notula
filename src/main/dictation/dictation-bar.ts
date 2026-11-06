@@ -4,8 +4,8 @@
 // what the bar adds.
 //
 // - Shown while `dictationBar.enabled` is on inside the armed Voice typing gate, unless snoozed
-//   (`dictationBar.snoozeUntil`) or the foreground window fills the bar's display (polled through
-//   notula-desk every 2 s). A dictation in progress always shows.
+//   (`dictationBar.snoozeUntil`) or the foreground window fills the bar's display (an OS event
+//   watcher through notula-desk, `Desk.watchFullscreen`). A dictation in progress always shows.
 // - Placement: bottom centre of the primary display's work area (the window's bottom edge; the
 //   bar draws 12 DIP above it), plus a per-display x offset kept in `<userData>/dictation-bar.json`
 //   (main-local, never synced). Drag is horizontal; double-click resets the offset.
@@ -49,7 +49,7 @@ export class DictationBar {
   private rects: DictationBarRect[] = []
   private dragging: { startX: number; startScreenX: number } | null = null
   private fullscreen = false
-  private pollTimer: ReturnType<typeof setInterval> | null = null
+  private trackingFullscreen = false
   private snoozeTimer: ReturnType<typeof setTimeout> | null = null
   private capture: { noteId: string; since: string } | null = null
   private captureReady: DictationBarCaptureReady = 'ready'
@@ -191,7 +191,7 @@ export class DictationBar {
     return up
   }
 
-  /** Timers that follow the settings: the snooze expiry and the full-screen poll. */
+  /** What follows the settings: the snooze expiry and the full-screen tracking. */
   private schedule(): void {
     if (this.snoozeTimer) clearTimeout(this.snoozeTimer)
     this.snoozeTimer = null
@@ -199,19 +199,20 @@ export class DictationBar {
     if (this.enabled() && until !== null && until > Date.now()) {
       this.snoozeTimer = setTimeout(() => this.refresh(), Math.min(until - Date.now() + 50, 2_147_000_000))
     }
-    const poll = this.enabled() && !this.snoozed() && process.platform === 'win32'
-    if (poll && !this.pollTimer) {
-      this.pollTimer = setInterval(() => void this.pollFullscreen(), BAR.fullscreenPollMs)
-    } else if (!poll && this.pollTimer) {
-      clearInterval(this.pollTimer)
-      this.pollTimer = null
+    const track = this.enabled() && !this.snoozed() && process.platform === 'win32'
+    if (track && !this.trackingFullscreen) {
+      this.trackingFullscreen = true
+      this.d.desk.watchFullscreen((at) => this.onFullscreen(at))
+    } else if (!track && this.trackingFullscreen) {
+      this.trackingFullscreen = false
+      this.d.desk.watchFullscreen(null)
       this.fullscreen = false
     }
     this.refresh()
   }
 
-  private async pollFullscreen(): Promise<void> {
-    const at = await this.d.desk.fullscreen().catch(() => null)
+  /** The foreground window fills the monitor at `at` (physical pixels), or nothing fills one. */
+  private onFullscreen(at: { x: number; y: number } | null): void {
     let full = false
     if (at) {
       const dip = screen.screenToDipPoint({ x: at.x + 1, y: at.y + 1 })

@@ -1152,7 +1152,7 @@ export function registerDictation(ctx: MainContext): void {
         registerArmed()
         registerRecord(effectiveOf('recordToggle'))
       }
-      void desk.start().then(() => clearStaleDuck())
+      clearStaleDuck()
       configureHook()
       bar.setArmed(true)
       warmSoon(app.isReady() && settingsSeen ? WARM_CHANGE_MS : WARM_START_MS)

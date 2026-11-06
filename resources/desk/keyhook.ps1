@@ -21,8 +21,13 @@
 #   {"op":"active","on":true}          Esc is reported only while a dictation is active
 #   {"op":"watch","on":true}           Return and Tab are reported as commits while a paste is watched
 #   {"op":"suspend","on":true}         swallow nothing (a shortcut is being recorded)
+#   {"op":"modifiers"}                 asks whether Shift, Ctrl, Alt or Win is down (the OS's key state)
+#   {"op":"watch-foreground","on":true}  runs the dictation bar's full-screen watcher
+#                                      (foreground-watch.cs) on its own thread, never the hook's
 # JSON lines on stdout
-#   {"event":"ready"}                  the hook is installed
+#   {"event":"ready","dblclick":500}   the hook is installed; dblclick = the OS double-click interval, ms
+#   {"event":"modifiers","held":false} the answer to "modifiers"
+#   {"event":"fullscreen","full":true,"x":0,"y":0}  from the watcher: once at start, then on change
 #   {"event":"key","k":"ctrl_r","d":1} a transition (d = 1 down, 0 up), never a repeat
 #   {"event":"lost"}                   re-installing the hook failed
 #   {"event":"commit","k":"enter"}     Return or Tab ("tab") went down while watching
@@ -50,7 +55,8 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::InputEncoding = [System.Text.Encoding]::UTF8
 
-Add-Type -TypeDefinition @'
+# The full-screen watcher's source joins this one: one compile for both.
+$hookSource = @'
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -86,6 +92,7 @@ public static class NotulaKeyHook {
   [DllImport("user32.dll")] static extern short GetAsyncKeyState(int vk);
   [DllImport("kernel32.dll")] static extern IntPtr GetModuleHandle(string name);
   [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+  [DllImport("user32.dll")] static extern uint GetDoubleClickTime();
 
   static readonly HookProc proc = Callback;
   static readonly HookProc mouseProc = MouseCallback;
@@ -496,8 +503,17 @@ public static class NotulaKeyHook {
   public static void SetActive(bool on) { active = on; }
 
   public static void SetWatching(bool on) { watching = on; }
+
+  public static int DoubleClickMs() { return (int)GetDoubleClickTime(); }
+
+  /** Shift, Ctrl, Alt or Win down by the OS's key state (read off the hook thread). */
+  public static bool ModifiersHeld() {
+    foreach (var vk in new int[] { 0x10, 0x11, 0x12, 0x5B, 0x5C }) { if ((GetAsyncKeyState(vk) & 0x8000) != 0) return true; }
+    return false;
+  }
 }
 '@
+Add-Type -TypeDefinition ($hookSource + [Environment]::NewLine + [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot 'foreground-watch.cs')))
 
 [NotulaKeyHook]::WatchOwner($OwnerPid)
 [NotulaKeyHook]::StartWriter()
@@ -506,7 +522,7 @@ if (-not [NotulaKeyHook]::Start()) {
   [Console]::Out.Flush()
   exit 2
 }
-[NotulaKeyHook]::Send('{"event":"ready"}')
+[NotulaKeyHook]::Send('{"event":"ready","dblclick":' + [NotulaKeyHook]::DoubleClickMs() + '}')
 
 $running = $true
 while ($running) {
@@ -526,6 +542,8 @@ while ($running) {
       'active' { [NotulaKeyHook]::SetActive([bool]$req.on) }
       'watch' { [NotulaKeyHook]::SetWatching([bool]$req.on) }
       'suspend' { [NotulaKeyHook]::SetSuspended([bool]$req.on) }
+      'modifiers' { [NotulaKeyHook]::Send('{"event":"modifiers","held":' + ([string][NotulaKeyHook]::ModifiersHeld()).ToLowerInvariant() + '}') }
+      'watch-foreground' { if ([bool]$req.on) { [Notula.Desk.ForegroundWatch]::Start() } else { [Notula.Desk.ForegroundWatch]::Stop() } }
       'stop' { $running = $false }
     }
   } catch {
@@ -533,6 +551,7 @@ while ($running) {
   }
 }
 
+[Notula.Desk.ForegroundWatch]::Stop()
 [NotulaKeyHook]::Stop()
 Start-Sleep -Milliseconds 100
 exit 0
