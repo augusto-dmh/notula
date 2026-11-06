@@ -37,6 +37,9 @@ function TranscriptOffGlyph(): JSX.Element {
   )
 }
 
+/** The pill's description while paused for privacy: its own label only says what a click does. */
+export const PAUSED_NOTE_ID = 'bubble-paused-note'
+
 /** The glyph, the meter (or spinner, or transcript-off glyph) and the warning badge. */
 export function PillFace({ snapshotButton }: { snapshotButton: boolean }): JSX.Element {
   const { document: doc, offRecord: card } = useBubbleState()
@@ -79,7 +82,11 @@ export function PillFace({ snapshotButton }: { snapshotButton: boolean }): JSX.E
           !
         </span>
       ) : null}
-      {offRecord ? <span className="bubble-sr">Transcript paused for privacy</span> : null}
+      {offRecord ? (
+        <span className="bubble-sr" id={PAUSED_NOTE_ID}>
+          Transcript paused for privacy
+        </span>
+      ) : null}
     </>
   )
 }

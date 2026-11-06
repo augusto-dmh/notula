@@ -12,7 +12,7 @@ import { mountCaptureMirror } from '../capture/store'
 import { TranscriptionRulesBubbleBanner } from '../transcription-rules'
 import { BubbleCard } from './BubbleCards'
 import { DockedBubble } from './BubbleDock'
-import { CLICK_SLOP_PX, PillFace } from './PillFace'
+import { CLICK_SLOP_PX, PAUSED_NOTE_ID, PillFace } from './PillFace'
 import { useSecondaryWindow } from './secondary'
 import { useBubbleState } from './state'
 import './bubble.css'
@@ -53,6 +53,7 @@ function ClassicPill(): JSX.Element {
       className={`bubble-pill${hovered ? ' is-hovered' : ''}${pressed ? ' is-pressed' : ''}${snapshots ? ' has-snapshot' : ''}`}
       role="button"
       aria-label="Open Notula"
+      aria-describedby={PAUSED_NOTE_ID}
       title="Open Notula"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}

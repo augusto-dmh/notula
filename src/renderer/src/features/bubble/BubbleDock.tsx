@@ -25,7 +25,7 @@ import type { Rect } from '@shared/types/common'
 import { useScreenSnapshots } from '../snapshots'
 import { BubbleCard } from './BubbleCards'
 import { TranscriptBody } from './BubblePanels'
-import { CLICK_SLOP_PX, PillFace } from './PillFace'
+import { CLICK_SLOP_PX, PAUSED_NOTE_ID, PillFace } from './PillFace'
 import { useBubbleState } from './state'
 
 const box = (r: Rect): CSSProperties => ({ position: 'absolute', left: r.x, top: r.y, width: r.width, height: r.height })
@@ -97,6 +97,7 @@ function DockPill({ docked, expanded, closeness }: { docked: BubbleDocked; expan
       style={style}
       role="button"
       aria-label="Open Notula"
+      aria-describedby={PAUSED_NOTE_ID}
       title="Open Notula"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
