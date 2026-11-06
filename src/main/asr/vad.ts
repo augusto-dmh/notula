@@ -5,7 +5,7 @@
 // A 512-sample hop (32 ms) is speech when its RMS reaches the source's speech threshold.
 // A segment opens on speech with up to 8 hops of pre-roll and closes after 25 silent hops
 // (800 ms) or at 25 s. Segments with fewer than 6 speech hops are discarded. While a
-// segment is open, a partial is offered at most every 31 hops (about 1 s) once 6 speech
+// segment is open, a partial is offered at most every 62 hops (about 2 s) once 6 speech
 // hops are in.
 //
 // Noise floor: the threshold follows the source's noise floor instead of a fixed
@@ -92,7 +92,7 @@ export const MAX_SEGMENT_SAMPLES = 25 * SAMPLE_RATE
 /** Quiet speech only: past this length a segment closes at the next pause. */
 export const SOFT_MAX_SEGMENT_SAMPLES = 20 * SAMPLE_RATE
 export const MIN_SPEECH_HOPS = 6
-export const PARTIAL_EVERY_HOPS = 31
+export const PARTIAL_EVERY_HOPS = 62
 
 export interface Segment {
   id: number

@@ -60,6 +60,8 @@ export interface AsrFinalizeStats {
   decodedAudioMs: number
   totalDecodeMs: number
   totalPartialDecodeMs: number
+  /** The audio sent to partial decodes, in ms. */
+  partialAudioMs?: number
   maxDecodeMs: number
 }
 

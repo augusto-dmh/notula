@@ -6,8 +6,9 @@
 // every model file before loading.
 //
 // Audio arrives as s16le batches. The energy VAD (vad.ts) cuts segments; each closed
-// segment is decoded once as a final, and the open one is decoded as a partial at
-// most every ~1 s, with at most one partial in flight. Decodes run one at a
+// segment is decoded once as a final, and the open one is decoded as a partial about
+// every 2 s, with at most one partial in flight; a Parakeet partial reads only the newest
+// 8 s and is spliced onto the last live line (partials.ts). Decodes run one at a
 // time, finals first, off the message loop (decodeAsync), so pings stay answered.
 //
 // Whisper's hallucination guards: it only ever sees the VAD's speech segments,
@@ -31,6 +32,7 @@
 import type { OfflineRecognizer, OfflineRecognizerConfig, OfflineRecognizerResult } from 'sherpa-onnx-node'
 import { normalizeGain } from './gain'
 import { foreignScriptShare, LanguageLock } from './language-lock'
+import { partialWaitMs, partialWindow, splicePartial, type LiveLine } from './partials'
 import type { AsrFinalizeStats, AsrToMain, AsrWorkerArgs, AsrWorkerWord, MainToAsr, WorkerLog } from './protocol'
 import { SAMPLE_RATE, Segmenter, type Segment } from './vad'
 import { verifyFilesSync } from './verify'
@@ -45,8 +47,6 @@ const WORD_END_EXTENSION_S = 2
 const DEFAULT_TOKEN_S = 0.08
 /** Whisper: sherpa's default tail padding (1,000 feature frames). */
 const WHISPER_TAIL_PADDINGS = 1000
-/** Whisper partials are a full decode of the open segment: at most one per this. */
-const WHISPER_PARTIAL_EVERY_MS = 3_000
 /** A phrase of up to this many words, repeated back to back, is a loop. */
 const LOOP_MAX_PHRASE = 8
 /** An output that a loop shrank to this share of its words or less is dropped. */
@@ -214,6 +214,10 @@ class Engine {
   private lastProgressMs = Number.NEGATIVE_INFINITY
   private idleWaiters: (() => void)[] = []
   private lastPartialAt = 0
+  /** Wakes the pump when a waiting snapshot's floor has passed. */
+  private partialTimer: ReturnType<typeof setTimeout> | null = null
+  /** The live line last sent for the open segment, which the next windowed partial extends. */
+  private live: (LiveLine & { id: number }) | null = null
   private gainLogged = false
   /** The current session's start sample while its first final is not yet logged. */
   private sessionFrom: number | null = null
@@ -223,6 +227,7 @@ class Engine {
     decodedAudioMs: 0,
     totalDecodeMs: 0,
     totalPartialDecodeMs: 0,
+    partialAudioMs: 0,
     maxDecodeMs: 0
   }
 
@@ -239,6 +244,7 @@ class Engine {
       final: (seg) => {
         this.finals.push(seg)
         if (this.partial?.id === seg.id) this.partial = null
+        if (this.live?.id === seg.id) this.live = null
       },
       partial: (seg) => {
         // Only the newest snapshot of the open segment is worth decoding.
@@ -266,6 +272,8 @@ class Engine {
     this.segmenter.startSession()
     this.partial = null
     this.lastPartialAt = 0
+    this.live = null
+    this.clearPartialTimer()
     this.gainLogged = false
     this.sessionFrom = this.segmenter.position
     if (this.lock) {
@@ -278,6 +286,8 @@ class Engine {
   async finalize(): Promise<AsrFinalizeStats> {
     this.segmenter.flush()
     this.partial = null
+    this.live = null
+    this.clearPartialTimer()
     void this.pump()
     if (this.busy || this.finals.length) await new Promise<void>((r) => this.idleWaiters.push(r))
     return this.stats
@@ -297,10 +307,16 @@ class Engine {
         }
         const p = this.partial
         this.partial = null
-        if (p && this.segmenter.isOpen(p.id) && !(this.whisper && Date.now() - this.lastPartialAt < WHISPER_PARTIAL_EVERY_MS)) {
-          this.lastPartialAt = Date.now()
-          await this.decode(p, false)
-          continue
+        if (p && this.segmenter.isOpen(p.id)) {
+          const wait = partialWaitMs(this.lastPartialAt, Date.now(), this.whisper ? 'whisper' : 'parakeet')
+          if (!wait) {
+            this.lastPartialAt = Date.now()
+            await this.decode(p, false)
+            continue
+          }
+          // After a backlog the newest snapshot waits for the floor (a newer one replaces it).
+          this.partial = p
+          this.armPartialTimer(wait)
         }
         break
       }
@@ -312,9 +328,25 @@ class Engine {
     }
   }
 
-  private async decode(seg: Segment, final: boolean): Promise<void> {
+  private armPartialTimer(ms: number): void {
+    if (this.partialTimer) return
+    this.partialTimer = setTimeout(() => {
+      this.partialTimer = null
+      void this.pump()
+    }, ms)
+  }
+
+  private clearPartialTimer(): void {
+    if (this.partialTimer) clearTimeout(this.partialTimer)
+    this.partialTimer = null
+  }
+
+  /** `whole`: a partial that reads the whole open segment, when a windowed one can't be placed. */
+  private async decode(seg: Segment, final: boolean, whole = false): Promise<void> {
+    const win =
+      final || whole ? { startSample: seg.startSample, samples: seg.samples } : partialWindow(seg, this.whisper ? 'whisper' : 'parakeet', SAMPLE_RATE)
     const stream = this.rec.createStream()
-    const { samples, gain } = normalizeGain(seg.samples)
+    const { samples, gain } = normalizeGain(win.samples)
     if (gain > 1 && !this.gainLogged) {
       this.gainLogged = true
       log('info', 'asr-worker:gain-normalized', { final, segmentId: seg.id, gain: Math.round(gain * 10) / 10 })
@@ -345,6 +377,7 @@ class Engine {
     } else {
       this.stats.partials++
       this.stats.totalPartialDecodeMs += ms
+      this.stats.partialAudioMs = (this.stats.partialAudioMs ?? 0) + (win.samples.length * 1000) / SAMPLE_RATE
     }
     this.stats.maxDecodeMs = Math.max(this.stats.maxDecodeMs, ms)
     // A partial for a segment that has closed since is discarded.
@@ -358,13 +391,29 @@ class Engine {
       text = kept
     }
     if (this.lock) text = this.applyLock(seg, final, text, r.lang, audioMs)
+    let words: AsrWorkerWord[]
+    if (this.whisper) words = evenWords(text, startMs, endMs)
+    else if (final) words = tokensToWords(r, startMs, endMs)
+    else {
+      const windowStartMs = (win.startSample * 1000) / SAMPLE_RATE
+      const timed = (r.timestamps ?? []).length === (r.tokens ?? []).length
+      const live = this.live?.id === seg.id ? this.live : null
+      const line = splicePartial(live, tokensToWords(r, windowStartMs, endMs), timed, windowStartMs, startMs)
+      if (line === 'whole-segment') {
+        await this.decode(seg, false, true)
+        return
+      }
+      words = line.words
+      if (line.spliced) text = words.map((w) => w.w).join(' ')
+      this.live = { id: seg.id, words, endMs }
+    }
     send({
       type: final ? 'segment' : 'partial',
       segmentId: seg.id,
       text,
       startMs: Math.round(startMs),
       endMs: Math.round(endMs),
-      words: this.whisper ? evenWords(text, startMs, endMs) : tokensToWords(r, startMs, endMs)
+      words
     })
   }
 
