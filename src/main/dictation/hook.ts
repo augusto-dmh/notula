@@ -16,8 +16,12 @@
 //   holds a mouse hook only while that list is non-empty; it reports the hook going on and off
 //   (`dictation-bar:hook-mouse`), and a failed install marks `HookStatus.mouse` without touching
 //   the key chords. While a shortcut is recorded the helper is told to swallow nothing.
+// - The lock screen eats a held button's release, and a press the helper swallowed never shows in
+//   the OS's key state, so neither the helper nor the stale check can see it end: on unlock, the
+//   buttons the machine still holds are released. The helper settles its own mark at the
+//   button's next press.
 
-import { systemPreferences } from 'electron'
+import { powerMonitor, systemPreferences } from 'electron'
 import { mouseButtonOf, WINDOWS_MOUSE_MAX, type HookStatus } from '@shared/types/dictation-bar'
 import { log } from '../log'
 import { IDLE, rearm, sessionEnded, sessionStartedElsewhere, setSuspended, step, type ChordConfig, type ChordEffect, type ChordState } from './chord-machine'
@@ -47,6 +51,7 @@ export class HookShortcuts {
   private mouseButtons: number[] = []
   private mouseOn = false
   private mouseFailed = false
+  private unlockWatched = false
   /** Return or Tab while a paste is watched. */
   onCommit: (() => void) | null = null
   status: HookStatus = { available: false }
@@ -92,6 +97,10 @@ export class HookShortcuts {
 
   private async start(): Promise<void> {
     if (this.running || !this.cfg) return
+    if (!this.unlockWatched) {
+      this.unlockWatched = true
+      powerMonitor.on('unlock-screen', () => this.releaseButtonsAfterUnlock())
+    }
     this.running = true
     this.ready = false
     const ok = await this.desk.startHook()
@@ -160,6 +169,13 @@ export class HookShortcuts {
       log('info', 'dictation-bar:hook-rearmed', { held: this.machine.held.length })
       this.machine = rearm(this.machine)
     })
+  }
+
+  private releaseButtonsAfterUnlock(): void {
+    const buttons = this.ready ? this.machine.held.filter((k) => mouseButtonOf(k) !== null) : []
+    if (!buttons.length) return
+    log('info', 'dictation-bar:hook-unlock-released', { buttons: buttons.length })
+    for (const k of buttons) this.onMessage({ event: 'key', k, d: 0 })
   }
 
   private onMessage(m: Record<string, unknown>): void {

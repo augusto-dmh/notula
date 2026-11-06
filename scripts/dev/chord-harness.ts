@@ -280,6 +280,13 @@ const CASES: Case[] = [
     mode: 'idle'
   },
   {
+    name: 'mouse4 released on unlock; the helper reports the same up at the next press: a new hold',
+    cfg: MOUSE,
+    events: [d('mouse4', 0), u('mouse4', 4000), u('mouse4', 9000), d('mouse4', 9000), u('mouse4', 9800)],
+    effects: ['start-hold', 'finish', 'start-hold', 'finish'],
+    mode: 'idle'
+  },
+  {
     name: 'ctrl + mouse5, the Ctrl release lost: re-armed; the late button up ends it, alone it fires nothing',
     cfg: { hold: [['ctrl', 'mouse5']], handsFree: [], tapMs: 150 },
     events: [d('ctrl', 0), d('mouse5', 10), ['@rearm'], u('mouse5', 4000), d('mouse5', 5000), u('mouse5', 5600)],
