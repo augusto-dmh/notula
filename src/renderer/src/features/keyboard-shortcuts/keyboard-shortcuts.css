@@ -124,13 +124,19 @@
 
 /* Three entries (mouse buttons are wide) wrap onto a second line before they squeeze the
    row's label into a narrow column. */
-.settings-row__control.ks-list {
+.settings-row__control.ks-list,
+.settings-row__control:has(> .ks-standalone > .ks-list) {
   flex: 0 1 auto;
   min-width: 0;
 }
 
-.settings-row:has(> .ks-list) > .settings-row__text {
+.settings-row:has(> .ks-list) > .settings-row__text,
+.settings-row:has(> .settings-row__control > .ks-standalone > .ks-list) > .settings-row__text {
   flex: 1 0 9rem;
+}
+
+.ks-standalone > .ks-list {
+  max-width: 100%;
 }
 
 .ks-entry {
