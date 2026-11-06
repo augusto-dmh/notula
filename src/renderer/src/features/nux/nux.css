@@ -92,6 +92,11 @@
   animation: nux-in var(--dur) var(--ease);
 }
 
+/* A meeting card (privacy, inactivity, resume) sits in the same spot and asks for an answer. */
+body:has(.nt-prompt-dock) .nux-pointer {
+  display: none;
+}
+
 .nux-pointer .nux-tip__title {
   margin-bottom: 3px;
 }
