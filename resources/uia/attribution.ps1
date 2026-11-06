@@ -23,7 +23,8 @@
 #             whose content can't be found, or a layout it doesn't recognise;
 #   self      the user's own view sits apart or is hidden;
 #   window    not the main meeting view (a mini or stand-in window): the marker still counts;
-#   version   fixed slot on a Zoom version not in $checkedZoomVersions;
+#   version   fixed slot on a Zoom version outside the window main passes from
+#             resources/uia/zoom-tile-order.json, or one that can't be read;
 #   idle      the view was read and nobody is talking (a muted first tile counts here).
 # The cause goes into a zoom-refusal-detail line, which main logs at debug level only.
 # The record's participantCount is the meeting's total as Zoom states it, or absent.
@@ -203,6 +204,7 @@ $state = @{
   view = $null          # Zoom: the last whole-window read (Zoom-View)
   lastViewMs = -100000
   lastDetail = ''
+  failed = $false       # this poll failed for a transient reason (a tree walk threw)
 }
 $clock = [System.Diagnostics.Stopwatch]::StartNew()
 
@@ -424,10 +426,42 @@ function Heuristic-Parse($tile) {
 
 # ---------- Zoom: the three methods and their refusals ----------
 
-# Fixed slot names only on versions it was checked against in a live window. Add a version here
-# after that check; until then fixed slot refuses with `version`.
-$checkedZoomVersions = @()
+# Fixed slot names only on Zoom versions inside the window it was checked against in a live window:
+# { min, max } from resources/uia/zoom-tile-order.json, passed by main with the selectors. Widening
+# it is a data edit there. No window (a missing or malformed file) trusts no version.
+$tileOrderWindow = if ($App -eq 'zoom' -and $selectors) { $selectors.zoomTileOrder } else { $null }
 $zoomVersion = ''
+
+# >>> tile-order window (scripts/dev/tile-order-window-check.ts runs this block on its own)
+# A version's leading numeric parts, '7.10.3 (12345)' gives 7, 10, 3; null when it has none.
+function Version-Parts([string]$v) {
+  if (-not $v) { return $null }
+  $m = [regex]::Match($v.Trim(), '^\d{1,9}(\.\d{1,9})*')
+  if (-not $m.Success) { return $null }
+  return ,([int64[]]@($m.Value.Split('.') | ForEach-Object { [int64]$_ }))
+}
+
+# Part by part, over the bound's own parts: a bound '7.4' covers every 7.4.x.
+function Compare-ToBound([int64[]]$v, [int64[]]$bound) {
+  for ($i = 0; $i -lt $bound.Count; $i++) {
+    $x = if ($i -lt $v.Count) { $v[$i] } else { 0 }
+    if ($x -lt $bound[$i]) { return -1 }
+    if ($x -gt $bound[$i]) { return 1 }
+  }
+  return 0
+}
+
+# Inclusive bounds; a null max is open-ended. An unreadable version or bound trusts nothing.
+function In-TileOrderWindow([string]$version, $window) {
+  if ($null -eq $window) { return $false }
+  $v = Version-Parts $version
+  $lo = Version-Parts ([string]$window.min)
+  if ($null -eq $v -or $null -eq $lo -or (Compare-ToBound $v $lo) -lt 0) { return $false }
+  if ($null -eq $window.max) { return $true }
+  $hi = Version-Parts ([string]$window.max)
+  return ($null -ne $hi -and (Compare-ToBound $v $hi) -le 0)
+}
+# <<< tile-order window
 $viewCap = 4000
 $zoomMarker = '^(?i)\s*(talking|speaking|active speaker)\s*:\s*(?<name>[^,]{1,80}?)\s*$'
 $zoomCount = '(?i)\bpartic(i)?pants?\b\D{0,24}?(?<n>\d{1,4})\b|\b(?<n>\d{1,4})\s+partic(i)?pants?\b'
@@ -510,7 +544,7 @@ function Refuse($z, [string]$class, [string]$detail) { $z.refusal = $class; $z.d
 function Zoom-Slot($z, $parts, $view, [IntPtr]$h) {
   if ($z.layout -eq 'grid') { return $z }
   if (-not (Is-MainView $h)) { return (Refuse $z 'window' 'not the main meeting view') }
-  if ($checkedZoomVersions -notcontains $zoomVersion) { return (Refuse $z 'version' 'fixed slot not checked on this version') }
+  if (-not (In-TileOrderWindow $zoomVersion $tileOrderWindow)) { return (Refuse $z 'version' 'fixed slot not checked on this version') }
   if ($null -eq $view.count) { return (Refuse $z 'mismatch' 'no participant count') }
   if ($view.count -lt 1 -or $view.count -gt 1000) { return (Refuse $z 'mismatch' 'implausible participant count') }
   if (@($parts | Where-Object { -not $_.name }).Count -gt 0) { return (Refuse $z 'mismatch' 'a tile without a name') }
@@ -595,10 +629,12 @@ function Poll {
     }
     if ($tiles.Count -eq 0) { throw 'no tiles left' }
   } catch {
-    # A tile left (someone hung up, the layout changed): find them again now.
+    # A tile left (someone hung up, the layout changed): find them again next poll. A transient
+    # failure: the loop posts nothing for it.
     $state.container = $null
     $state.nextScanMs = 0
-    return (Roster @() $null $false $true 'no-tiles' $now)
+    $state.failed = $true
+    return $null
   }
   if ($App -eq 'zoom') {
     $parts = @(foreach ($t in $tiles) { Zoom-Parse $t })
@@ -684,6 +720,10 @@ if ($App -eq 'teams') { Write-Record ('{"event":"teams-speaker-monitor-version",
 # ---------- the loop ----------
 $owner = $null
 if ($OwnerPid -gt 0) { try { $owner = [System.Diagnostics.Process]::GetProcessById($OwnerPid) } catch { exit 0 } }
+# A poll that throws, or runs past this, is a transient failure: the last posted record stands
+# and nothing is posted, until the third in a row posts the blind record once.
+$pollLimitMs = [Math]::Max(2000, 4 * $IntervalMs)
+$transient = 0
 # Main stops the reader by closing stdin: a pending read completing with 0 bytes.
 $stdin = [Console]::OpenStandardInput()
 $buf = New-Object byte[] 256
@@ -697,13 +737,23 @@ while ($true) {
   }
   $started = $clock.ElapsedMilliseconds
   $line = $null
+  $state.failed = $false
   try {
     $line = Poll
   } catch {
     # A target that changed under us (closed window, rebuilt page): start over next poll.
     Reset-Target ([IntPtr]::Zero)
     $state.lastWindowsMs = -100000
+    $state.failed = $true
     Write-Record ('{"event":"reader-error","message":"' + (Esc $_.Exception.Message) + '"}')
+  }
+  if ($state.failed -or $clock.ElapsedMilliseconds - $started -gt $pollLimitMs) {
+    $line = $null
+    $transient++
+    if ($transient -eq 1 -or $transient -eq 3) { Write-Record ('{"event":"transient-failure","consecutive":' + $transient + '}') }
+    if ($transient -eq 3) { $line = Roster @() $null $false $true 'read-failed' (Now-Unix) }
+  } else {
+    $transient = 0
   }
   if ($line) {
     # The same roster is repeated at most once a second (main refreshes "last seen" with it).

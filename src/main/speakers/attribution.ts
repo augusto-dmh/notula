@@ -20,7 +20,10 @@
 // - Health: blind after 10 s without a record that sees tiles; a health line every 30 s, the
 //   rule's reason when it changes, and Zoom's reader states (zoom-state.ts), local log only.
 //   Names stay on local chunks.
+// - Zoom's fixed slot (tile order) is trusted only inside the version window in
+//   resources/uia/zoom-tile-order.json, read at each reader start and passed with the selectors.
 
+import { readFileSync } from 'node:fs'
 import { join, basename, dirname } from 'node:path'
 import { app, utilityProcess, type UtilityProcess } from 'electron'
 import type { PushChannel } from '@shared/ipc'
@@ -120,6 +123,34 @@ function devMicApps(): MicApp[] {
     .map((s) => s.trim())
     .filter(Boolean)
     .map((appId) => ({ appId, name: appId }))
+}
+
+/** Zoom versions whose fixed slot (tile order) is trusted: inclusive bounds, `max: null` open-ended. */
+interface TileOrderWindow {
+  min: string
+  max: string | null
+}
+
+const VERSION_BOUND = /^\d{1,9}(\.\d{1,9})*$/
+let tileOrderWarned = false
+
+/** resources/uia/zoom-tile-order.json, or null (trust no version) when missing or malformed; warned once. */
+function readTileOrderWindow(): TileOrderWindow | null {
+  try {
+    const raw: unknown = JSON.parse(readFileSync(resourcePath('uia/zoom-tile-order.json'), 'utf8'))
+    if (raw && typeof raw === 'object') {
+      const { min, max } = raw as Record<string, unknown>
+      const bound = (v: unknown): v is string => typeof v === 'string' && VERSION_BOUND.test(v)
+      if (bound(min) && (max === null || bound(max))) return { min, max }
+    }
+  } catch {
+    // Missing or not JSON: the same as malformed.
+  }
+  if (!tileOrderWarned) {
+    tileOrderWarned = true
+    log('warn', 'attribution:zoom-tile-order-unavailable', {})
+  }
+  return null
 }
 
 /** out/main/uia.js, from the main bundle (or a shared chunk next to it). */
@@ -294,7 +325,12 @@ export class AttributionService implements SystemAttribution {
       this.owner = null
       return
     }
-    const selectors = app === 'meet' ? (this.settings['attribution.meetSelectors'] ?? DEFAULT_MEET_SELECTORS) : {}
+    const selectors =
+      app === 'meet'
+        ? (this.settings['attribution.meetSelectors'] ?? DEFAULT_MEET_SELECTORS)
+        : app === 'zoom'
+          ? { zoomTileOrder: readTileOrderWindow() }
+          : {}
     const msg: MainToUia = {
       type: 'start',
       app,
@@ -434,6 +470,10 @@ export class AttributionService implements SystemAttribution {
       log('debug', 'attribution:reader-error', { app, message: str(r['message']) ?? '' })
       return
     }
+    if (event === 'transient-failure') {
+      log('info', 'attribution:transient-failure', { app, consecutive: typeof r['consecutive'] === 'number' ? r['consecutive'] : 0 })
+      return
+    }
     if (event === 'zoom-refusal-detail') {
       log('debug', 'attribution:zoom-refusal-detail', { refusal: str(r['refusal']) ?? '', detail: str(r['detail']) ?? '' })
       return
@@ -514,7 +554,26 @@ export class AttributionService implements SystemAttribution {
     })
     const count = r['participantCount']
     const change = d.zoomLog.record(state, now, typeof count === 'number' && Number.isFinite(count) ? count : null)
-    if (change) log('info', 'attribution:zoom-state', { from: change.from ?? '', to: change.to, layout: str(r['layout']) ?? '' })
+    if (change) {
+      log('info', 'attribution:zoom-state', {
+        from: change.from ?? '',
+        to: change.to,
+        layout: str(r['layout']) ?? '',
+        selfNameSource: this.selfNameSource(d, r)
+      })
+    }
+  }
+
+  /** Where the user's own tile was known from: their stored name matched, a name Zoom gave, or neither. Never the name. */
+  private selfNameSource(d: Detector, r: Record<string, unknown>): 'profile' | 'app' | 'none' {
+    const profile = norm(this.settings['profile.name'])
+    if (profile) {
+      const names = (Array.isArray(r['participants']) ? r['participants'] : []).map((p: unknown) =>
+        p && typeof p === 'object' ? str((p as Record<string, unknown>)['name']) : null
+      )
+      if ([d.selfName, ...names].some((n) => norm(n) === profile)) return 'profile'
+    }
+    return d.selfName ? 'app' : 'none'
   }
 
   private refreshState(d: Detector, now: number): void {
