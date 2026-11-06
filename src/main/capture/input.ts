@@ -189,10 +189,14 @@ export class InputSelection {
     return { preference: this.effective(), autoDeviceId: this.autoPin() ?? AUTO_DEVICE_ID }
   }
 
-  /** The pin to put in the start command; it becomes the applied pin. */
+  /**
+   * The pin to put in the start command; it becomes the applied pin. A stored device is pinned
+   * even before the first list (the engine enumerates only once a capture runs); one that is
+   * gone falls back once to the default in the engine.
+   */
   startPin(): string | null {
     const eff = this.effective()
-    this.appliedPin = eff.mode === 'physical-device' ? (this.devices ? eff.deviceId : null) : this.autoPin()
+    this.appliedPin = eff.mode === 'physical-device' ? eff.deviceId : this.autoPin()
     return this.appliedPin
   }
 

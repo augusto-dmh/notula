@@ -91,16 +91,23 @@ export class CaptureEngine {
 
   constructor(private readonly send: (e: CaptureEngineEvent) => void) {}
 
-  /** Registers with main: `initialized`, then the device list. */
+  /**
+   * Registers with main: `initialized`. No device work until a capture starts: enumerating or
+   * listening for device changes brings up the browser's media device services, which then stay up.
+   * The list is reported after `started` and at stop, and device changes are followed while one runs.
+   */
   init(): void {
-    navigator.mediaDevices.addEventListener('devicechange', this.onDeviceChange)
     this.send({ type: 'initialized' })
-    void this.reportDevices()
+  }
+
+  private listenDevices(on: boolean): void {
+    if (on) navigator.mediaDevices.addEventListener('devicechange', this.onDeviceChange)
+    else navigator.mediaDevices.removeEventListener('devicechange', this.onDeviceChange)
   }
 
   dispose(): void {
     this.disposed = true
-    navigator.mediaDevices.removeEventListener('devicechange', this.onDeviceChange)
+    this.listenDevices(false)
     this.generation++
     this.enqueue(() => this.teardownAll(true))
   }
@@ -166,6 +173,7 @@ export class CaptureEngine {
     }
     if (gen !== this.generation) return this.closeContext()
     this.running = true
+    this.listenDevices(true)
     const ok: AudioSource[] = []
     // System first, then the microphone; only the requested ones.
     for (const source of (['system', 'microphone'] as const).filter((s) => this.sources.includes(s))) {
@@ -180,6 +188,7 @@ export class CaptureEngine {
     if (gen !== this.generation) return
     if (!ok.length) {
       this.running = false
+      this.listenDevices(false)
       await this.closeContext()
       this.send({ type: 'start-failed', error: 'No audio source could be captured.' })
       return
@@ -227,6 +236,7 @@ export class CaptureEngine {
     }
     const wasRunning = this.running
     this.running = false
+    this.listenDevices(false)
     await this.closeContext()
     if (!report || !wasRunning) return
     window.notula.power.allowDisplaySleep()
