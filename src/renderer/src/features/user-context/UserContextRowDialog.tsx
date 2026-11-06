@@ -28,7 +28,7 @@ export function isRowId(id: string | undefined): id is RowId {
 export const HINTS: Record<UserContextSectionId, string> = {
   identity: 'Your role, team and company, and what you are responsible for.',
   'current-work': 'What you are working on now, and what matters most.',
-  relationships: 'The people you work with most, and how.',
+  relationships: 'Who you deal with most often, and what each person is to you: a manager, a client, a peer.',
   teams: 'The groups you belong to, how often each one meets, and duties that come back on a schedule.',
   'work-habits': 'How you like to work and make decisions. For example: "Prefers bullet points".',
   communication: 'How you write and speak, and the formats you prefer. Chat uses this to write in your voice.',

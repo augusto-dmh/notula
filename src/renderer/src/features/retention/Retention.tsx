@@ -97,7 +97,7 @@ function ArmDialog({
     <Modal label="Delete transcripts automatically" onClose={onClose}>
       <div className="h-modal__body retention-dialog">
         <h2 className="h-modal__title">{from === null ? 'Delete transcripts automatically?' : 'Delete transcripts sooner?'}</h2>
-        <p className="h-modal__subtitle">Transcripts will be deleted automatically after {after}.</p>
+        <p className="h-modal__subtitle">Once a transcript is older than {after}, Notula deletes it from this computer. Notes and summaries stay.</p>
         <p className="retention-dialog__counts">{counts}</p>
         <p className="retention-dialog__warn">
           Once deleted, transcripts and recordings can’t be recovered. Chat and new enhanced notes won’t be able to use them.
@@ -154,7 +154,7 @@ export function RetentionRows(): JSX.Element {
       <SettingsCard>
         <SettingsRow
           title="Delete transcripts after"
-          description="Delete transcripts and recordings automatically after this long. Notes and enhanced notes stay."
+          description="Notula deletes transcripts and recordings from this computer when they pass the age you pick. Notes and enhanced notes are left as they are."
           control={
             <Select<Choice>
               label="Delete transcripts after"

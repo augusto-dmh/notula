@@ -10,7 +10,7 @@ import { answerOffRecord } from './store'
 import './off-record-card.css'
 
 const SEND_FAILED = 'Couldn’t send your answer. Try again.'
-const KEEP_LABEL = 'Keep transcribing and keep what was said'
+const KEEP_LABEL = 'Continue the transcript without removing anything'
 
 export interface OffRecordCardProps {
   surface: OffRecordSurface

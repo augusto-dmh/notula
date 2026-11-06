@@ -56,7 +56,7 @@ export function TranscriptionLanguagesRow({ prefs }: { prefs: Settings }): JSX.E
 
   function add(code: string): void {
     if (chosen.length >= MAX_TRANSCRIPTION_LANGUAGES) {
-      setError(`You can name up to ${MAX_TRANSCRIPTION_LANGUAGES} languages. Remove one to add another.`)
+      setError(`The list holds ${MAX_TRANSCRIPTION_LANGUAGES} languages at most. To add this one, take another off first.`)
       return
     }
     setPrefs({ 'transcription.languages': normalizeLanguageList([...chosen, code]) })
@@ -72,7 +72,7 @@ export function TranscriptionLanguagesRow({ prefs }: { prefs: Settings }): JSX.E
   return (
     <Row
       label="Your languages"
-      hint="Notula still detects the language on its own. Naming the languages spoken in your meetings helps it get them right."
+      hint="List the languages spoken in your meetings for more accurate transcripts. Notula goes on working out which one is spoken either way."
       htmlFor={inputId}
       stacked
     >
