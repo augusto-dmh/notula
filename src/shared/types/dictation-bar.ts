@@ -134,7 +134,7 @@ export const WINDOWS_MOUSE_MAX = 5
 
 /** A key name's mouse button number (`mouse4` → 4, any case), or null for a key. */
 export function mouseButtonOf(key: string): number | null {
-  const m = /^mouse([0-9]{1,2})$/i.exec(key.trim())
+  const m = /^mouse([0-9]+)$/i.exec(key.trim())
   return m ? Number(m[1]) : null
 }
 

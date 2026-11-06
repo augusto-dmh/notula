@@ -48,8 +48,6 @@ const MOUSE_EVENTS = ['mousedown', 'mouseup', 'auxclick'] as const
 const DOUBLE_TAP_WINDOW_MS = 450
 
 const CUSTOMISABLE: readonly string[] = ['quickAsk', 'dictation', 'newNote', 'dictationHold', 'dictationHandsFree', 'recordToggle']
-/** Rows whose recording would trigger a live global shortcut or hook chord. */
-const SUSPENDS: readonly string[] = ['dictation', 'dictationHold', 'dictationHandsFree', 'recordToggle']
 const NEEDS_HELPER = 'Needs the keyboard helper.'
 /** The neutral conflict note: it never names or looks for another app. */
 export const CONFLICT_NOTE = 'Another app may also answer this shortcut. If voice typing starts twice or not at all, pick another one.'
@@ -159,9 +157,9 @@ function Recorder({
 
   useEffect(() => {
     const id = row.id as CustomisableShortcutId
-    // The live voice-typing shortcuts would swallow the keys while they are recorded.
-    const suspends = SUSPENDS.includes(id)
-    if (suspends) window.notula.dictation.suspendShortcut({ suspended: true })
+    // The live voice-typing shortcuts would swallow the keys while they are recorded, on any
+    // row: a bound mouse button would never reach this window, so main couldn't refuse it.
+    window.notula.dictation.suspendShortcut({ suspended: true })
     const finish = (value: { accelerator: string } | { entry: HookEntry } | null, error: string | null = null): void => {
       if (doneRef.current) return
       doneRef.current = true
@@ -278,7 +276,7 @@ function Recorder({
       window.removeEventListener('keydown', onChordKey, true)
       window.removeEventListener('keyup', onChordKey, true)
       for (const type of MOUSE_EVENTS) window.removeEventListener(type, onMouseEvent, true)
-      if (suspends) window.notula.dictation.suspendShortcut({ suspended: false })
+      window.notula.dictation.suspendShortcut({ suspended: false })
     }
   }, [row.id, doubleTap, onSave, onCancel])
 
