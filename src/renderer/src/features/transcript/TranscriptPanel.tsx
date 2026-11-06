@@ -242,9 +242,12 @@ export function TranscriptPanel({ noteId, reveal, onClose, variant = 'note' }: T
     [chunks, source, views.length, shown]
   )
   const sourceTurns = useMemo(() => (source ? mediaTurns(shownChunks) : null), [source, shownChunks])
+  // Word-level turns run across chunks, so they can't mark held lines; while an off-the-record
+  // hold lasts, the chunk turns show which lines are held back.
+  const holding = useMemo(() => chunks.some((c) => c.held === true), [chunks])
   const turns = useMemo(
-    (): PanelTurn[] => sourceTurns ?? (wordLevel ? wordTurns(speakers.identityTurns) : groupTurns(chunks)),
-    [sourceTurns, chunks, wordLevel, speakers.identityTurns]
+    (): PanelTurn[] => sourceTurns ?? (wordLevel && !holding ? wordTurns(speakers.identityTurns) : groupTurns(chunks)),
+    [sourceTurns, chunks, wordLevel, holding, speakers.identityTurns]
   )
   // An untimed import's turns show no time (its times are 1 s offsets).
   const untimed = useMemo(() => new Set(chunks.filter(isUntimedChunk).map((c) => c.id)), [chunks])
