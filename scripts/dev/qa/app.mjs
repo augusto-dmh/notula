@@ -76,7 +76,7 @@ async function start(args) {
   env.NOTULA_USER_DATA_DIR = userData
   delete env.ELECTRON_RUN_AS_NODE
   const log = openSync(join(QA_ROOT, `${profile}-stdout.log`), 'a')
-  const child = spawn(ELECTRON, [ROOT, `--remote-debugging-port=${RDP_PORT}`, `--inspect=${INSPECT_PORT}`], {
+  const child = spawn(ELECTRON, [ROOT, `--remote-debugging-port=${RDP_PORT}`, `--inspect=${INSPECT_PORT}`, '--mute-audio'], {
     cwd: ROOT,
     env,
     detached: true,
@@ -116,6 +116,8 @@ function chrome(urls) {
     [
       `--user-data-dir=${CHROME_PROFILE}`,
       '--mute-audio',
+      '--window-position=-2400,40',
+      '--window-size=1100,750',
       '--autoplay-policy=no-user-gesture-required',
       '--no-first-run',
       '--no-default-browser-check',
