@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-// `/wiki` and `/wiki/:section`: Overview, the sections, the terms and projects tables, the name
-// dictionary and People. Every section is an editable text box with its provenance; "Draft from
-// my meetings" fills it from recent notes through the user's own AI provider, never replacing
-// what the user wrote without asking. The tables are edited inline. Drafting turns on after 10
-// recorded meetings; once the profile has been drafted, the Overview's button refreshes the whole
-// profile, keeping what the user wrote. A section that is never drafted is listed only while it
-// holds text. The Overview also exports the profile as Markdown and shares it with apps
+// `/wiki` and `/wiki/:section`: Overview, the name dictionary and People. The Overview lists every
+// profile section and the terms and projects tables as a compact row; a row opens its dialog
+// (UserContextRowDialog), and `/wiki/<row>` opens the page with that dialog open. "Draft from my
+// meetings" fills a section from recent notes through the user's own AI provider, never replacing
+// what the user wrote without asking. Drafting turns on after 10 recorded meetings; once the
+// profile has been drafted, the Overview's button refreshes the whole profile, keeping what the
+// user wrote. The Overview also exports the profile as Markdown and shares it with apps
 // connected to Notula's MCP server.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react'
@@ -18,8 +18,6 @@ import {
   type UserContextDraftEvent,
   type UserContextDraftStage,
   type UserContextEntry,
-  type UserContextEntryKind,
-  type UserContextSection,
   type UserContextSectionId,
   type UserContextState
 } from '@shared/types/user-context'
@@ -28,48 +26,21 @@ import { navigate, navigateToSettings, useRoute } from '../../app/navigation'
 import { showToast } from '../../app/toast'
 import { setPrefs, usePrefs } from '../settings/prefs-store'
 import { confirmDialog } from '../templates/confirm'
+import { dateLabel, FOLD_NOTE, isRowId, provenanceText, UnlockNote, UserContextRowDialog, type RowId } from './UserContextRowDialog'
 import './user-context.css'
 
-type Page = 'overview' | UserContextSectionId | 'projects' | 'terms' | 'names' | 'people'
+type Page = 'overview' | 'names' | 'people'
 
-const DRAFTED = new Set<UserContextSectionId>(USER_CONTEXT_SECTIONS.filter((s) => s.drafted).map((s) => s.id))
-
-/**
- * The pages in the navigation. A section that is never drafted is listed while it holds text,
- * and while it is open, so clearing it doesn't move the page away.
- */
-function pagesFor(state: UserContextState | null, open: string | undefined): { id: Page; title: string }[] {
-  const has = (id: UserContextSectionId): boolean => !!state?.sections.find((x) => x.section_id === id)?.content.trim()
-  return [
-    { id: 'overview', title: 'Overview' },
-    ...USER_CONTEXT_SECTIONS.filter((s) => s.drafted || s.id === open || has(s.id)).map((s) => ({ id: s.id as Page, title: s.title })),
-    { id: 'projects', title: 'Projects' },
-    { id: 'terms', title: 'Terms' },
-    { id: 'names', title: 'Name dictionary' },
-    { id: 'people', title: 'People' }
-  ]
-}
+const PAGES: { id: Page; title: string }[] = [
+  { id: 'overview', title: 'Overview' },
+  { id: 'names', title: 'Name dictionary' },
+  { id: 'people', title: 'People' }
+]
 
 const STAGES: Record<UserContextDraftStage, string> = {
   notes: 'Gathering your notes…',
   people: 'Looking at who you meet with…',
   writing: 'Writing your profile…'
-}
-
-const HINTS: Record<UserContextSectionId, string> = {
-  identity: 'Your role, team and company, and what you are responsible for.',
-  'current-work': 'What you are working on now, and what matters most.',
-  relationships: 'The people you work with most, and how.',
-  teams: 'The groups you belong to, how often each one meets, and duties that come back on a schedule.',
-  'work-habits': 'How you like to work and make decisions. For example: "Prefers bullet points".',
-  communication: 'How you write and speak, and the formats you prefer. Chat uses this to write in your voice.',
-  calendar: 'Your meetings and scheduling habits.',
-  reference: 'Where your notes and other work usually go: channels, folders and systems. Your vocabulary goes in Terms.',
-  'assistant-guide': 'A short guide for colleagues working with you.'
-}
-
-function dateLabel(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
 function useUserContext(): { state: UserContextState | null; error: string | null; reload(): void } {
@@ -119,12 +90,25 @@ function relativeLabel(iso: string): string {
 export function UserContextPageView(): JSX.Element {
   const { params } = useRoute()
   const { state, error, reload } = useUserContext()
-  const pages = pagesFor(state, params['section'])
-  const page = (pages.some((p) => p.id === params['section']) ? params['section'] : 'overview') as Page
+  const param = params['section']
+  // A row id opens the Overview with its dialog; an unknown id opens the plain Overview.
+  const row: RowId | null = isRowId(param) ? param : null
+  const page: Page = param === 'names' || param === 'people' ? param : 'overview'
   const [draft, setDraft] = useState<Draft | null>(null)
-  const [confirm, setConfirm] = useState<UserContextSectionId[] | null>(null)
   const draftRef = useRef<Draft | null>(null)
   draftRef.current = draft
+
+  // Closing a dialog lands back on its row.
+  const lastRow = useRef<RowId | null>(null)
+  useEffect(() => {
+    if (row) {
+      lastRow.current = row
+      return
+    }
+    const back = lastRow.current
+    lastRow.current = null
+    if (back) document.querySelector<HTMLElement>(`[data-uc-row="${back}"]`)?.focus({ preventScroll: true })
+  }, [row])
 
   useEffect(
     () =>
@@ -149,7 +133,6 @@ export function UserContextPageView(): JSX.Element {
   )
 
   const startDraft = async (ids: UserContextSectionId[], overwriteUser: boolean): Promise<void> => {
-    setConfirm(null)
     setDraft({ runId: null, sectionIds: ids, stage: null })
     try {
       const { runId } = await window.notula.userContext.draft({ sectionIds: ids, overwriteUser })
@@ -172,16 +155,6 @@ export function UserContextPageView(): JSX.Element {
     }
   }
 
-  /** Asks first when a requested section holds the user's own text. */
-  const requestDraft = (ids: UserContextSectionId[]): void => {
-    const own = ids.filter((id) => {
-      const s = state?.sections.find((x) => x.section_id === id)
-      return s && s.origin === 'user' && s.content.trim()
-    })
-    if (own.length) setConfirm(ids)
-    else void startDraft(ids, false)
-  }
-
   /** The sections a refresh may write: every drafted one the user hasn't written. */
   const emptyOrDrafted = USER_CONTEXT_SECTIONS.filter((s) => s.drafted)
     .map((s) => s.id)
@@ -194,7 +167,7 @@ export function UserContextPageView(): JSX.Element {
     <div className="uc-page">
       <nav className="uc-nav" aria-label="Wiki">
         <h1 className="uc-nav__title">Wiki</h1>
-        {pages.map((p) => (
+        {PAGES.map((p) => (
           <button
             key={p.id}
             type="button"
@@ -219,54 +192,30 @@ export function UserContextPageView(): JSX.Element {
           <p className="uc-loading">Loading your wiki…</p>
         ) : (
           <div className="uc-column">
-            {confirm ? (
-              <div className="uc-confirm" role="alertdialog" aria-label="Replace your text?">
-                <p>Some of these sections hold text you wrote. Replace it with a draft, or only fill the others?</p>
-                <div className="uc-confirm__actions">
-                  <button type="button" className="n-btn n-btn--sm n-btn--ghost" onClick={() => setConfirm(null)}>
-                    Cancel
-                  </button>
-                  <button type="button" className="n-btn n-btn--sm" onClick={() => void startDraft(confirm, false)}>
-                    Keep mine
-                  </button>
-                  <button type="button" className="n-btn n-btn--sm n-btn--danger" onClick={() => void startDraft(confirm, true)}>
-                    Replace
-                  </button>
-                </div>
-              </div>
-            ) : null}
             {draft?.stage ? (
               <p className="uc-stage" role="status">
                 <span className="n-spinner" aria-hidden="true" />
                 {STAGES[draft.stage]}
               </p>
             ) : null}
-            {page === 'overview' ? (
-              <Overview state={state} drafting={!!draft} onRefresh={() => void startRefresh()} />
-            ) : page === 'projects' || page === 'terms' ? (
-              <>
-                <Header title={page === 'projects' ? 'Projects' : 'Terms'} />
-                <p className="uc-lead">{page === 'projects' ? PROJECTS_LEAD : TERMS_LEAD}</p>
-                <EntryTable kind={page === 'projects' ? 'project' : 'term'} rows={page === 'projects' ? state.projects : state.terms} busy={!!draft} />
-                <p className="uc-muted uc-fold">{FOLD_NOTE}</p>
-              </>
-            ) : page === 'names' ? (
+            {page === 'names' ? (
               <Names names={state.nameDictionary} />
             ) : page === 'people' ? (
               <People state={state} />
             ) : (
-              <SectionEditor
-                key={page}
-                id={page}
-                section={state.sections.find((s) => s.section_id === page) ?? null}
-                drafting={!!draft && draft.sectionIds.includes(page)}
-                busy={!!draft}
-                draftable={DRAFTED.has(page)}
-                unlock={state.unlock}
-                drafted={state.refresh.drafted}
-                onDraft={() => requestDraft([page])}
-              />
+              <Overview state={state} drafting={!!draft} onRefresh={() => void startRefresh()} />
             )}
+            {page === 'overview' && row ? (
+              <UserContextRowDialog
+                key={row}
+                row={row}
+                state={state}
+                busy={!!draft}
+                drafting={!!draft && row !== 'projects' && row !== 'terms' && draft.sectionIds.includes(row)}
+                onDraft={(id, overwrite) => void startDraft([id], overwrite)}
+                onClose={() => navigate('/wiki', { replace: true })}
+              />
+            ) : null}
           </div>
         )}
       </main>
@@ -305,33 +254,11 @@ async function exportProfile(action: 'copy' | 'save'): Promise<void> {
   }
 }
 
-/** Before drafting turns on: how many recorded meetings so far, as a ring. */
-function UnlockNote({ unlock }: { unlock: UserContextState['unlock'] }): JSX.Element {
-  const r = 9
-  const length = 2 * Math.PI * r
-  const done = Math.min(1, unlock.recorded / unlock.needed)
-  return (
-    <div className="uc-unlock">
-      <svg className="uc-unlock__ring" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
-        <circle cx="12" cy="12" r={r} className="uc-unlock__track" />
-        <circle cx="12" cy="12" r={r} className="uc-unlock__done" strokeDasharray={`${done * length} ${length}`} transform="rotate(-90 12 12)" />
-      </svg>
-      <div>
-        <p className="uc-unlock__count">
-          {unlock.recorded} of {unlock.needed} meetings recorded
-        </p>
-        <p className="uc-unlock__text">Notula can draft your profile after {unlock.needed} recorded meetings. You can write it yourself now.</p>
-      </div>
-    </div>
-  )
-}
-
 function Overview(p: { state: UserContextState; drafting: boolean; onRefresh(): void }): JSX.Element {
   const prefs = usePrefs()
   const { drafted, lastAt } = p.state.refresh
   // Once drafted, a refresh no longer waits for the unlock.
   const locked = !drafted && p.state.unlock.recorded < p.state.unlock.needed
-  const filled = USER_CONTEXT_SECTIONS.map((def) => ({ def, s: p.state.sections.find((x) => x.section_id === def.id) })).filter((x) => x.s?.content.trim())
   const subtitle = lastAt ? `Last refreshed ${relativeLabel(lastAt)}` : 'Not drafted yet'
   return (
     <>
@@ -360,38 +287,41 @@ function Overview(p: { state: UserContextState; drafting: boolean; onRefresh(): 
           Use in chat
         </label>
       </div>
-      {filled.length === 0 && !p.state.projects.length && !p.state.terms.length ? (
-        <div className="uc-empty">
-          <p className="uc-empty__title">Your wiki is empty</p>
-          <p>Write about yourself in any section, or let your AI draft it from your recent meetings.</p>
-        </div>
-      ) : (
-        filled.map(({ def, s }) => (
-          <section key={def.id} className="uc-card">
-            <button type="button" className="uc-card__title" onClick={() => navigate(`/wiki/${def.id}`, { replace: true })}>
-              {def.title}
-            </button>
-            <p className="uc-card__body">{s!.content}</p>
-            <Provenance section={s!} />
-          </section>
-        ))
-      )}
-      <section className="uc-card" aria-labelledby="uc-projects-title">
-        <h3 id="uc-projects-title" className="uc-card__heading">
-          Projects
-        </h3>
-        <EntryTable kind="project" rows={p.state.projects} busy={p.drafting} />
-      </section>
-      <section className="uc-card" aria-labelledby="uc-terms-title">
-        <h3 id="uc-terms-title" className="uc-card__heading">
-          Terms
-        </h3>
-        <EntryTable kind="term" rows={p.state.terms} busy={p.drafting} />
-      </section>
+      <ul className="uc-rows" aria-label="Your profile">
+        {USER_CONTEXT_SECTIONS.map((def) => {
+          const sec = p.state.sections.find((x) => x.section_id === def.id)
+          const text = sec?.content.trim() ?? ''
+          return <ProfileRow key={def.id} id={def.id} title={def.title} preview={text || null} source={sec && text ? provenanceText(sec) : null} />
+        })}
+        <ProfileRow id="projects" title="Projects" {...tableSummary(p.state.projects, 'project', 'projects')} />
+        <ProfileRow id="terms" title="Terms" {...tableSummary(p.state.terms, 'term', 'terms')} />
+      </ul>
       <p className="uc-muted uc-fold">{FOLD_NOTE}</p>
       <Sharing />
     </>
   )
+}
+
+/** One row of the profile: its title, a one-line preview, and where the content came from. */
+function ProfileRow(p: { id: RowId; title: string; preview: string | null; source: string | null }): JSX.Element {
+  return (
+    <li>
+      <button type="button" className="uc-row" data-uc-row={p.id} onClick={() => navigate(`/wiki/${p.id}`, { replace: true })}>
+        <span className="uc-row__title">{p.title}</span>
+        <span className={`uc-row__preview${p.preview ? '' : ' is-empty'}`}>{p.preview ?? 'Empty'}</span>
+        {p.source ? <span className="uc-row__source">{p.source}</span> : null}
+      </button>
+    </li>
+  )
+}
+
+function tableSummary(rows: UserContextEntry[], one: string, many: string): { preview: string | null; source: string | null } {
+  if (!rows.length) return { preview: null, source: null }
+  const drafted = rows.filter((r) => r.origin === 'drafted').length
+  return {
+    preview: `${rows.length} ${rows.length === 1 ? one : many}: ${rows.map((r) => r.name).join(', ')}`,
+    source: drafted === rows.length ? 'Drafted from your meetings' : drafted === 0 ? 'Written by you' : 'Drafted and written by you'
+  }
 }
 
 /** "Use with other AI apps": the switch for `readAboutMe`, the server address and the apps that read the profile. */
@@ -512,251 +442,6 @@ function Sharing(): JSX.Element {
         </>
       )}
     </section>
-  )
-}
-
-const PROJECTS_LEAD = 'The projects you work on, each summed up in a sentence or two, with the role you play. Up to 30 projects.'
-const TERMS_LEAD = 'Names, acronyms and jargon you use, with what they mean, so summaries and chat get them right. Up to 200 terms.'
-const FOLD_NOTE = 'Your edits here, and notes you take outside meetings, are folded in at the next refresh.'
-
-const ENTRY_LIMITS: Record<UserContextEntryKind, { name: number; body: number; rows: number; noun: string }> = {
-  term: { name: USER_CONTEXT_LIMITS.termMax, body: USER_CONTEXT_LIMITS.termBodyMax, rows: USER_CONTEXT_LIMITS.termsMax, noun: 'terms' },
-  project: { name: USER_CONTEXT_LIMITS.projectNameMax, body: USER_CONTEXT_LIMITS.projectBodyMax, rows: USER_CONTEXT_LIMITS.projectsMax, noun: 'projects' }
-}
-
-interface EntryDraft {
-  name: string
-  body: string
-  role: string
-}
-
-const draftOf = (e: UserContextEntry | null): EntryDraft => ({ name: e?.name ?? '', body: e?.body ?? '', role: e?.role ?? '' })
-const sameDraft = (a: EntryDraft, b: EntryDraft): boolean => a.name.trim() === b.name.trim() && a.body.trim() === b.body.trim() && a.role.trim() === b.role.trim()
-
-/**
- * A terms or projects table, edited inline. A row saves when focus leaves it with a change; main
- * checks every limit, and the checks here only save a round trip.
- */
-function EntryTable(p: { kind: UserContextEntryKind; rows: UserContextEntry[]; busy: boolean }): JSX.Element {
-  const L = ENTRY_LIMITS[p.kind]
-  const full = p.rows.length >= L.rows
-  const taken = (name: string, id?: string): boolean => p.rows.some((r) => r.id !== id && r.name.trim().toLocaleLowerCase() === name.trim().toLocaleLowerCase())
-  const project = p.kind === 'project'
-  return (
-    <div className="uc-table-wrap">
-      <table className="uc-table">
-        <thead>
-          <tr>
-            <th scope="col">{project ? 'Project' : 'Term'}</th>
-            <th scope="col">{project ? 'Summary' : 'Meaning'}</th>
-            {project ? <th scope="col">Your role</th> : null}
-            <th scope="col">
-              <span className="uc-sr">Actions</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {p.rows.map((r) => (
-            <EntryRow key={r.id} kind={p.kind} entry={r} busy={p.busy} taken={(n) => taken(n, r.id)} />
-          ))}
-          {full ? null : <EntryRow key={`new-${p.rows.length}`} kind={p.kind} entry={null} busy={p.busy} taken={(n) => taken(n)} />}
-        </tbody>
-      </table>
-      {full ? <p className="uc-muted">{`You can keep up to ${L.rows} ${L.noun}. Delete one to add another.`}</p> : null}
-    </div>
-  )
-}
-
-function EntryRow(p: { kind: UserContextEntryKind; entry: UserContextEntry | null; busy: boolean; taken(name: string): boolean }): JSX.Element {
-  const L = ENTRY_LIMITS[p.kind]
-  const project = p.kind === 'project'
-  const [value, setValue] = useState<EntryDraft>(() => draftOf(p.entry))
-  const saved = useRef<EntryDraft>(draftOf(p.entry))
-  const row = useRef<HTMLTableRowElement | null>(null)
-  const [saving, setSaving] = useState(false)
-
-  // A refresh (or another window) changed the row: take it unless the user is mid-edit.
-  useEffect(() => {
-    const next = draftOf(p.entry)
-    if (!sameDraft(next, saved.current) && sameDraft(value, saved.current)) setValue(next)
-    saved.current = next
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [p.entry?.name, p.entry?.body, p.entry?.role])
-
-  const save = (): void => {
-    if (saving || sameDraft(value, saved.current)) return
-    const name = value.name.trim()
-    // A new row waits for its name; an existing row needs one.
-    if (!name) {
-      if (p.entry) setValue(saved.current)
-      return
-    }
-    if (p.taken(name)) {
-      showToast({ title: `“${name}” is already in your ${L.noun}. Edit that row instead.`, kind: 'error' })
-      return
-    }
-    setSaving(true)
-    window.notula.userContext
-      .setEntry({ ...(p.entry ? { id: p.entry.id } : {}), kind: p.kind, name, body: value.body.trim(), role: project ? value.role.trim() || null : null })
-      .then((e) => {
-        if (p.entry) saved.current = draftOf(e)
-        else {
-          saved.current = draftOf(null)
-          setValue(draftOf(null))
-        }
-      })
-      .catch((err: unknown) => showToast({ title: "Couldn't save", description: parseError(err).message, kind: 'error' }))
-      .finally(() => setSaving(false))
-  }
-
-  const remove = (): void => {
-    if (!p.entry) return
-    window.notula.userContext.deleteEntry({ id: p.entry.id }).catch((err: unknown) => showToast({ title: "Couldn't delete", description: parseError(err).message, kind: 'error' }))
-  }
-
-  const field = (key: keyof EntryDraft, max: number, label: string, placeholder?: string): JSX.Element => (
-    <td>
-      <input
-        className="uc-cell"
-        value={value[key]}
-        maxLength={max}
-        aria-label={label}
-        placeholder={placeholder}
-        disabled={p.busy}
-        onChange={(e) => setValue((v) => ({ ...v, [key]: e.target.value }))}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') {
-            e.preventDefault()
-            save()
-          } else if (e.key === 'Escape') setValue(saved.current)
-        }}
-      />
-    </td>
-  )
-
-  const name = p.entry?.name ?? ''
-  return (
-    <tr
-      ref={row}
-      className={p.entry ? undefined : 'uc-table__new'}
-      onBlur={(e) => {
-        // Save once focus leaves the row, not between its cells.
-        if (!row.current?.contains(e.relatedTarget as Node | null)) save()
-      }}
-    >
-      {field('name', L.name, project ? 'Project name' : 'Term', p.entry ? undefined : project ? 'Add a project' : 'Add a term')}
-      {field('body', L.body, project ? 'Summary' : 'Meaning')}
-      {project ? field('role', USER_CONTEXT_LIMITS.projectRoleMax, 'Your role') : null}
-      <td className="uc-table__actions">
-        {p.entry?.origin === 'drafted' ? <span className="uc-badge">Drafted</span> : null}
-        {p.entry ? (
-          <button type="button" className="uc-chip__remove" aria-label={`Delete ${name}`} disabled={p.busy} onClick={remove}>
-            ×
-          </button>
-        ) : (
-          <button type="button" className="n-btn n-btn--sm n-btn--ghost" disabled={p.busy || !value.name.trim()} onClick={save}>
-            Add
-          </button>
-        )}
-      </td>
-    </tr>
-  )
-}
-
-function Provenance({ section }: { section: UserContextSection }): JSX.Element {
-  return (
-    <p className="uc-prov">
-      {section.origin === 'drafted' && section.drafted_at ? `Drafted from your meetings · Saved ${dateLabel(section.updated_at)}` : 'Written by you'}
-    </p>
-  )
-}
-
-function SectionEditor(p: {
-  id: UserContextSectionId
-  section: UserContextSection | null
-  drafting: boolean
-  busy: boolean
-  /** False for a section only the user writes: no draft button. */
-  draftable: boolean
-  unlock: UserContextState['unlock']
-  /** Drafted once: the unlock no longer applies. */
-  drafted: boolean
-  onDraft(): void
-}): JSX.Element {
-  const title = USER_CONTEXT_SECTIONS.find((s) => s.id === p.id)!.title
-  const locked = !p.drafted && p.unlock.recorded < p.unlock.needed
-  const [text, setText] = useState(p.section?.content ?? '')
-  const [saving, setSaving] = useState(false)
-  const saved = useRef(p.section?.content ?? '')
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  // A draft (or another window) changed the stored text: take it unless the user is mid-edit.
-  useEffect(() => {
-    const next = p.section?.content ?? ''
-    if (next !== saved.current && text === saved.current) setText(next)
-    saved.current = next
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [p.section?.content])
-
-  const save = useCallback(
-    (value: string) => {
-      if (value === saved.current) return
-      setSaving(true)
-      window.notula.userContext
-        .update({ sectionId: p.id, content: value })
-        .then((s) => {
-          saved.current = s.content
-        })
-        .catch((err: unknown) => showToast({ title: "Couldn't save", description: parseError(err).message, kind: 'error' }))
-        .finally(() => setSaving(false))
-    },
-    [p.id]
-  )
-
-  useEffect(
-    () => () => {
-      if (timer.current) clearTimeout(timer.current)
-    },
-    []
-  )
-
-  const onChange = (value: string): void => {
-    setText(value)
-    if (timer.current) clearTimeout(timer.current)
-    timer.current = setTimeout(() => save(value), 800)
-  }
-
-  return (
-    <>
-      <Header title={title}>
-        {p.draftable ? (
-          <button type="button" className="n-btn n-btn--sm" disabled={p.busy || locked} onClick={p.onDraft}>
-            {p.drafting ? <span className="n-spinner" aria-hidden="true" /> : <IconSparkle size={14} />}
-            {p.drafting ? 'Drafting…' : 'Draft from my meetings'}
-          </button>
-        ) : null}
-      </Header>
-      {p.draftable && locked ? <UnlockNote unlock={p.unlock} /> : null}
-      <p className="uc-lead">{HINTS[p.id]}</p>
-      <textarea
-        className="n-input uc-editor"
-        value={text}
-        maxLength={USER_CONTEXT_LIMITS.sectionMax}
-        placeholder="Nothing yet. Add what Notula should know about you."
-        disabled={p.drafting}
-        onChange={(e) => onChange(e.target.value)}
-        onBlur={() => {
-          if (timer.current) clearTimeout(timer.current)
-          save(text)
-        }}
-      />
-      <div className="uc-editor__meta">
-        {p.section && p.section.content.trim() ? <Provenance section={p.section} /> : <span />}
-        <span className="uc-count">
-          {saving ? 'Saving…' : `${text.length.toLocaleString()} / ${USER_CONTEXT_LIMITS.sectionMax.toLocaleString()}`}
-        </span>
-      </div>
-    </>
   )
 }
 

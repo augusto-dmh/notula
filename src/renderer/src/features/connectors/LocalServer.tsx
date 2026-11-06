@@ -19,6 +19,7 @@ import { navigate } from '../../app/navigation'
 import { showToast } from '../../app/toast'
 import { Modal } from '../folders/Modal'
 import { Switch } from '../settings/controls'
+import { usePrefs } from '../settings/prefs-store'
 import { confirmDialog } from '../templates/confirm'
 
 const INSTALL_APPS: { target: McpInstallTarget; name: string }[] = [
@@ -113,6 +114,7 @@ export function LocalServerCard(): JSX.Element {
   const [installing, setInstalling] = useState<McpInstallTarget | null>(null)
   const [installed, setInstalled] = useState<{ target: McpInstallTarget; result: McpInstallResult } | null>(null)
   const [portDraft, setPortDraft] = useState('')
+  const prefs = usePrefs()
 
   const readApps = useCallback((): void => {
     void window.notula.mcpServer.listApps().then(setApps).catch(() => undefined)
@@ -241,6 +243,24 @@ export function LocalServerCard(): JSX.Element {
                   setPortDraft('')
                 }}
               />
+            </div>
+          </div>
+        ) : null}
+
+        {prefs?.['userContext.enabled'] === true ? (
+          <div className="settings-row">
+            <div className="settings-row__text">
+              <div className="settings-row__label">Your profile</div>
+              <div className="settings-row__hint">
+                {prefs['userContext.shareWithAgents'] === true
+                  ? 'Connected apps can also read the profile on your Wiki page.'
+                  : 'Connected apps can’t read your profile. You can share it from your Wiki page.'}
+              </div>
+            </div>
+            <div className="settings-row__control">
+              <button type="button" className="n-btn n-btn--sm" onClick={() => navigate('/wiki')}>
+                Open Wiki
+              </button>
             </div>
           </div>
         ) : null}

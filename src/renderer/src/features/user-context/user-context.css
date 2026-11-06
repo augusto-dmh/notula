@@ -132,34 +132,6 @@
   font-weight: 600;
 }
 
-.uc-card {
-  padding: 14px 0;
-  border-top: 1px solid var(--border);
-}
-
-.uc-card__title {
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--fg);
-  font: inherit;
-  font-size: var(--text-md);
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.uc-card__title:hover {
-  color: var(--accent);
-}
-
-.uc-card__body {
-  margin: 6px 0;
-  color: var(--fg-2);
-  font-size: var(--text-sm);
-  line-height: 1.55;
-  white-space: pre-wrap;
-}
-
 .uc-prov {
   margin: 0;
   color: var(--fg-3);
@@ -437,13 +409,6 @@
 
 /* Terms and projects. */
 
-.uc-card__heading {
-  margin: 0 0 8px;
-  color: var(--fg);
-  font-size: var(--text-md);
-  font-weight: 600;
-}
-
 .uc-table-wrap {
   overflow-x: auto;
 }
@@ -523,4 +488,81 @@
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
+}
+
+/* ---------- the profile rows on the Overview and their dialogs ---------- */
+
+.uc-rows {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--border);
+}
+
+.uc-rows > li {
+  border-bottom: 1px solid var(--border);
+}
+
+.uc-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 200px) minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 8px;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.uc-row:hover {
+  background: var(--surface-2);
+}
+
+.uc-row__title {
+  font-weight: 600;
+}
+
+.uc-row__preview {
+  overflow: hidden;
+  color: var(--fg-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.uc-row__preview.is-empty {
+  color: var(--fg-3);
+}
+
+.uc-row__source {
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.uc-dialog {
+  width: min(560px, calc(100vw - 48px));
+}
+
+.uc-dialog--table {
+  width: min(760px, calc(100vw - 48px));
+}
+
+.uc-dialog .uc-confirm {
+  margin-bottom: 12px;
+}
+
+.uc-dialog__error {
+  margin: 10px 0 0;
+  color: var(--danger);
+  font-size: var(--text-sm);
+}
+
+.uc-dialog__draft {
+  margin-right: auto;
 }
