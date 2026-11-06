@@ -201,11 +201,11 @@ export interface NoteQuery {
   order?: 'newest' | 'oldest'
 }
 
-/** Trigram FTS over notes and panels (terms of 3+ characters). */
+/** Trigram FTS over notes, panels and transcripts (terms of 3+ characters). */
 export interface FtsQuery {
   terms: string[]
   limit: number
-  sources: ('documents' | 'panels')[]
+  sources: ('documents' | 'panels' | 'transcripts')[]
   documentIds?: string[]
 }
 
@@ -213,7 +213,7 @@ export interface FtsHit {
   documentId: string
   matchedTerms: number
   inTitle: boolean
-  source: 'document' | 'panel'
+  source: 'document' | 'panel' | 'transcript'
   panelId: string | null
 }
 

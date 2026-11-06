@@ -282,9 +282,9 @@ export function fitDocs(docs: DocPayload[], budget: number, question: string): F
 // ---------- retrieval ----------
 
 /**
- * Local FTS retrieval: any-term match over note titles and notes and panel content,
- * scored by matched terms (+0.5 for a title hit), ×1.5 for notes of the last 30 days;
- * at most 50 candidates.
+ * Local FTS retrieval: any-term match over note titles and notes, panel content and
+ * transcripts, scored by matched terms (+0.5 for a title hit, -0.25 for a transcript hit),
+ * ×1.5 for notes of the last 30 days; at most 50 candidates.
  */
 export async function retrieve(ctx: MainContext, text: string, opts: { documentIds?: string[]; limit?: number } = {}): Promise<string[]> {
   const terms = queryTerms(text)
@@ -294,7 +294,7 @@ export async function retrieve(ctx: MainContext, text: string, opts: { documentI
     hits = await ctx.storage.searchFts({
       terms,
       limit: 500,
-      sources: ['documents', 'panels'],
+      sources: ['documents', 'panels', 'transcripts'],
       ...(opts.documentIds ? { documentIds: opts.documentIds } : {})
     })
   } catch (err) {
@@ -304,7 +304,7 @@ export async function retrieve(ctx: MainContext, text: string, opts: { documentI
   const byDoc = new Map<string, { matched: number; inTitle: boolean }>()
   for (const h of hits) {
     const cur = byDoc.get(h.documentId) ?? { matched: 0, inTitle: false }
-    cur.matched = Math.max(cur.matched, h.matchedTerms)
+    cur.matched = Math.max(cur.matched, h.matchedTerms - (h.source === 'transcript' ? 0.25 : 0))
     cur.inTitle ||= h.inTitle
     byDoc.set(h.documentId, cur)
   }

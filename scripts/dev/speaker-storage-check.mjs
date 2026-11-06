@@ -214,7 +214,8 @@ const digest = (tables) =>
   Object.fromEntries(Object.entries(tables).map(([t, rows]) => [t, createHash('sha256').update(rows.join('\n')).digest('hex').slice(0, 16)]))
 
 function compare(name, want, got) {
-  const tables = [...new Set([...Object.keys(want), ...Object.keys(got)])].sort()
+  // The transcript index is derived and later; transcript-search-check.mjs checks it.
+  const tables = [...new Set([...Object.keys(want), ...Object.keys(got)])].sort().filter((t) => !/^transcripts_fts/.test(t))
   const diff = tables.filter((t) => want[t] !== got[t])
   check(name, diff.length === 0, diff.length ? `differs in ${diff.join(', ')}` : `${tables.length} tables`)
 }

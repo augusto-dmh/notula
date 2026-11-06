@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Note search: the exact local query on the
 // trigram FTS tables, the merge and order, and the snippets. Non-deleted notes
-// and panels only; no limit.
+// and panels only; no limit. Passes in order: title, notes, AI panels, transcript.
 //
 // Matching mirrors SQLite `LIKE`: a substring match that ignores ASCII case. A term with
 // `\`, `%` or `_` is escaped with a backslash (`ESCAPE '\'`), so it matches literally;
@@ -196,6 +196,18 @@ export function searchNotes(s: StoreCtx, query: string): SearchResponse {
     .all(panelParams) as Row[]
   for (const r of panelRows) {
     if (!hits.has(String(r['id']))) keep(r, 'panel', snippetFor(String(r['text'] ?? ''), whole))
+  }
+
+  // Transcripts: one indexed row per note, final text only.
+  const transcriptParams: Record<string, string> = {}
+  const transcriptRows = s.db
+    .prepare(
+      `SELECT ${cols}, f.text AS text FROM transcripts_fts f JOIN documents d ON d.rid = f.rowid
+       WHERE ${like('f.text', 'w', whole, transcriptParams)} AND d.deleted_at IS NULL`
+    )
+    .all(transcriptParams) as Row[]
+  for (const r of transcriptRows) {
+    if (!hits.has(String(r['id']))) keep(r, 'transcript', snippetFor(String(r['text'] ?? ''), whole))
   }
 
   // Own notes first, then display time, newest first; ties keep the merge order.

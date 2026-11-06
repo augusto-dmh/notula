@@ -1661,6 +1661,75 @@ ALTER TABLE source_series ADD COLUMN match_json TEXT;
 ALTER TABLE source_series ADD COLUMN catalog_origin TEXT;
 `
 
+/**
+ * Version 20: transcripts in full-text search. One row per note (`rowid` = `documents.rid`), its
+ * final chunks' text; the indexer fills it from its own queue, keyed by note, once the note has
+ * had no transcript write for a while. A chunk delete queues the note as already due, so purged
+ * text leaves the index on the next drain. A note's superseded sessions are hidden from readers,
+ * so a change to them re-indexes the note too. `secure-delete` drops a removed row's terms from
+ * the index itself, not only from its content.
+ */
+const TRANSCRIPTS_FTS = `
+CREATE VIRTUAL TABLE transcripts_fts USING fts5 (
+  document_id UNINDEXED, text,
+  tokenize = 'trigram case_sensitive 0'
+);
+
+INSERT INTO transcripts_fts (transcripts_fts, rank) VALUES ('secure-delete', 1);
+
+CREATE TABLE transcripts_fts_queue (
+  document_id TEXT PRIMARY KEY,
+  queued_at TEXT NOT NULL
+) WITHOUT ROWID;
+
+CREATE TRIGGER transcript_chunks_fts_enqueue_insert AFTER INSERT ON transcript_chunks BEGIN
+  DELETE FROM transcripts_fts_queue WHERE document_id = NEW.document_id;
+  INSERT INTO transcripts_fts_queue (document_id, queued_at) VALUES (NEW.document_id, ${NOW});
+END;
+
+CREATE TRIGGER transcript_chunks_fts_enqueue_update AFTER UPDATE OF text, is_final, document_id ON transcript_chunks BEGIN
+  DELETE FROM transcripts_fts_queue WHERE document_id = OLD.document_id;
+  INSERT INTO transcripts_fts_queue (document_id, queued_at) VALUES (OLD.document_id, ${NOW});
+  DELETE FROM transcripts_fts_queue WHERE document_id = NEW.document_id;
+  INSERT INTO transcripts_fts_queue (document_id, queued_at) VALUES (NEW.document_id, ${NOW});
+END;
+
+CREATE TRIGGER transcript_chunks_fts_enqueue_delete AFTER DELETE ON transcript_chunks BEGIN
+  DELETE FROM transcripts_fts_queue WHERE document_id = OLD.document_id;
+  INSERT INTO transcripts_fts_queue (document_id, queued_at) VALUES (OLD.document_id, '1970-01-01T00:00:00.000Z');
+END;
+
+CREATE TRIGGER documents_transcripts_fts_enqueue_update AFTER UPDATE OF deleted_at ON documents BEGIN
+  DELETE FROM transcripts_fts_queue WHERE document_id = NEW.id;
+  INSERT INTO transcripts_fts_queue (document_id, queued_at) VALUES (NEW.id, ${NOW});
+END;
+
+CREATE TRIGGER documents_transcripts_fts_delete AFTER DELETE ON documents BEGIN
+  DELETE FROM transcripts_fts WHERE rowid = OLD.rid;
+  DELETE FROM transcripts_fts_queue WHERE document_id = OLD.id;
+END;
+
+CREATE TRIGGER note_sources_transcripts_fts_enqueue_insert AFTER INSERT ON note_sources
+WHEN NEW.superseded_session_ids != '[]' BEGIN
+  DELETE FROM transcripts_fts_queue WHERE document_id = NEW.note_id;
+  INSERT INTO transcripts_fts_queue (document_id, queued_at) VALUES (NEW.note_id, ${NOW});
+END;
+
+CREATE TRIGGER note_sources_transcripts_fts_enqueue_update AFTER UPDATE OF superseded_session_ids, note_id ON note_sources
+WHEN OLD.superseded_session_ids IS NOT NEW.superseded_session_ids OR OLD.note_id IS NOT NEW.note_id BEGIN
+  DELETE FROM transcripts_fts_queue WHERE document_id = OLD.note_id;
+  INSERT INTO transcripts_fts_queue (document_id, queued_at) VALUES (OLD.note_id, ${NOW});
+  DELETE FROM transcripts_fts_queue WHERE document_id = NEW.note_id;
+  INSERT INTO transcripts_fts_queue (document_id, queued_at) VALUES (NEW.note_id, ${NOW});
+END;
+
+CREATE TRIGGER note_sources_transcripts_fts_enqueue_delete AFTER DELETE ON note_sources
+WHEN OLD.superseded_session_ids != '[]' BEGIN
+  DELETE FROM transcripts_fts_queue WHERE document_id = OLD.note_id;
+  INSERT INTO transcripts_fts_queue (document_id, queued_at) VALUES (OLD.note_id, ${NOW});
+END;
+`
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: BASELINE_VERSION, name: 'baseline', sql: BASELINE },
   { version: 9, name: 'sources-and-imports', sql: SOURCES_AND_IMPORTS },
@@ -1671,7 +1740,8 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 15, name: 'user-context-entries', sql: USER_CONTEXT_ENTRIES },
   { version: 16, name: 'mcp-usage', sql: MCP_USAGE },
   { version: 18, name: 'attachment-capture', sql: ATTACHMENT_CAPTURE },
-  { version: 19, name: 'courses', sql: COURSES }
+  { version: 19, name: 'courses', sql: COURSES },
+  { version: 20, name: 'transcripts-fts', sql: TRANSCRIPTS_FTS }
 ]
 
 /**

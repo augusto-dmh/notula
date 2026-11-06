@@ -3,10 +3,17 @@
 // `fts_queue` inside the writing transaction, so the queue is crash-safe. The
 // indexer drains it in batches of 100 documents, then 10 panels, pausing 5 ms
 // between batches, and starts at most 5 s after the first pending write.
+//
+// Transcripts have their own queue (`transcripts_fts_queue`, one row per note) and one index row
+// per note. Live capture writes chunks about every second, so a note is indexed only once it has
+// had no transcript write for 30 s: during pauses and after the meeting, not on every write. A
+// deferred note brings the indexer back on its own when it comes due. A transcript batch is at
+// most 5 notes or about 300,000 characters (always at least one note), after the panels.
 
+import { DELETED_CHUNK_MARKER } from '@shared/types/transcript'
 import type { FtsHit, FtsQuery } from './api'
 import type { DebugSearchResult } from './protocol'
-import { inTransaction, StoreError, type StoreCtx } from './store'
+import { inTransaction, StoreError, type Db, type StoreCtx } from './store'
 
 /** Trigram MATCH needs at least 3 characters. */
 const MIN_TERM_CHARS = 3
@@ -21,8 +28,10 @@ function phrase(term: string): string {
 /**
  * Chat retrieval and search: case-insensitive substring search over
  * the trigram indexes. Terms shorter than 3 characters are ignored. One hit per note
- * (`source: 'document'`, with `inTitle`) and one per panel (`source: 'panel'`), each
- * with the number of distinct terms it matched; best first. Own, non-deleted notes only.
+ * (`source: 'document'`, with `inTitle`), one per panel (`source: 'panel'`) and, when
+ * `sources` asks for `'transcripts'`, one per note transcript (`source: 'transcript'`), each
+ * with the number of distinct terms it matched; best first, and at equal terms a transcript
+ * hit after the others. Own, non-deleted notes only.
  */
 export function searchFts(s: StoreCtx, q: FtsQuery): FtsHit[] {
   if (typeof q !== 'object' || q === null || !Array.isArray(q.terms)) throw new StoreError('invalid-input', 'terms must be an array')
@@ -39,6 +48,7 @@ export function searchFts(s: StoreCtx, q: FtsQuery): FtsHit[] {
 
   const docs = new Map<string, { terms: Set<string>; inTitle: boolean }>()
   const panels = new Map<string, { documentId: string; terms: Set<string> }>()
+  const transcripts = new Map<string, Set<string>>()
   const docStmt = sources.includes('documents')
     ? s.db.prepare(
         `SELECT d.id, f.title FROM documents_fts f JOIN documents d ON d.rid = f.rowid
@@ -50,6 +60,12 @@ export function searchFts(s: StoreCtx, q: FtsQuery): FtsHit[] {
         `SELECT p.id, p.document_id FROM note_panels_fts f
          JOIN note_panels p ON p.rid = f.rowid JOIN documents d ON d.id = p.document_id
          WHERE note_panels_fts MATCH @match AND p.deleted_at IS NULL AND ${owned}`
+      )
+    : null
+  const transcriptStmt = sources.includes('transcripts')
+    ? s.db.prepare(
+        `SELECT d.id FROM transcripts_fts f JOIN documents d ON d.rid = f.rowid
+         WHERE transcripts_fts MATCH @match AND ${owned}`
       )
     : null
 
@@ -65,6 +81,11 @@ export function searchFts(s: StoreCtx, q: FtsQuery): FtsHit[] {
       const hit = panels.get(r.id) ?? { documentId: r.document_id, terms: new Set<string>() }
       hit.terms.add(lower)
       panels.set(r.id, hit)
+    }
+    for (const r of (transcriptStmt?.all({ ...scope, match: phrase(term) }) ?? []) as { id: string }[]) {
+      const hit = transcripts.get(r.id) ?? new Set<string>()
+      hit.add(lower)
+      transcripts.set(r.id, hit)
     }
   }
 
@@ -82,16 +103,52 @@ export function searchFts(s: StoreCtx, q: FtsQuery): FtsHit[] {
       inTitle: false,
       source: 'panel' as const,
       panelId
+    })),
+    ...[...transcripts].map(([documentId, t]) => ({
+      documentId,
+      matchedTerms: t.size,
+      inTitle: false,
+      source: 'transcript' as const,
+      panelId: null
     }))
   ]
   hits.sort(
     (a, b) =>
       b.matchedTerms - a.matchedTerms ||
       Number(b.inTitle) - Number(a.inTitle) ||
-      (a.source === b.source ? 0 : a.source === 'document' ? -1 : 1) ||
+      SOURCE_RANK[a.source] - SOURCE_RANK[b.source] ||
       a.documentId.localeCompare(b.documentId)
   )
   return hits.slice(0, limit)
+}
+
+const SOURCE_RANK: Record<FtsHit['source'], number> = { document: 0, panel: 1, transcript: 2 }
+
+/**
+ * A note's transcript as the index holds it: its final chunks in transcript order, text only
+ * (no speakers), one per line, without erased chunks or the sessions a merge hid. Empty for a
+ * deleted or missing note, which then has no index row.
+ */
+export function transcriptText(db: Db, noteId: string): string {
+  const doc = db.prepare(`SELECT deleted_at FROM documents WHERE id = ?`).get(noteId) as { deleted_at: string | null } | undefined
+  if (!doc || doc.deleted_at !== null) return ''
+  const rows = db
+    .prepare(
+      `SELECT c.text FROM transcript_chunks c
+       WHERE c.document_id = @id AND c.is_final = 1 AND c.text != @marker
+         AND c.transcription_session_id NOT IN (
+           SELECT value FROM json_each(COALESCE(
+             (SELECT CASE WHEN json_valid(superseded_session_ids) AND json_type(superseded_session_ids) = 'array'
+               THEN superseded_session_ids END FROM note_sources WHERE note_id = @id), '[]')))
+       ORDER BY c.start_timestamp, c.end_timestamp, c.id`
+    )
+    .all({ id: noteId, marker: DELETED_CHUNK_MARKER }) as { text: unknown }[]
+  const lines: string[] = []
+  for (const r of rows) {
+    const line = typeof r.text === 'string' ? r.text.trim() : ''
+    if (line) lines.push(line)
+  }
+  return lines.join('\n')
 }
 
 const DOC_BATCH = 100
@@ -101,6 +158,16 @@ const PAUSE_MS = 5
 const IDLE_MS = 250
 /** Upper bound between the first pending write and the start of indexing. */
 const MAX_DELAY_MS = 5_000
+/** A note is indexed once its transcript has had no write for this long. */
+const TRANSCRIPT_QUIET_MS = 30_000
+const TRANSCRIPT_BATCH_NOTES = 5
+const TRANSCRIPT_BATCH_CHARS = 300_000
+
+/** The clock and the quiet period; a check passes its own. */
+export interface FtsIndexerOptions {
+  now?: () => number
+  transcriptQuietMs?: number
+}
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -134,11 +201,23 @@ export class FtsIndexer {
   private running = false
   private rerun = false
   private stopped = false
+  /** Brings the indexer back when the oldest deferred transcript comes due. */
+  private wakeTimer: NodeJS.Timeout | null = null
+  private readonly now: () => number
+  private readonly quietMs: number
+  /** Transcripts indexed in the current drain, for its log line. */
+  private drained = { notes: 0, chars: 0, ms: 0 }
 
   /** `ctx()` is null once the database is closed. */
-  constructor(private readonly ctx: () => StoreCtx | null) {}
+  constructor(
+    private readonly ctx: () => StoreCtx | null,
+    opts: FtsIndexerOptions = {}
+  ) {
+    this.now = opts.now ?? Date.now
+    this.quietMs = opts.transcriptQuietMs ?? TRANSCRIPT_QUIET_MS
+  }
 
-  /** Call after any write to documents or panels. */
+  /** Call after any write to documents, panels, transcript chunks or note sources. */
   schedule(): void {
     if (this.stopped) return
     if (this.running) {
@@ -156,6 +235,15 @@ export class FtsIndexer {
     this.stopped = true
     if (this.timer) clearTimeout(this.timer)
     this.timer = null
+    if (this.wakeTimer) clearTimeout(this.wakeTimer)
+    this.wakeTimer = null
+  }
+
+  /** Runs one drain now and resolves when it ends; the check's way in. */
+  async drainNow(): Promise<void> {
+    if (this.running || this.stopped) return
+    if (this.timer) clearTimeout(this.timer)
+    await this.drain()
   }
 
   /** Startup: queue rows missing from the index and drop index rows whose source is gone. */
@@ -164,7 +252,7 @@ export class FtsIndexer {
     if (!s) return
     try {
       const queued = inTransaction(s.db, () => {
-        const now = new Date().toISOString()
+        const now = new Date(this.now()).toISOString()
         let n = 0
         n += s.db
           .prepare(
@@ -180,8 +268,20 @@ export class FtsIndexer {
              WHERE (p.deleted_at IS NULL) != EXISTS (SELECT 1 FROM note_panels_fts f WHERE f.rowid = p.rid)`
           )
           .run(now).changes
+        // A note whose indexable transcript and index row disagree. The first start after the
+        // upgrade queues every note with a transcript; the 30 s rule lets startup settle first.
+        n += s.db
+          .prepare(
+            `INSERT OR IGNORE INTO transcripts_fts_queue (document_id, queued_at)
+             SELECT d.id, @now FROM documents d
+             WHERE (d.deleted_at IS NULL AND EXISTS (
+                 SELECT 1 FROM transcript_chunks c WHERE c.document_id = d.id AND c.is_final = 1 AND c.text != @marker))
+               != EXISTS (SELECT 1 FROM transcripts_fts f WHERE f.rowid = d.rid)`
+          )
+          .run({ now, marker: DELETED_CHUNK_MARKER }).changes
         s.db.prepare(`DELETE FROM documents_fts WHERE rowid NOT IN (SELECT rid FROM documents)`).run()
         s.db.prepare(`DELETE FROM note_panels_fts WHERE rowid NOT IN (SELECT rid FROM note_panels)`).run()
+        s.db.prepare(`DELETE FROM transcripts_fts WHERE rowid NOT IN (SELECT rid FROM documents)`).run()
         return n
       })
       if (queued) s.log('info', 'fts-backfill-queued', { rows: queued })
@@ -222,6 +322,7 @@ export class FtsIndexer {
   private async drain(): Promise<void> {
     this.timer = null
     this.running = true
+    this.drained = { notes: 0, chars: 0, ms: 0 }
     try {
       while (!this.stopped) {
         const s = this.ctx()
@@ -231,12 +332,18 @@ export class FtsIndexer {
         const s2 = this.ctx()
         if (!s2 || this.stopped) break
         const panels = this.indexPanels(s2)
-        if (docs + panels === 0) break
+        await sleep(PAUSE_MS)
+        const s3 = this.ctx()
+        if (!s3 || this.stopped) break
+        const notes = this.indexTranscripts(s3)
+        if (docs + panels + notes === 0) break
         await sleep(PAUSE_MS)
       }
     } catch (err) {
       this.ctx()?.log('error', 'fts-index-failed', { err })
     } finally {
+      if (this.drained.notes) this.ctx()?.log('info', 'fts-transcripts-indexed', { ...this.drained })
+      this.wakeForDeferred()
       this.running = false
       if (this.rerun) {
         this.rerun = false
@@ -272,6 +379,70 @@ export class FtsIndexer {
       }
       return rows.length
     })
+  }
+
+  /** Sets the wake timer for the oldest queued transcript that isn't due yet. */
+  private wakeForDeferred(): void {
+    if (this.wakeTimer) clearTimeout(this.wakeTimer)
+    this.wakeTimer = null
+    const s = this.ctx()
+    if (!s || this.stopped) return
+    try {
+      const oldest = (s.db.prepare(`SELECT MIN(queued_at) AS t FROM transcripts_fts_queue`).get() as { t: string | null }).t
+      if (oldest === null) return
+      const at = Date.parse(oldest)
+      // A time ahead of the clock (the clock moved back) waits one quiet period at most.
+      const wait = Math.min(this.quietMs, Math.max(0, (Number.isNaN(at) ? 0 : at) + this.quietMs - this.now()))
+      this.wakeTimer = setTimeout(() => {
+        this.wakeTimer = null
+        this.schedule()
+      }, wait + 50)
+      this.wakeTimer.unref?.()
+    } catch (err) {
+      s.log('error', 'fts-index-failed', { err })
+    }
+  }
+
+  /**
+   * One batch of due transcripts: queue rows at least the quiet period old, oldest first. Each
+   * note's row is rebuilt from its chunks; a deleted, missing or empty note loses its row. The
+   * queue row goes only if it still carries the time read, so a write in between keeps it queued.
+   */
+  private indexTranscripts(s: StoreCtx): number {
+    const started = this.now()
+    const due = new Date(started - this.quietMs).toISOString()
+    let chars = 0
+    const notes = inTransaction(s.db, () => {
+      const rows = s.db
+        .prepare(
+          `SELECT q.document_id AS id, q.queued_at, d.rid FROM transcripts_fts_queue q
+           LEFT JOIN documents d ON d.id = q.document_id
+           WHERE q.queued_at <= ? ORDER BY q.queued_at LIMIT ?`
+        )
+        .all(due, TRANSCRIPT_BATCH_NOTES) as { id: string; queued_at: string; rid: number | null }[]
+      const del = s.db.prepare(`DELETE FROM transcripts_fts WHERE rowid = ?`)
+      const ins = s.db.prepare(`INSERT INTO transcripts_fts (rowid, document_id, text) VALUES (?, ?, ?)`)
+      const deq = s.db.prepare(`DELETE FROM transcripts_fts_queue WHERE document_id = ? AND queued_at = ?`)
+      let n = 0
+      for (const r of rows) {
+        const text = r.rid === null ? '' : transcriptText(s.db, r.id)
+        if (n > 0 && chars + text.length > TRANSCRIPT_BATCH_CHARS) break
+        if (r.rid !== null) {
+          del.run(r.rid)
+          if (text) ins.run(r.rid, r.id, text)
+        }
+        deq.run(r.id, r.queued_at)
+        chars += text.length
+        n++
+      }
+      return n
+    })
+    if (notes) {
+      this.drained.notes += notes
+      this.drained.chars += chars
+      this.drained.ms += this.now() - started
+    }
+    return notes
   }
 
   private indexPanels(s: StoreCtx): number {

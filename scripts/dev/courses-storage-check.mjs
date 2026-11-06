@@ -193,7 +193,8 @@ function shape(dataDir, keyHex) {
 
 /** Tables whose rows differ, after `transform` maps the old rows to what the new file should hold. */
 function tableDiff(before, after, transform = {}) {
-  const names = [...new Set([...Object.keys(before), ...Object.keys(after)])].sort()
+  // The transcript index is derived and later; transcript-search-check.mjs checks it.
+  const names = [...new Set([...Object.keys(before), ...Object.keys(after)])].sort().filter((t) => !/^transcripts_fts/.test(t))
   return names.filter((t) => {
     const want = lines((transform[t] ?? ((x) => x))(before[t] ?? []))
     const got = lines(after[t] ?? [])

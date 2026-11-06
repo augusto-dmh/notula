@@ -2,7 +2,7 @@
 // Local note search. Runs in
 // `notula-storage` on the FTS5 trigram index; the renderer never sends SQL.
 
-export type SearchMatchType = 'title' | 'notes' | 'panel'
+export type SearchMatchType = 'title' | 'notes' | 'panel' | 'transcript'
 
 export interface SearchResult {
   id: string

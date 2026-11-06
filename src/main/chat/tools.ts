@@ -46,6 +46,15 @@ const isoDateProp = (what: string): Record<string, unknown> => ({
   description: `${what}, as an ISO 8601 date (YYYY-MM-DD).`
 })
 
+/**
+ * How `ftsNotes` matches words, for every description that takes them. The model has to know
+ * there is no meaning or translation matching, or it searches in the wrong language.
+ */
+export const WORD_MATCHING =
+  "Words are matched literally, ignoring case, as any part of the text, in titles, the user's notes, AI summaries and transcripts (lesson captions included); words shorter than 3 characters are ignored. " +
+  'Nothing is matched by meaning or translated: use the words of the language the meetings were held in, and give synonyms and translations as separate words. ' +
+  "Only the user's own notes are searched by words."
+
 const DEFS: Record<string, LlmToolDef> = {
   getCurrentTime: {
     name: 'getCurrentTime',
@@ -55,14 +64,15 @@ const DEFS: Record<string, LlmToolDef> = {
   findMeetingsByTerms: {
     name: 'findMeetingsByTerms',
     description:
-      "Full-text search over the user's meetings (titles, notes, summaries and transcripts). Returns matching meetings with their ids, titles and dates, newest first. " +
+      "Full-text search over the user's meetings. Returns matching meetings with their ids, titles and dates, best match first, then newest. " +
+      `${WORD_MATCHING} ` +
       'Pass the distinctive words of the question, including likely synonyms, as separate keywords.',
     inputSchema: {
       type: 'object',
       properties: {
         keywords: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 10, description: 'Words or short phrases to look for; a meeting matches when it contains any of them.' },
         limit: { type: 'integer', minimum: 1, maximum: 100, description: 'How many meetings to return at most (default 20).' },
-        includeShared: { type: 'boolean', description: 'Also search notes that other people shared with the user.' },
+        includeShared: { type: 'boolean', description: 'Has no effect: notes that other people shared with the user are not searched.' },
         startDate: isoDateProp('Earliest meeting date'),
         endDate: isoDateProp('Latest meeting date')
       },
@@ -92,13 +102,13 @@ const DEFS: Record<string, LlmToolDef> = {
     name: 'findMeetings',
     description:
       "One search over the user's meetings that combines words, people, dates and a folder, and continues page by page. " +
-      'Words are matched in titles, notes and summaries, best match first; without words the newest come first. ' +
+      `${WORD_MATCHING} With words, the best match comes first, then the newest; without words the newest come first. ` +
       'The status says whether more pages follow (more: call again with the same arguments and the cursor), all were shown (complete), ' +
       'or the page stopped early (partial: the results may be incomplete, and the cursor carries on from there).',
     inputSchema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: 'Words to look for.' },
+        query: { type: 'string', description: 'Words to look for; a meeting matches when it contains any of them.' },
         people: { type: 'array', items: { type: 'string' }, maxItems: 10, description: 'People who were in the meeting, as names or email addresses; a meeting matches any of them.' },
         from: isoDateProp('Earliest meeting date'),
         to: isoDateProp('Latest meeting date'),
@@ -131,12 +141,17 @@ const DEFS: Record<string, LlmToolDef> = {
   listMeetings: {
     name: 'listMeetings',
     description:
-      "Lists the user's meetings by title, folder, participant or date, newest first, without their content. " +
+      "Lists the user's meetings by keyword, folder, participant or date, newest first, without their content. " +
       'Use it to find candidates, then readMeetings for what they say.',
     inputSchema: {
       type: 'object',
       properties: {
-        keyword: { type: 'string', description: 'Only meetings whose title contains this text.' },
+        keyword: {
+          type: 'string',
+          description:
+            'Only meetings that contain this text. From 3 characters it is looked for as one piece of text, literally and ignoring case, in titles, ' +
+            "the user's notes, AI summaries and transcripts, in the user's own notes only; shorter text is looked for in titles only."
+        },
         scope: { type: 'string', enum: ['owned', 'attended', 'all', 'folder'], description: 'owned: notes the user created; attended: meetings the user was in; all: both, plus notes shared with them; folder: the notes of folderId.' },
         folderId: { type: 'string', description: 'The folder whose notes to list, with scope folder.' },
         participant: { type: 'string', description: 'Only meetings with this participant (a name or an email address).' },
@@ -563,13 +578,17 @@ export async function allNotes(ctx: MainContext): Promise<NoteListItem[]> {
   return ctx.storage.queryNotes({ order: 'newest' })
 }
 
-/** Notes matching FTS terms, best match first, then newest. */
+/** Notes matching FTS terms in titles, notes, panels and transcripts, best match first, then newest. */
 export async function ftsNotes(ctx: MainContext, terms: string[]): Promise<NoteListItem[]> {
   const clean = [...new Set(terms.map((t) => t.trim().toLowerCase()).filter((t) => [...t].length >= 3))].slice(0, 32)
   if (clean.length === 0) return []
-  const hits = await ctx.storage.searchFts({ terms: clean, limit: 500, sources: ['documents', 'panels'] })
+  const hits = await ctx.storage.searchFts({ terms: clean, limit: 500, sources: ['documents', 'panels', 'transcripts'] })
   const score = new Map<string, number>()
-  for (const h of hits) score.set(h.documentId, Math.max(score.get(h.documentId) ?? 0, h.matchedTerms + (h.inTitle ? 0.5 : 0)))
+  // A transcript hit ranks after a note or summary hit with the same terms.
+  for (const h of hits) {
+    const v = h.matchedTerms + (h.inTitle ? 0.5 : 0) - (h.source === 'transcript' ? 0.25 : 0)
+    score.set(h.documentId, Math.max(score.get(h.documentId) ?? 0, v))
+  }
   if (score.size === 0) return []
   const notes = await ctx.storage.queryNotes({ ids: [...score.keys()].slice(0, 500) })
   return notes.sort((a, b) => (score.get(b.id) ?? 0) - (score.get(a.id) ?? 0) || noteWhen(b).localeCompare(noteWhen(a)))

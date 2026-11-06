@@ -980,7 +980,7 @@ export class StorageEngine {
   private touch(table: string, ids: string[]): void {
     this.pending.tables.add(table)
     for (const id of ids) this.pending.ids.add(id)
-    if (table === 'documents' || table === 'note_panels') this.fts?.schedule()
+    if (table === 'documents' || table === 'note_panels' || table === 'transcript_chunks' || table === 'note_sources') this.fts?.schedule()
     if (this.pending.queued) return
     this.pending.queued = true
     queueMicrotask(() => {

@@ -21,7 +21,8 @@ import {
   peopleText,
   P2_TOOLS,
   startOfDay,
-  type LocalTool
+  type LocalTool,
+  WORD_MATCHING
 } from './tools'
 
 const DAY_MS = 86_400_000
@@ -201,7 +202,8 @@ const exploreMeetings: LocalTool = {
     name: 'exploreMeetings',
     description:
       'Gathers candidate meetings for an open-ended question in one call, grouped by how they were found: by words, by people or companies, by folder and by time window. ' +
-      'Give at least one seed. Read the most relevant results with readMeetings afterwards.',
+      'Give at least one seed. Read the most relevant results with readMeetings afterwards. ' +
+      `Search words come from base_terms, terms and the significant words of query. ${WORD_MATCHING}`,
     inputSchema: {
       type: 'object',
       properties: {
