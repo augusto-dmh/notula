@@ -101,13 +101,15 @@ export function ScopePicker({ scope, onChoose }: { scope: LessonScope; onChoose(
   )
 }
 
-/** Before generating: the scoped transcript is over the model's budget. */
+/**
+ * Before generating: the scoped transcript is over the model's budget. No range is named:
+ * generation sends the whole scope and the model decides what it reads.
+ */
 export function ScopeWarning({ scope }: { scope: LessonScope }): JSX.Element | null {
   if (scope.cutAtMs === null) return null
-  const from = clockLabel(scope.startMs ?? 0)
   return (
     <p className="enh-scope-warning" role="note">
-      {`This lesson is long for your model; notes will cover ${from}–${clockLabel(scope.cutAtMs)}`}
+      The part you chose may be longer than your AI model can read at once.
     </p>
   )
 }

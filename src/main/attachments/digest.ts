@@ -8,15 +8,13 @@
 import { ATTACHMENT_LIMITS } from '@shared/types/attachments'
 import type { MainContext } from '../context'
 import { unavailableError } from '../enhance/generation'
+import { digestBudgetChars, knownInputWindow } from '../llm/input-window'
 import { currentProvider } from '../llm/registry'
 import { MAX_TOKENS, type LlmImage } from '../llm/types'
 import { log } from '../log'
 import { egressBlocked, LOCAL_ONLY_REASON } from '../privacy'
 
 const MAX_WORDS = 150
-/** About 4 characters per token; a quarter of the window keeps room for the answer. */
-const DEFAULT_CONTEXT_TOKENS = 32_000
-const MAX_INPUT_CHARS = 400_000
 
 const SYSTEM_FILE = [
   'Summarize what this file contains for someone who will ask questions about it later.',
@@ -60,8 +58,8 @@ export async function digestAttachment(
       user = `File: ${input.name} (${input.mimeType})`
       images = [input.image]
     } else {
-      const window = (await provider.contextWindow().catch(() => null)) ?? DEFAULT_CONTEXT_TOKENS
-      const budget = Math.min(MAX_INPUT_CHARS, Math.max(8_000, window * 3))
+      const window = (await provider.contextWindow().catch(() => null)) ?? (provider.id === 'openai' ? knownInputWindow(provider.model) : null)
+      const budget = digestBudgetChars(window)
       const body = input.markdown.length > budget ? `${input.markdown.slice(0, budget)}\n\n[… the rest of the file was cut]` : input.markdown
       user = `File: ${input.name} (${input.mimeType})\n\n<file>\n${body}\n</file>`
     }

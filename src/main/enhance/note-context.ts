@@ -8,6 +8,7 @@ import { SUGGESTED_ACTIONS_SLUG } from '@shared/types/enhance'
 import type { CalendarAttendee, CalendarEvent, Note } from '@shared/types/notes'
 import type { Panel } from '@shared/types/panels'
 import type { MainContext } from '../context'
+import { knownInputWindow, transcriptBudgetChars } from '../llm/input-window'
 import { currentProvider } from '../llm/registry'
 import { MAX_TOKENS, type LlmProvider, type LlmPurpose } from '../llm/types'
 import { egressBlocked, LOCAL_ONLY_REASON } from '../privacy'
@@ -15,13 +16,6 @@ import { readerTranscript } from '../sources/reader'
 import { transcriptionControl } from '../transcription'
 import { unavailableError } from './generation'
 import { formatTranscript } from './transcript'
-
-/** About 4 characters per token; the transcript gets at most this share of the window. */
-const TRANSCRIPT_SHARE = 0.5
-const CHARS_PER_TOKEN = 3.5
-/** Without a known window (OpenAI-compatible, local): a conservative 32k-token model. */
-const DEFAULT_WINDOW_TOKENS = 32_000
-const MAX_TRANSCRIPT_CHARS = 600_000
 
 export interface Participant {
   name: string
@@ -100,8 +94,9 @@ export async function transcriptFor(ctx: MainContext, noteId: string, maxChars: 
 
 /** The transcript budget in characters for this provider. */
 export async function transcriptBudget(provider: LlmProvider): Promise<number> {
-  const window = (await provider.contextWindow().catch(() => null)) ?? DEFAULT_WINDOW_TOKENS
-  return Math.min(MAX_TRANSCRIPT_CHARS, Math.max(4_000, Math.floor(window * TRANSCRIPT_SHARE * CHARS_PER_TOKEN)))
+  // The OpenAI-compatible provider reports no window; a known model's (the Gemini preset's) applies here only.
+  const window = (await provider.contextWindow().catch(() => null)) ?? (provider.id === 'openai' ? knownInputWindow(provider.model) : null)
+  return transcriptBudgetChars(window)
 }
 
 export class JsonTaskError extends Error {
