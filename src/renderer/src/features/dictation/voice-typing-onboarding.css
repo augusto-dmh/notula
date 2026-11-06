@@ -301,3 +301,59 @@
   flex-wrap: wrap;
   gap: 8px;
 }
+
+/* The practice step's shortcut, with Change and the saved line beside it. */
+.vto-keys--picker {
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.vto-keys--picker .vto-change {
+  align-self: center;
+}
+
+/* A pointer drawn in CSS, down towards the practice box, with its hint. */
+.vto-pointer-hint {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+}
+
+.vto-pointer {
+  position: relative;
+  flex: none;
+  width: 2px;
+  height: 16px;
+  margin: 0 5px 6px;
+  border-radius: 1px;
+  background: var(--accent);
+  animation: vto-pointer 1.2s ease-in-out infinite;
+}
+
+.vto-pointer::after {
+  position: absolute;
+  bottom: -6px;
+  left: -5px;
+  width: 0;
+  height: 0;
+  border-top: 7px solid var(--accent);
+  border-right: 6px solid transparent;
+  border-left: 6px solid transparent;
+  content: '';
+}
+
+@keyframes vto-pointer {
+  50% {
+    transform: translateY(3px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vto-pointer {
+    animation: none;
+  }
+}

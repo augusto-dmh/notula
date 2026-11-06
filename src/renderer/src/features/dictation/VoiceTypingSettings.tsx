@@ -146,7 +146,7 @@ const BUILT_IN = /built-?in|internal|integrated|array/i
 /** Bluetooth and hands-free devices, known by label: lower quality while the mic is open. */
 const WIRELESS = /bluetooth|hands-?free|headset|airpods|buds|\bbt\b|wireless/i
 
-function useInputs(): MediaDeviceInfo[] {
+export function useInputs(): MediaDeviceInfo[] {
   const [inputs, setInputs] = useState<MediaDeviceInfo[]>([])
   useEffect(() => {
     let live = true
@@ -164,6 +164,15 @@ function useInputs(): MediaDeviceInfo[] {
     }
   }, [])
   return inputs
+}
+
+/** The microphone in use, as a sentence names it ("the built-in microphone", a device's label). */
+export function microphoneName(value: DictationMicrophone | null, inputs: readonly MediaDeviceInfo[]): string {
+  const builtIn = inputs.find((d) => BUILT_IN.test(d.label))
+  if (value === null) return builtIn ? 'the built-in microphone' : 'the system default microphone'
+  if (value === 'system-default') return 'the system default microphone'
+  if (builtIn && value.deviceId === builtIn.deviceId) return 'the built-in microphone'
+  return inputs.find((d) => d.deviceId === value.deviceId)?.label || value.label || 'the chosen microphone'
 }
 
 /** The picker: the built-in microphone first and recommended, then wired devices, Bluetooth and hands-free devices last. */
