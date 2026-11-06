@@ -3,8 +3,9 @@
 // long-lived OS child process
 // that reports which apps use the microphone. No network; it never sees audio.
 //
-// - Windows: one PowerShell child polls the per-user consent store every 1 s and
-//   prints a JSON line when the set of in-use entries changes.
+// - Windows: one PowerShell child (micmon-script.ts) waits on a change notification for the
+//   per-user consent store, with a 60 s safety rescan (every 5 s when the notification is
+//   unavailable), and prints a JSON line when the set of in-use entries changes.
 // - macOS: `log stream` on Control Center's sensor-indicator messages, `mic:` entries,
 //   debounced by 2 s.
 //
@@ -13,6 +14,7 @@
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createInterface } from 'node:readline'
+import { micmonWindowsScript } from './micmon-script'
 
 /** main → worker. `stop` ends the OS child first, then this process. */
 export type MicmonStart = { type: 'start'; platform: NodeJS.Platform } | { type: 'stop' }
@@ -26,80 +28,12 @@ export type MicmonEvent =
   | { type: 'line' }
   | { type: 'log'; level: 'info' | 'warn' | 'error'; event: string; data?: Record<string, string | number | boolean> }
 
-const POLL_MS = 1_000
 const MAC_DEBOUNCE_MS = 2_000
 const MAX_LINE = 64 * 1024
 
 // Literal OS data: the Control Center sensor-indicator predicate.
 const MAC_PREFIX = 'Active activity attributions changed to '
 const MAC_PREDICATE = `subsystem == "com.apple.controlcenter" AND category == "sensor-indicators" AND eventMessage BEGINSWITH "${MAC_PREFIX}"`
-
-// "In use" = LastUsedTimeStop is 0 and LastUsedTimeStart is not. Desktop apps are
-// subkeys of NonPackaged named by path with `#` for `\`; packaged apps by family.
-//
-// The poll runs all day while Notula sits in the tray, so each pass is kept cheap:
-// no cmdlets (each one loads a module and runs a pipeline), the owner checked
-// through one process handle instead of listing every process each second, and most keys
-// settled by their first value read. Measured on a host with 103 consent-store entries:
-// 8.0 % -> 1.5 % of a core.
-const WINDOWS_SCRIPT = `
-$ErrorActionPreference = 'SilentlyContinue'
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-$path = 'Software\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\microphone'
-$hkcu = [Microsoft.Win32.Registry]::CurrentUser
-# JSON string escaping, control characters included, so one odd subkey name never makes a line unparsable.
-function Esc($s) {
-  $e = $s.Replace('\\', '\\\\').Replace('"', '\\"')
-  return [regex]::Replace($e, '[\\x00-\\x1f]', { param($m) '\\u{0:x4}' -f [int][char]$m.Value })
-}
-# Windows does not end a child with its parent: stop when notula-micmon is gone. The handle
-# is opened once; HasExited waits on it instead of listing every process each second.
-try { $owner = [System.Diagnostics.Process]::GetProcessById(__OWNER_PID__) } catch { exit 0 }
-$last = $null
-[Console]::Out.WriteLine('{"t":"ready"}')
-[Console]::Out.Flush()
-while (-not $owner.HasExited) {
-  $ids = [System.Collections.Generic.List[string]]::new()
-  $root = $hkcu.OpenSubKey($path)
-  if ($null -ne $root) {
-    foreach ($name in $root.GetSubKeyNames()) {
-      $k = $root.OpenSubKey($name)
-      if ($null -eq $k) { continue }
-      if ($name -eq 'NonPackaged') {
-        foreach ($sub in $k.GetSubKeyNames()) {
-          $s = $k.OpenSubKey($sub)
-          if ($null -eq $s) { continue }
-          # In use = LastUsedTimeStop 0 and LastUsedTimeStart not; most keys stop at the first read.
-          $stop = $s.GetValue('LastUsedTimeStop')
-          if ($null -ne $stop -and [int64]$stop -eq 0) {
-            $start = $s.GetValue('LastUsedTimeStart')
-            if ($null -ne $start -and [int64]$start -ne 0) { $ids.Add('n:' + $sub) }
-          }
-          $s.Close()
-        }
-      } else {
-        $stop = $k.GetValue('LastUsedTimeStop')
-        if ($null -ne $stop -and [int64]$stop -eq 0) {
-          $start = $k.GetValue('LastUsedTimeStart')
-          if ($null -ne $start -and [int64]$start -ne 0) { $ids.Add('p:' + $name) }
-        }
-      }
-      $k.Close()
-    }
-    $root.Close()
-  }
-  $ids.Sort()
-  $key = [string]::Join([char]10, $ids)
-  if ($key -ne $last) {
-    $quoted = [System.Collections.Generic.List[string]]::new()
-    foreach ($id in $ids) { $quoted.Add('"' + (Esc $id) + '"') }
-    [Console]::Out.WriteLine('{"t":"apps","ids":[' + [string]::Join(',', $quoted) + ']}')
-    [Console]::Out.Flush()
-    $last = $key
-  }
-  [System.Threading.Thread]::Sleep(${POLL_MS})
-}
-`
 
 const port = process.parentPort
 let child: ChildProcessWithoutNullStreams | null = null
@@ -129,7 +63,7 @@ function lines(c: ChildProcessWithoutNullStreams, onLine: (line: string) => void
 }
 
 function startWindows(): void {
-  const script = WINDOWS_SCRIPT.replace('__OWNER_PID__', String(process.pid))
+  const script = micmonWindowsScript({ ownerPid: process.pid })
   const encoded = Buffer.from(script, 'utf16le').toString('base64')
   // No `-ExecutionPolicy Bypass`: the policy does not apply to -EncodedCommand, and the
   // pair is a common endpoint-security signature.
@@ -138,13 +72,14 @@ function startWindows(): void {
   })
   child = c
   lines(c, (l) => {
-    let msg: { t?: unknown; ids?: unknown }
+    let msg: { t?: unknown; ids?: unknown; event?: unknown }
     try {
-      msg = JSON.parse(l) as { t?: unknown; ids?: unknown }
+      msg = JSON.parse(l) as { t?: unknown; ids?: unknown; event?: unknown }
     } catch {
       return
     }
     if (msg.t === 'ready') send({ type: 'ready' })
+    else if (msg.t === 'log' && msg.event === 'micmon:notify-unavailable') send({ type: 'log', level: 'warn', event: msg.event })
     else if (msg.t === 'apps' && Array.isArray(msg.ids)) {
       send({ type: 'raw', ids: msg.ids.filter((x): x is string => typeof x === 'string').slice(0, 256) })
     }
