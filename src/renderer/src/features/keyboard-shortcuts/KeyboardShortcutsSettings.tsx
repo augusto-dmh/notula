@@ -227,15 +227,19 @@ function Recorder({
         press(k)
       } else if (e.type === 'mouseup' && held.has(k)) release(k)
     }
-    // Any other row takes the press as it is, and main refuses a mouse button in words.
+    // Any other row takes the press as it is, and main refuses a mouse button in words. It
+    // finishes on the release: finishing on the press would leave the release unhandled, and
+    // the back button's release would take the window back a page.
+    let mousePress: { k: string; mods: string[] } | null = null
     const onMouse = (e: MouseEvent): void => {
       const k = mouseKeyOf(e)
       if (!k) return
       e.preventDefault()
       e.stopPropagation()
-      if (e.type !== 'mousedown') return
-      const mods = eventModifiers(e).map((m) => (m === 'Option' ? 'Alt' : m === 'Win' ? 'Super' : m === 'Cmd' ? 'Command' : m))
-      finish({ accelerator: [...mods, k].join('+') })
+      if (e.type === 'mousedown') {
+        const mods = eventModifiers(e).map((m) => (m === 'Option' ? 'Alt' : m === 'Win' ? 'Super' : m === 'Cmd' ? 'Command' : m))
+        mousePress = { k, mods }
+      } else if (e.type === 'mouseup' && mousePress?.k === k) finish({ accelerator: [...mousePress.mods, k].join('+') })
     }
 
     const onKey = (e: KeyboardEvent): void => {
