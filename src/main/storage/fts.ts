@@ -137,11 +137,7 @@ export function transcriptText(db: Db, noteId: string): string {
   const rows = db
     .prepare(
       `SELECT c.text FROM transcript_chunks c
-       WHERE c.document_id = @id AND c.is_final = 1 AND c.text != @marker
-         AND c.transcription_session_id NOT IN (
-           SELECT value FROM json_each(COALESCE(
-             (SELECT CASE WHEN json_valid(superseded_session_ids) AND json_type(superseded_session_ids) = 'array'
-               THEN superseded_session_ids END FROM note_sources WHERE note_id = @id), '[]')))
+       WHERE c.document_id = @id AND ${indexableChunk('c', '@id')}
        ORDER BY c.start_timestamp, c.end_timestamp, c.id`
     )
     .all({ id: noteId, marker: DELETED_CHUNK_MARKER }) as { text: unknown }[]
@@ -152,6 +148,18 @@ export function transcriptText(db: Db, noteId: string): string {
   }
   return lines.join('\n')
 }
+
+/** A final chunk, not erased, outside the sessions a merge hid; `@marker` is bound by the caller. */
+function indexableChunk(c: string, noteId: string): string {
+  return `${c}.is_final = 1 AND ${c}.text != @marker
+    AND ${c}.transcription_session_id NOT IN (
+      SELECT value FROM json_each(COALESCE(
+        (SELECT CASE WHEN json_valid(superseded_session_ids) AND json_type(superseded_session_ids) = 'array'
+          THEN superseded_session_ids END FROM note_sources WHERE note_id = ${noteId}), '[]')))`
+}
+
+/** What `String.prototype.trim` drops, near enough for a blank test in SQL. */
+const SQL_BLANKS = `' ' || char(9, 10, 11, 12, 13, 160, 8232, 8233, 65279)`
 
 const DOC_BATCH = 100
 const PANEL_BATCH = 10
@@ -277,7 +285,8 @@ export class FtsIndexer {
             `INSERT OR IGNORE INTO transcripts_fts_queue (document_id, queued_at)
              SELECT d.id, @now FROM documents d
              WHERE (d.deleted_at IS NULL AND EXISTS (
-                 SELECT 1 FROM transcript_chunks c WHERE c.document_id = d.id AND c.is_final = 1 AND c.text != @marker))
+                 SELECT 1 FROM transcript_chunks c WHERE c.document_id = d.id AND ${indexableChunk('c', 'd.id')}
+                   AND TRIM(c.text, ${SQL_BLANKS}) != ''))
                != EXISTS (SELECT 1 FROM transcripts_fts f WHERE f.rowid = d.rid)`
           )
           .run({ now, marker: DELETED_CHUNK_MARKER }).changes

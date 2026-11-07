@@ -464,6 +464,25 @@ try {
   check('a deferred note sets a wake timer', indexer.wakeTimer !== null && find('brindlequay').length === 0)
   indexer.stop()
 
+  // The backfill leaves out notes with nothing to index: blank chunks, or only hidden sessions.
+  const blank = write('createNote', { origin: 'unknown', title: 'Blank lines', created_via: 'Windows' }).id
+  write('upsertChunks', [chunk(blank, 0, '   '), chunk(blank, 1, '\n\t')])
+  const hidden = write('createNote', { origin: 'unknown', title: 'Hidden sessions', created_via: 'Windows' }).id
+  write('upsertChunks', [chunk(hidden, 0, 'Superseded words about quillobar.', { session: 'session-hidden' })])
+  const stamp = new Date().toISOString()
+  raw
+    .prepare(
+      `INSERT INTO note_sources (id, workspace_id, owner_id, note_id, kind, provider, canonical_key, confidence, detected_via, superseded_session_ids, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'video', 'example', 'example.com/v', 'high', 'check', '["session-hidden"]', ?, ?)`
+    )
+    .run(randomUUID(), ids.workspace_id, ids.owner_id, hidden, stamp, stamp)
+  const bIndexer = new NEW.fts.FtsIndexer(() => ctx, { now: () => clock })
+  dueNow()
+  await bIndexer.drainNow()
+  const emptyBefore = indexed(blank) === 0 && indexed(hidden) === 0 && !queued().includes(blank) && !queued().includes(hidden)
+  bIndexer.backfill()
+  bIndexer.stop()
+  check('the backfill skips notes whose chunks are all blank or superseded', emptyBefore && !queued().includes(blank) && !queued().includes(hidden), { emptyBefore, queued: queued() })
   check('logs carry counts only', !JSON.stringify(logs).match(/gantrywhistle|plinthmoor|Batch words|planning/i), logs.map((l) => l.event))
   raw.close()
   raw = null
