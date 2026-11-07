@@ -172,8 +172,9 @@ const MAX_DELAY_MS = 5_000
 const TRANSCRIPT_QUIET_MS = 30_000
 const TRANSCRIPT_BATCH_NOTES = 5
 const TRANSCRIPT_BATCH_CHARS = 300_000
-/** Waits after a failed drain, one per failure in a row; the last repeats until a drain succeeds. */
-const RETRY_AFTER_MS = [5_000, 30_000, 120_000]
+/** Waits after the first and the second failed drain in a row, then after every later one until a drain works. */
+const RETRY_AFTER_MS: readonly number[] = [5_000, 30_000]
+const RETRY_MAX_MS = 120_000
 
 /** The clock and the quiet period; a check passes its own. */
 export interface FtsIndexerOptions {
@@ -362,8 +363,8 @@ export class FtsIndexer {
       this.retryAt = 0
     } catch (err) {
       // A failure that repeats (a damaged table, a full disk) waits longer each time, logged once per step.
-      retryIn = RETRY_AFTER_MS[Math.min(this.failures, RETRY_AFTER_MS.length - 1)]
-      if (this.failures < RETRY_AFTER_MS.length) this.ctx()?.log('error', 'fts-index-failed', { err, retryInMs: retryIn })
+      retryIn = RETRY_AFTER_MS[this.failures] ?? RETRY_MAX_MS
+      if (this.failures <= RETRY_AFTER_MS.length) this.ctx()?.log('error', 'fts-index-failed', { err, retryInMs: retryIn })
       this.failures++
       this.retryAt = Date.now() + retryIn
     } finally {
