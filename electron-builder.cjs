@@ -18,14 +18,15 @@ module.exports = {
   // Sources, docs, analysis output and local tool settings never ship.
   // Only the three build outputs ship: scratch folders under out/ never reach the installer.
   // The SQLite addon ships its loader and one prebuild, never its C sources or build files;
-  // each target below keeps only its own prebuild (`${arch}` is the target's arch).
+  // each target keeps only its own prebuild (`${platform}` and `${arch}` expand per target).
   files: [
     'out/main/**/*',
     'out/preload/**/*',
     'out/renderer/**/*',
     'package.json',
     '!**/node_modules/better-sqlite3-multiple-ciphers/{deps,src,build}{,/**/*}',
-    '!**/node_modules/better-sqlite3-multiple-ciphers/binding.gyp'
+    '!**/node_modules/better-sqlite3-multiple-ciphers/binding.gyp',
+    '!**/node_modules/better-sqlite3-multiple-ciphers/prebuilds/!(${platform}-${arch}).node'
   ],
   // Both native addons are Node-API prebuilds: no @electron/rebuild step.
   npmRebuild: false,
@@ -41,8 +42,7 @@ module.exports = {
   // The app icon: resources/icon/icon.svg, rendered by scripts/icon/render.cjs.
   win: {
     target: 'nsis',
-    icon: 'resources/icon/icon.ico',
-    files: ['!**/node_modules/better-sqlite3-multiple-ciphers/prebuilds/!(win32-${arch}).node']
+    icon: 'resources/icon/icon.ico'
   },
   // No spaces: GitHub renames release assets with spaces, which would break latest.yml.
   // The uninstaller also deletes the browser extension's two HKCU native-messaging keys.
@@ -50,8 +50,7 @@ module.exports = {
   // A universal build would need both darwin prebuilds; the targets here build one arch.
   mac: {
     target: ['dmg', 'zip'],
-    icon: 'resources/icon/icon-512.png',
-    files: ['!**/node_modules/better-sqlite3-multiple-ciphers/prebuilds/!(darwin-${arch}).node']
+    icon: 'resources/icon/icon-512.png'
   },
   publish: feed ? { provider: 'generic', url: feed } : null
 }
