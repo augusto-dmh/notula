@@ -52,6 +52,7 @@ import { egressBlocked, LOCAL_ONLY_REASON } from '../privacy'
 import { generalAutoGeneration } from '../sources/automation'
 import { readerTranscript } from '../sources/reader'
 import { formatTranscript, lastWords, transcriptChunks } from './transcript'
+import { autoSummarySkipped } from './title'
 
 /** Generate a summary on every transcription stop, skipping the "after stop" checks. Off. */
 const ALWAYS_GENERATE_WHEN_STOPPED = false
@@ -217,6 +218,7 @@ export class AutoGeneration {
     log('info', 'enhance:stop-and-summarize', { noteId, summarizing })
     if (summarizing) void this.generateEndOfMeeting(noteId).catch((err: unknown) => this.failed(noteId, err))
     await stopped
+    if (!summarizing) autoSummarySkipped(this.ctx, noteId)
     return { summarizing }
   }
 
@@ -390,11 +392,14 @@ export class AutoGeneration {
     return Number.isFinite(at) && Math.abs(at - Date.now()) <= CALENDAR_END_WINDOW_MS
   }
 
+  /** Every skip but a stop decided earlier also tells the title that no summary is coming. */
   private skip(noteId: string, reason: string): void {
     log('info', 'enhance:auto-skipped', { noteId, reason })
+    if (reason !== 'decided-at-stop') autoSummarySkipped(this.ctx, noteId)
   }
 
   private failed(noteId: string, err: unknown): void {
     log('error', 'enhance:auto-failed', { noteId, err })
+    autoSummarySkipped(this.ctx, noteId)
   }
 }

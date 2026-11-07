@@ -8,7 +8,8 @@
 // The title reads the note's newest summary, not the transcript. While a summary may
 // still come (one is generating, or automatic notes may still start after the stop) the
 // request is skipped as `no-summary`. When none is coming, the start of the transcript
-// stands in for it.
+// stands in for it: at once when automatic notes have decided against the stop, else after
+// a short wait.
 
 import { app } from 'electron'
 import { SUGGESTED_ACTIONS_SLUG, type TitleResult } from '@shared/types/enhance'
@@ -32,8 +33,11 @@ const MAX_SUMMARY_CHARS = 8_000
 const MAX_FALLBACK_TRANSCRIPT_CHARS = 6_000
 /** Automatic notes never run on less transcript than this (auto.ts's minimum). */
 const AUTO_SUMMARY_MIN_CHARS = 2_500
-/** After a stop, how long automatic notes may take to start before the transcript stands in. */
-const SUMMARY_START_WAIT_MS = 120_000
+/**
+ * After a stop, how long automatic notes may take to start before the transcript stands in, when
+ * no decision reaches the title: their checks take about 10 s and their schedule another 10 s.
+ */
+const SUMMARY_START_WAIT_MS = 30_000
 const MAX_TITLE_CODE_POINTS = 100
 const WORD_CUT_AFTER = 50
 const TRAILING = /[ ,;:\-–—]+$/u
@@ -52,6 +56,18 @@ export function clampTitle(title: string): { title: string; clamped: boolean } {
 const inFlight = new Set<string>()
 /** One timer per note: the check once automatic notes would have started. */
 const rechecks = new Map<string, ReturnType<typeof setTimeout>>()
+/** Per note, when automatic notes last decided not to summarize it; a stop before then waits no more. */
+const noAutoSummaryAt = new Map<string, number>()
+
+/** Automatic notes won't summarize the note: a title waiting on them is asked for now. */
+export function autoSummarySkipped(ctx: MainContext, noteId: string): void {
+  noAutoSummaryAt.set(noteId, Date.now())
+  const timer = rechecks.get(noteId)
+  if (!timer) return
+  clearTimeout(timer)
+  rechecks.delete(noteId)
+  void generateTitle(ctx, noteId)
+}
 
 function recheckAt(ctx: MainContext, noteId: string, at: number): void {
   if (rechecks.has(noteId)) return
@@ -137,7 +153,7 @@ async function run(ctx: MainContext, noteId: string): Promise<TitleResult> {
     vars['latest_summary'] = headOf(summary, MAX_SUMMARY_CHARS, '[… the rest of the summary was cut]')
     vars['transcript'] = ''
   } else {
-    const waitUntil = summaryExpectedUntil(panels, session?.ended_at ?? null, transcript.text.length)
+    const waitUntil = summaryExpectedUntil(panels, session?.ended_at ?? null, transcript.text.length, noAutoSummaryAt.get(noteId))
     if (waitUntil !== null) {
       // A finished generation asks again (index.ts); a summary that never starts, the timer.
       if (Number.isFinite(waitUntil)) recheckAt(ctx, noteId, waitUntil)
@@ -172,15 +188,18 @@ async function run(ctx: MainContext, noteId: string): Promise<TitleResult> {
 /**
  * While a summary may still come: Infinity when one is generating (its end asks again), the
  * time automatic notes would have started by after a recent stop, or null when none is
- * coming (a generation that ended without one, too little transcript, or a stop long ago).
+ * coming (a generation that ended without one, too little transcript, a stop automatic notes
+ * skipped, or a stop long ago).
  */
-function summaryExpectedUntil(panels: Panel[], endedAt: string | null, transcriptChars: number): number | null {
+function summaryExpectedUntil(panels: Panel[], endedAt: string | null, transcriptChars: number, autoSkippedAt: number | undefined): number | null {
   const summaries = panels.filter((p) => !p.deleted_at && p.template_key !== SUGGESTED_ACTIONS_SLUG)
   const generating = summaries.some(
     (p) => p.enhance_started_at && !(p.enhance_failed_at && p.enhance_failed_at >= p.enhance_started_at) && !panelMarkdown(p)
   )
   if (generating) return Infinity
   if (summaries.length > 0 || transcriptChars < AUTO_SUMMARY_MIN_CHARS || !endedAt) return null
-  const until = Date.parse(endedAt) + SUMMARY_START_WAIT_MS
+  const ended = Date.parse(endedAt)
+  if (autoSkippedAt !== undefined && autoSkippedAt >= ended) return null
+  const until = ended + SUMMARY_START_WAIT_MS
   return Number.isFinite(until) && until > Date.now() ? until : null
 }
