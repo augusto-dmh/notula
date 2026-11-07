@@ -5,8 +5,8 @@
 //   node scripts/dev/courses-storage-check.mjs [--prev <git rev>] [--keep]
 //
 // 1. Builds the storage engine of the previous release (`--prev`, a schema-18 tree; default the
-//    merge base of HEAD and main, else main) and of this tree for Node, with Vite (dependencies
-//    stay external), and drives each through its RPC dispatch, as the storage worker does.
+//    parent of the commit that added migration 19, else main) and of this tree for Node, with
+//    Vite (dependencies stay external), and drives each through its RPC dispatch, as the storage worker does.
 // 2. The previous build writes a schema-18 database with series, notes, sources, spans and lesson
 //    lists. This tree upgrades it to 19: every row kept, the five course columns at their
 //    defaults, no CHECK on them, the schema of a fresh database and a backup of the old file. An
@@ -40,7 +40,7 @@ const require = createRequire(join(ROOT, 'package.json'))
 const Database = require('better-sqlite3-multiple-ciphers')
 
 const args = process.argv.slice(2)
-const PREV_REV = args.includes('--prev') ? args[args.indexOf('--prev') + 1] : mergeBase()
+const PREV_REV = args.includes('--prev') ? args[args.indexOf('--prev') + 1] : beforeMigration()
 const KEEP = args.includes('--keep')
 const OUT = join(tmpdir(), 'notula-courses-storage-check')
 /** The schema this tree migrates to (read from the source), and the one before Courses. */
@@ -48,13 +48,24 @@ const TARGET = Number(/export const SCHEMA_VERSION = (\d+)/.exec(readFileSync(jo
 const PREV = 18
 const COURSE_COLUMNS = { registered_at: null, on_play: 'record', on_end: 'notes', match_json: null, catalog_origin: null }
 
-/** Where this branch left main, so the default needs no commit id; main when git can't tell. */
-function mergeBase() {
+/**
+ * The tree just before migration 19 was added, found by its name, so the default needs no commit id
+ * and later migrations don't move it; main when git can't tell.
+ */
+function beforeMigration() {
   try {
-    return execFileSync('git', ['merge-base', 'HEAD', 'main'], { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+    const added = execFileSync('git', ['log', '--reverse', '--format=%H', "-Sname: 'courses'", '--', 'src/main/storage/migrations.ts'], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore']
+    })
+      .trim()
+      .split('\n')[0]
+    if (added) return `${added}~1`
   } catch {
-    return 'main'
+    // no git: main
   }
+  return 'main'
 }
 
 // ---------- a tiny runner ----------
