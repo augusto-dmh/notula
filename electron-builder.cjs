@@ -17,7 +17,16 @@ module.exports = {
   // Only the build output; electron-builder adds the production node_modules itself.
   // Sources, docs, analysis output and local tool settings never ship.
   // Only the three build outputs ship: scratch folders under out/ never reach the installer.
-  files: ['out/main/**/*', 'out/preload/**/*', 'out/renderer/**/*', 'package.json'],
+  // The SQLite addon ships its loader and one prebuild, never its C sources or build files;
+  // each target below keeps only its own prebuild (`${arch}` is the target's arch).
+  files: [
+    'out/main/**/*',
+    'out/preload/**/*',
+    'out/renderer/**/*',
+    'package.json',
+    '!**/node_modules/better-sqlite3-multiple-ciphers/{deps,src,build}{,/**/*}',
+    '!**/node_modules/better-sqlite3-multiple-ciphers/binding.gyp'
+  ],
   // Both native addons are Node-API prebuilds: no @electron/rebuild step.
   npmRebuild: false,
   // Native addons and their shared libraries must load from app.asar.unpacked: the OS loader
@@ -30,10 +39,19 @@ module.exports = {
     { from: '.', to: 'licenses', filter: ['LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md', 'MODELS.md'] }
   ],
   // The app icon: resources/icon/icon.svg, rendered by scripts/icon/render.cjs.
-  win: { target: 'nsis', icon: 'resources/icon/icon.ico' },
+  win: {
+    target: 'nsis',
+    icon: 'resources/icon/icon.ico',
+    files: ['!**/node_modules/better-sqlite3-multiple-ciphers/prebuilds/!(win32-${arch}).node']
+  },
   // No spaces: GitHub renames release assets with spaces, which would break latest.yml.
   // The uninstaller also deletes the browser extension's two HKCU native-messaging keys.
   nsis: { artifactName: 'Notula-Setup-${version}.${ext}', include: 'src/main/sources/extension/installer.nsh' },
-  mac: { target: ['dmg', 'zip'], icon: 'resources/icon/icon-512.png' },
+  // A universal build would need both darwin prebuilds; the targets here build one arch.
+  mac: {
+    target: ['dmg', 'zip'],
+    icon: 'resources/icon/icon-512.png',
+    files: ['!**/node_modules/better-sqlite3-multiple-ciphers/prebuilds/!(darwin-${arch}).node']
+  },
   publish: feed ? { provider: 'generic', url: feed } : null
 }
