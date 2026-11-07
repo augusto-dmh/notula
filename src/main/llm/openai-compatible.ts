@@ -80,9 +80,9 @@ interface OpenAiReplay {
 /** Text that is a tool call a server wrote out instead of using `tool_calls`. */
 const TOOL_TEXT_LEAD = /^(\{|\[\s*\{|<tool_call>|\[TOOL_CALLS\]|```(?:json)?\s*\{)/
 const TOOL_ERROR_HINT = /\b(tools?|tool_choice|function[s_]?|function calling)\b/i
-/** A 400 about the output budget (errorFromResponse puts the status in the message). */
-/** A 400 naming `stream_options`: the server takes no usage request on a stream. */
+/** A 400 or 422 naming `stream_options`: the server takes no usage request on a stream. */
 const STREAM_OPTIONS_HINT = /\bstream_options\b/i
+/** A 400 about the output budget (errorFromResponse puts the status in the message). */
 const TOKEN_LIMIT_HINT = /\(400\).*\b(max_tokens|max_completion_tokens|max_output_tokens|output limit|token limit)\b/i
 
 function label(id: Options['id']): string {
@@ -338,14 +338,15 @@ export function createOpenAiCompatibleProvider(opts: Options): LlmProvider {
     } catch (err) {
       throw networkError(opts.id, baseUrl, err)
     }
-    if (!res.ok && res.status === 400 && (minimalFor(req) || withUsage)) {
+    const usageRefusal = withUsage && (res.status === 400 || res.status === 422)
+    if (!res.ok && ((res.status === 400 && minimalFor(req)) || usageRefusal)) {
       const text = await res.text().catch(() => '')
-      if (minimalFor(req) && /reasoning|thinking/i.test(text)) {
+      if (res.status === 400 && minimalFor(req) && /reasoning|thinking/i.test(text)) {
         minimalRejected.add(`${baseUrl}|${used(req)}`)
         log('info', 'llm:minimal-effort-unsupported', { provider: opts.id, model: used(req) })
         return post(given, stream, signal)
       }
-      if (withUsage && STREAM_OPTIONS_HINT.test(text)) {
+      if (usageRefusal && STREAM_OPTIONS_HINT.test(text)) {
         rejectStreamOptions()
         return post(given, stream, signal)
       }
@@ -400,7 +401,7 @@ export function createOpenAiCompatibleProvider(opts: Options): LlmProvider {
     } catch (err) {
       throw networkError(opts.id, baseUrl, err)
     }
-    if (!res.ok && res.status === 400 && withUsage) {
+    if (!res.ok && (res.status === 400 || res.status === 422) && withUsage) {
       const text = await res.text().catch(() => '')
       if (STREAM_OPTIONS_HINT.test(text)) {
         rejectStreamOptions()
