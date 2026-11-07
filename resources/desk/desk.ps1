@@ -16,7 +16,10 @@
 #   paste       -> {sent:bool}   (Ctrl+V into the foreground window)
 #   watch-foreground {args:{on}} -> {}  starts or stops the full-screen watcher
 #                  (foreground-watch.cs), whose unsolicited lines have no id:
-#                  {"event":"fullscreen","full":bool,"x":int,"y":int}, once at start, then on change
+#                  {"event":"fullscreen","full":bool,"x":int,"y":int}, once at start, then on change,
+#                  or {"event":"fullscreen-unavailable"} when its event hooks fail; error
+#                  "watcher unavailable" when its source didn't load
+#   fullscreen  -> {full:bool, x, y}  one read, for main's slow poll when the watcher can't run
 #   dblclick    -> {ms}          (the double-click interval, GetDoubleClickTime)
 #   duck        {args:{root, only?, factor?, ms?}} -> {entries:[{key, saved, set, device, process}]}
 #                  lowers every active app session on every output device outside root's
@@ -66,8 +69,42 @@ public static class NotulaDesk {
 public static class NotulaDeskTime {
   [DllImport("user32.dll")] public static extern uint GetDoubleClickTime();
 }
+// One full-screen read for main's fallback poll: kept here, not taken from the watcher, so it
+// still works when the watcher's source doesn't load.
+public static class NotulaDeskScreen {
+  [StructLayout(LayoutKind.Sequential)] struct RECT { public int Left, Top, Right, Bottom; }
+  [StructLayout(LayoutKind.Sequential)] struct MONITORINFO { public int cbSize; public RECT rcMonitor; public RECT rcWork; public uint dwFlags; }
+  [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] static extern IntPtr GetShellWindow();
+  [DllImport("user32.dll")] static extern IntPtr GetDesktopWindow();
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
+  [DllImport("user32.dll")] static extern IntPtr MonitorFromWindow(IntPtr h, uint flags);
+  [DllImport("user32.dll")] static extern bool GetMonitorInfo(IntPtr m, ref MONITORINFO mi);
+  public static int[] FullscreenMonitor() {
+    IntPtr h = GetForegroundWindow();
+    if (h == IntPtr.Zero || h == GetShellWindow() || h == GetDesktopWindow()) return null;
+    var cls = new StringBuilder(64); GetClassName(h, cls, 64);
+    string c = cls.ToString();
+    if (c == "Progman" || c == "WorkerW" || c == "Shell_TrayWnd") return null;
+    RECT r; if (!GetWindowRect(h, out r)) return null;
+    var mi = new MONITORINFO(); mi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
+    if (!GetMonitorInfo(MonitorFromWindow(h, 2), ref mi)) return null;
+    var m = mi.rcMonitor;
+    if (r.Left <= m.Left && r.Top <= m.Top && r.Right >= m.Right && r.Bottom >= m.Bottom) return new int[] { m.Left, m.Top };
+    return null;
+  }
+}
 '@
-Add-Type -TypeDefinition ($deskSource + [Environment]::NewLine + [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot 'foreground-watch.cs')))
+# Without the watcher's source (a missing file, a failed compile) the rest compiles alone: only
+# the watcher is unavailable.
+$script:WatchOk = $false
+try {
+  Add-Type -TypeDefinition ($deskSource + [Environment]::NewLine + [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot 'foreground-watch.cs')))
+  $script:WatchOk = $true
+} catch {
+  Add-Type -TypeDefinition $deskSource
+}
 
 # Other apps' audio (Core Audio). Optional: without it, duck, unduck, levels and unmute fail.
 # Ducking lowers each app's own session volume on every active output device, so headphones
@@ -641,8 +678,13 @@ while ($true) {
         $r = @{ changed = [bool][NotulaAudio]::SetMute($false) }
       }
       'watch-foreground' {
-        if ([bool]$req.args.on) { [Notula.Desk.ForegroundWatch]::Start() } else { [Notula.Desk.ForegroundWatch]::Stop() }
+        if (-not $script:WatchOk) { if ([bool]$req.args.on) { throw "watcher unavailable" } }
+        elseif ([bool]$req.args.on) { [Notula.Desk.ForegroundWatch]::Start() } else { [Notula.Desk.ForegroundWatch]::Stop() }
         $r = @{}
+      }
+      'fullscreen' {
+        $m = [NotulaDeskScreen]::FullscreenMonitor()
+        if ($null -eq $m) { $r = @{ full = $false; x = 0; y = 0 } } else { $r = @{ full = $true; x = $m[0]; y = $m[1] } }
       }
       default { throw "unknown op" }
     }
@@ -654,7 +696,7 @@ while ($true) {
   }
 }
 
-[Notula.Desk.ForegroundWatch]::Stop()
+if ($script:WatchOk) { [Notula.Desk.ForegroundWatch]::Stop() }
 if ($script:AudioOk) {
   try {
     [void][NotulaDuck]::Unduck($null, $null, $null, 100)
