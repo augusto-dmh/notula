@@ -17,6 +17,7 @@ import type {
 } from '@shared/types/notes'
 import type { NoteQuery } from './api'
 import { NOTE_COLUMNS, NOTE_LIST_COLUMNS, nowIso, toJson, toNote, toNoteListItem } from './rows'
+import { notesListSql } from './notes-list-sql'
 import { inTransaction, invalid, notFound, type StoreCtx } from './store'
 import { checkpointVoice, deleteNoteVoiceRows, secureWrite } from './speaker-voice-repo'
 
@@ -119,48 +120,7 @@ export function listNotes(s: StoreCtx, q: NotesListQuery): NoteListPage {
   // note first, then the user's own, then the lowest id. Notes without an event
   // are never deduped.
   const rows = s.db
-    .prepare(
-      `WITH listable AS (
-         SELECT d.*,
-           CASE WHEN d.event_id IS NULL THEN NULL
-                ELSE coalesce(json_extract(d.linked_event, '$.iCalUID'), d.event_id) END AS dedupe_event
-         FROM documents d
-         WHERE ${LISTABLE}
-           AND (@folderId IS NULL OR EXISTS (
-             SELECT 1 FROM folder_notes fn WHERE fn.folder_id = @folderId AND fn.note_id = d.id
-           ))
-           AND (@ids IS NULL OR d.id IN (SELECT value FROM json_each(@ids)))
-           AND (@ownOnly = 0 OR (d.owner_id = @owner AND d.is_shared = 0))
-           AND (@tags IS NULL OR NOT EXISTS (
-             SELECT 1 FROM json_each(@tags) f
-             WHERE NOT EXISTS (
-               SELECT 1 FROM document_tags t
-               WHERE t.document_id = d.id AND t.category = json_extract(f.value, '$.category')
-                 AND EXISTS (
-                   SELECT 1 FROM json_each(json_extract(f.value, '$.values')) v
-                   WHERE (v.type = 'null' AND t.value IS NULL) OR (v.type = 'text' AND t.value = v.value)
-                 )
-             )
-           ))
-       ),
-       ranked AS (
-         SELECT *,
-           CASE WHEN dedupe_event IS NULL THEN 1 ELSE row_number() OVER (
-             PARTITION BY dedupe_event, sort_epoch
-             ORDER BY is_event_main_note DESC, (owner_id = @owner) DESC, id ASC
-           ) END AS dedupe_rank
-         FROM listable
-       )
-       SELECT ${NOTE_LIST_COLUMNS.join(', ')} FROM ranked r
-       WHERE dedupe_rank = 1
-         AND NOT EXISTS (
-           SELECT 1 FROM json_each(@exclude) x
-           WHERE r.event_id = json_extract(x.value, '$.eventId')
-             AND r.sort_epoch = json_extract(x.value, '$.displayTimeUnixSeconds')
-         )
-       ORDER BY sort_epoch DESC, id ASC
-       LIMIT @limit`
-    )
+    .prepare(notesListSql(LISTABLE, NOTE_LIST_COLUMNS))
     .all({
       owner: s.identity.ownerId,
       workspace: s.identity.workspaceId,
