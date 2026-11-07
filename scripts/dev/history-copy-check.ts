@@ -108,6 +108,53 @@ await scenario('a journal that appears at 6 s is a change', (t) => [{ size: 4096
   await c.dispose()
 }
 
+// A lookup that joins a shared snapshot late: the cap is per lookup, and a copy older than the
+// lookup is replaced at once when the file changed, so a visit written before it started is found.
+{
+  async function lateJoin(changes: readonly number[], joinAt: number, until: number): Promise<{ a: number[]; b: number[]; bSaw: string[] }> {
+    const registry = new Map<string, Shared>()
+    const stats = changesAt(changes)
+    let t = 0
+    const made: { at: number; by: string }[] = []
+    const io = (who: string) => ({
+      stat: async () => stats(t),
+      copy: async () => {
+        made.push({ at: t, by: who })
+        return `snap-${made.length}@${t}`
+      },
+      remove: async () => undefined,
+      now: () => t * 1000
+    })
+    const a = useSnapshot(registry, 'History', io('a'))
+    let b: ReturnType<typeof useSnapshot> | null = null
+    const bSaw: string[] = []
+    for (; t < until; t++) {
+      if (t < 15) await a.read(async () => null)
+      if (t === joinAt) b = useSnapshot(registry, 'History', io('b'))
+      if (b) bSaw.push(await b.read(async (p) => p))
+    }
+    await a.dispose()
+    await b?.dispose()
+    return { a: made.filter((m) => m.by === 'a').map((m) => m.at), b: made.filter((m) => m.by === 'b').map((m) => m.at), bSaw }
+  }
+  const every = [...Array(30).keys()].map((i) => i + 1)
+  const r1 = await lateJoin([...every.filter((c) => c <= 10), 11], 12, 13)
+  check(
+    'late join past the shared cap: B copies on its first read when the file changed after the last copy',
+    JSON.stringify(r1.a) === '[0,5,10]' && JSON.stringify(r1.b) === '[12]' && r1.bSaw[0] === 'snap-4@12',
+    JSON.stringify(r1)
+  )
+  const r2 = await lateJoin([1], 2, 4)
+  check('late join within 5 s of a copy: B copies at once, gap or not', JSON.stringify(r2.a) === '[0]' && JSON.stringify(r2.b) === '[2]', JSON.stringify(r2))
+  const r3 = await lateJoin([], 3, 8)
+  check('late join, file unchanged: B reuses the shared copy', JSON.stringify(r3.a) === '[0]' && r3.b.length === 0, JSON.stringify(r3))
+  const r4 = await lateJoin(every, 12, 40)
+  check('each lookup has its own cap of 3', r4.a.length === HISTORY_COPY_MAX && r4.b.length === HISTORY_COPY_MAX && r4.b[0] === 12, JSON.stringify(r4))
+  const base = { hasSnapshot: true, copiedSignature: 'a', signature: 'b', lastCopyAt: 10_000, now: 12_000 }
+  check('copyDecision: a copy older than the lookup and a change give copy', copyDecision({ ...base, copies: 0, startedAt: 11_000 }) === 'copy', 'reuse')
+  check("copyDecision: a copy taken at the lookup's start keeps the gap", copyDecision({ ...base, copies: 0, startedAt: 10_000 }) === 'reuse', 'copy')
+}
+
 // A failed copy doesn't count: the next read copies again, and the cap still allows 3.
 {
   const registry = new Map<string, Shared>()

@@ -205,8 +205,8 @@ const historySnapshots = new Map<string, SharedSnapshot>()
 /**
  * A temp copy of a profile's History for one History read, shared with the other lookups of the
  * same file running now. `rows()` copies again only as `copyDecision` allows: after the source's
- * size or mtime changed, 5 s after the last copy at the soonest, at most 3 times; otherwise it
- * re-queries the copy it has. The last `dispose()` deletes it. The copy is opened read-write on
+ * size or mtime changed, 5 s after the last copy at the soonest (at once when the copy predates
+ * this lookup), at most 3 times per lookup; otherwise it re-queries the copy it has. The last `dispose()` deletes it. The copy is opened read-write on
  * purpose: a copied hot journal is then rolled back into the copy (never the live file), which
  * gives a consistent snapshot; a read-only open would refuse such a copy. `share: false` keeps a
  * one-time read on a fresh copy of its own.

@@ -5,7 +5,7 @@
 
 /** A fresh copy waits at least this long after the last one, so a busy file isn't copied every second. */
 export const HISTORY_COPY_MIN_GAP_MS = 5_000
-/** The most copies one snapshot makes; past it, rows come from the copy it has. */
+/** The most copies one lookup makes; past it, its rows come from the copy there is. */
 export const HISTORY_COPY_MAX = 3
 
 export interface FileStat {
@@ -25,16 +25,22 @@ export interface CopyState {
   /** The signature read before the last copy. */
   copiedSignature: string | null
   lastCopyAt: number
+  /** The copies this lookup made. */
   copies: number
+  /** When this lookup started; absent, the snapshot counts as taken after it. */
+  startedAt?: number
   now: number
 }
 
 export function copyDecision(s: CopyState): 'copy' | 'reuse' {
   if (!s.hasSnapshot) return 'copy'
   if (s.signature === s.copiedSignature) return 'reuse'
+  if (s.copies >= HISTORY_COPY_MAX) return 'reuse'
+  // A snapshot older than the lookup (another lookup's copy) may miss what was written before
+  // it started, so it copies at once, gap or not.
+  if (s.startedAt !== undefined && s.lastCopyAt < s.startedAt) return 'copy'
   // A change too soon after a copy isn't lost: the next call compares the signatures again.
-  if (s.now - s.lastCopyAt < HISTORY_COPY_MIN_GAP_MS) return 'reuse'
-  return s.copies < HISTORY_COPY_MAX ? 'copy' : 'reuse'
+  return s.now - s.lastCopyAt < HISTORY_COPY_MIN_GAP_MS ? 'reuse' : 'copy'
 }
 
 export interface SnapshotIo {
@@ -50,7 +56,6 @@ export interface Shared {
   base: string | null
   copiedSignature: string | null
   lastCopyAt: number
-  copies: number
   users: number
   /** Reads, copies and the last dispose run one at a time, so no read meets a snapshot being replaced. */
   queue: Promise<unknown>
@@ -65,12 +70,17 @@ export interface SnapshotUse {
   dispose: () => Promise<void>
 }
 
-/** One lookup's use of the snapshot of `key` in `registry`, shared with the other lookups of it that are running. */
+/**
+ * One lookup's use of the snapshot of `key` in `registry`, shared with the other lookups of it that
+ * are running. Each lookup counts its own copies against the cap, so one that joins late still
+ * gets a copy taken after it started when the file has changed.
+ */
 export function useSnapshot(registry: Map<string, Shared>, key: string, io: SnapshotIo): SnapshotUse {
   let s = registry.get(key)
-  if (!s) registry.set(key, (s = { base: null, copiedSignature: null, lastCopyAt: 0, copies: 0, users: 0, queue: Promise.resolve() }))
+  if (!s) registry.set(key, (s = { base: null, copiedSignature: null, lastCopyAt: 0, users: 0, queue: Promise.resolve() }))
   const shared = s
   shared.users++
+  const startedAt = io.now()
   let copies = 0
   let bytes = 0
   let disposed = false
@@ -88,13 +98,12 @@ export function useSnapshot(registry: Map<string, Shared>, key: string, io: Snap
         const signature = historySignatureOf(stats)
         const now = io.now()
         let base = shared.base
-        if (base === null || copyDecision({ hasSnapshot: true, signature, copiedSignature: shared.copiedSignature, lastCopyAt: shared.lastCopyAt, copies: shared.copies, now }) === 'copy') {
+        if (base === null || copyDecision({ hasSnapshot: true, signature, copiedSignature: shared.copiedSignature, lastCopyAt: shared.lastCopyAt, copies, startedAt, now }) === 'copy') {
           if (base !== null) await io.remove(base)
           shared.base = null
           shared.base = base = await io.copy()
           shared.copiedSignature = signature
           shared.lastCopyAt = now
-          shared.copies++
           copies++
           bytes += stats.reduce((n, st) => n + (st?.size ?? 0), 0)
         }
