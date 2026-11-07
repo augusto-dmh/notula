@@ -136,6 +136,53 @@ check('f) an earlier line short of the seam: whole segment',
   check('f) a 25 s monologue spliced every 2 s keeps every word once', ok)
 }
 
+// ---------- g) the seam under timing jitter ----------
+
+// The cut is at 7 s. Each decode places a word's start up to two frames off.
+check('g) a word before the seam in the old line and past it in the new one is kept once',
+  text(splicePartial({ words: [w('a', 6.0, 6.4), w('went', 6.96, 7.2)], endMs: 9_000 }, [w('went', 7.04, 7.2), w('to', 7.3, 7.5)], true, windowStart, 0)) === 'a went to')
+check('g) a word past the seam in the old line and before it in the new one is not lost',
+  text(splicePartial({ words: [w('a', 6.0, 6.4), w('went', 7.04, 7.2)], endMs: 9_000 }, [w('went', 6.96, 7.2), w('to', 7.3, 7.5)], true, windowStart, 0)) === 'a went to')
+check('g) the match ignores case and punctuation',
+  text(splicePartial({ words: [w('a', 6.0, 6.4), w('Went,', 6.95, 7.2)], endMs: 9_000 }, [w('went', 7.1, 7.2), w('to', 7.3, 7.5)], true, windowStart, 0)) === 'a Went, to')
+check('g) a word said twice keeps both',
+  text(splicePartial({ words: [w('no', 6.9, 7.1), w('no', 7.25, 7.5)], endMs: 9_000 }, [w('no', 6.95, 7.1), w('no', 7.3, 7.5)], true, windowStart, 0)) === 'no no')
+check('g) two decodes that heard the seam word differently keep the old one, as before',
+  text(splicePartial({ words: [w('a', 6.0, 6.4), w('c', 6.9, 7.2)], endMs: 9_000 }, [w('d', 6.9, 7.2), w('e', 7.3, 7.5)], true, windowStart, 0)) === 'a c e')
+
+// The monologue again, with every decode moving each start by up to ±90 ms (a fixed seed), so
+// words land on either side of each seam.
+{
+  let seed = 12_345
+  const rand = (): number => {
+    seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648
+    return seed / 2_147_483_648
+  }
+  const all = Array.from({ length: 50 }, (_, i) => w(`w${i}`, i * 0.5, i * 0.5 + 0.4))
+  let live: { words: AsrWorkerWord[]; endMs: number } | null = null
+  let ok = true
+  let nearSeam = 0
+  for (let endS = 2; endS <= 25; endS += 2) {
+    const endMs = endS * 1000
+    const startMs = Math.max(0, endMs - PARTIAL_WINDOW_MS)
+    const cut = startMs + SPLICE_GUARD_MS
+    const dec = all
+      .filter((x) => x.e_ms > startMs && x.s_ms < endMs)
+      .map((x) => (x.s_ms < startMs ? { ...x, w: `${x.w}-cut`, s_ms: startMs } : { ...x, s_ms: Math.max(startMs, x.s_ms + Math.round((rand() * 2 - 1) * 90)) }))
+    if (startMs > 0) nearSeam += dec.filter((x) => Math.abs(x.s_ms - cut) <= 90).length
+    const r = splicePartial(live, dec, true, startMs, 0)
+    if (r === 'whole-segment') {
+      ok = false
+      break
+    }
+    const want = all.filter((x) => x.s_ms < endMs).map((x) => x.w).join(' ')
+    if (r.words.map((x) => x.w).join(' ') !== want) ok = false
+    live = { words: r.words, endMs }
+  }
+  check('g) a jittered 25 s monologue keeps every word once', ok)
+  check('g) the jitter put words within a frame of a seam', nearSeam >= 4, `${nearSeam}`)
+}
+
 if (failures) {
   console.log(`\n${failures} check(s) failed`)
   process.exit(1)
