@@ -8,7 +8,7 @@
 // startup and on `diagnostics.verboseLogging` changes).
 
 import { createWriteStream, mkdirSync, type WriteStream } from 'node:fs'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { app } from 'electron'
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
@@ -72,4 +72,21 @@ export function log(level: LogLevel, event: string, data?: Record<string, unknow
   } catch {
     // Logging must never take the app down.
   }
+}
+
+const STARTUP_MODULES = {
+  mcp: `${sep}node_modules${sep}@modelcontextprotocol${sep}sdk${sep}`,
+  anthropic: `${sep}node_modules${sep}@anthropic-ai${sep}sdk${sep}`,
+  updater: `${sep}node_modules${sep}electron-updater${sep}`
+} as const
+let startupModulesLogged = false
+
+/** Once, when the main window is ready to show: which deferred SDKs have loaded by then. */
+export function logStartupModules(): void {
+  if (startupModulesLogged) return
+  startupModulesLogged = true
+  const loaded = Object.keys(require.cache)
+  const data: Record<string, boolean> = {}
+  for (const [name, dir] of Object.entries(STARTUP_MODULES)) data[name] = loaded.some((k) => k.includes(dir))
+  log('debug', 'main:startup-modules', data)
 }

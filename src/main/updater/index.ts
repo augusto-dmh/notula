@@ -25,7 +25,7 @@ import { execFile } from 'node:child_process'
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { app, dialog, ipcMain, type Rectangle } from 'electron'
-import { autoUpdater, type ProgressInfo, type UpdateInfo } from 'electron-updater'
+import type { AppUpdater, ProgressInfo, UpdateInfo } from 'electron-updater'
 import { notulaError } from '@shared/errors'
 import type { InvokeChannel, InvokeRes, PushChannel, SendChannel } from '@shared/ipc'
 import { APP_ID, type UpdateBlockReason, type UpdateDelayReason, type UpdateState, type UpdateChannel } from '@shared/types/app'
@@ -224,6 +224,9 @@ export function registerUpdater(ctx: MainContext): void {
     return null
   }
 
+  /** The library, once `updater()` has loaded and configured it. */
+  let lib: AppUpdater | null = null
+
   // ---- install ----
   let installTimer: NodeJS.Timeout | null = null
 
@@ -258,7 +261,7 @@ export function registerUpdater(ctx: MainContext): void {
     log('info', 'update:installing', { mode, version: s.download.version })
     await new Promise((r) => setTimeout(r, INSTALL_WAIT_MS))
     // Not silent (no flag); the app runs again afterwards.
-    autoUpdater.quitAndInstall(false, true)
+    updater().quitAndInstall(false, true)
   }
 
   let rechecks = 0
@@ -310,7 +313,7 @@ export function registerUpdater(ctx: MainContext): void {
     }
     log('info', 'update:check', { source })
     try {
-      await autoUpdater.checkForUpdates()
+      await updater().checkForUpdates()
     } catch {
       // Logged and reflected by the `error` event; the next periodic check retries.
     }
@@ -332,7 +335,7 @@ export function registerUpdater(ctx: MainContext): void {
     .then(([c, paused]) => {
       channel = c
       setUpdateState({ channel: c, pausedByLocalOnly: paused })
-      if (feed !== 'none' && c === 'beta') autoUpdater.setFeedURL({ provider: 'generic', url: feedFor(c) })
+      if (feed !== 'none' && c === 'beta') updater().setFeedURL({ provider: 'generic', url: feedFor(c) })
     })
     .catch((err: unknown) => log('warn', 'update:channel-read-failed', { err }))
   ctx.bus.on('settings:changed', (e) => {
@@ -344,7 +347,7 @@ export function registerUpdater(ctx: MainContext): void {
     setUpdateState({ channel })
     log('info', 'update:channel-changed', { channel })
     if (feed === 'none') return
-    autoUpdater.setFeedURL({ provider: 'generic', url: feedFor(channel) })
+    updater().setFeedURL({ provider: 'generic', url: feedFor(channel) })
     const d = getUpdateState().download
     if (d.state === 'downloaded' && downloadedFrom !== channel) setUpdateState({ download: { state: 'idle' } })
     void check('channel')
@@ -356,72 +359,80 @@ export function registerUpdater(ctx: MainContext): void {
   }
 
   // ---- electron-updater (only with a feed) ----
-  autoUpdater.logger = {
-    info: (m?: unknown) => log('debug', 'update:lib', { m: String(m) }),
-    warn: (m?: unknown) => log('warn', 'update:lib', { m: String(m) }),
-    error: (m?: unknown) => log('error', 'update:lib', { m: String(m) }),
-    debug: (m: string) => log('debug', 'update:lib', { m })
-  }
-  autoUpdater.autoDownload = app.isPackaged
-  autoUpdater.autoInstallOnAppQuit = false
-  autoUpdater.allowDowngrade = false
-  autoUpdater.allowPrerelease = false
-  autoUpdater.disableDifferentialDownload = true
-  autoUpdater.disableWebInstaller = true
-  autoUpdater.requestHeaders = null
-  // No device id. These two members are electron-updater 6.8.10 internals
-  // (the version is pinned): the staging id it would create and persist per install,
-  // and the header that carries it on every feed request.
-  const internals = autoUpdater as unknown as {
-    stagingUserIdPromise: { value: Promise<string> }
-    computeFinalHeaders: (headers: Record<string, string>) => Record<string, string>
-  }
-  Object.defineProperty(internals, 'stagingUserIdPromise', { value: { value: Promise.resolve(SHARED_STAGING_ID) } })
-  internals.computeFinalHeaders = (headers) => {
-    const { [STAGING_HEADER]: _dropped, ...rest } = headers
-    return rest
-  }
-  autoUpdater.setFeedURL({ provider: 'generic', url: feedUrl })
+  // Loaded at its first use (the first check, a channel change, the install) rather than
+  // before the window, and configured once, there. Without a feed it never loads.
+  function updater(): AppUpdater {
+    if (lib) return lib
+    const autoUpdater = (require('electron-updater') as typeof import('electron-updater')).autoUpdater
+    autoUpdater.logger = {
+      info: (m?: unknown) => log('debug', 'update:lib', { m: String(m) }),
+      warn: (m?: unknown) => log('warn', 'update:lib', { m: String(m) }),
+      error: (m?: unknown) => log('error', 'update:lib', { m: String(m) }),
+      debug: (m: string) => log('debug', 'update:lib', { m })
+    }
+    autoUpdater.autoDownload = app.isPackaged
+    autoUpdater.autoInstallOnAppQuit = false
+    autoUpdater.allowDowngrade = false
+    autoUpdater.allowPrerelease = false
+    autoUpdater.disableDifferentialDownload = true
+    autoUpdater.disableWebInstaller = true
+    autoUpdater.requestHeaders = null
+    // No device id. These two members are electron-updater 6.8.10 internals
+    // (the version is pinned): the staging id it would create and persist per install,
+    // and the header that carries it on every feed request.
+    const internals = autoUpdater as unknown as {
+      stagingUserIdPromise: { value: Promise<string> }
+      computeFinalHeaders: (headers: Record<string, string>) => Record<string, string>
+    }
+    Object.defineProperty(internals, 'stagingUserIdPromise', { value: { value: Promise.resolve(SHARED_STAGING_ID) } })
+    internals.computeFinalHeaders = (headers) => {
+      const { [STAGING_HEADER]: _dropped, ...rest } = headers
+      return rest
+    }
+    autoUpdater.setFeedURL({ provider: 'generic', url: feedUrl })
 
-  let availableVersion: string | null = null
-  autoUpdater.on('checking-for-update', () => setUpdateState({ checking: true, error: null }))
-  autoUpdater.on('update-available', (info: UpdateInfo) => {
-    availableVersion = info.version
-    setUpdateState({ checking: false, lastCheck: { at: new Date().toISOString(), available: true, version: info.version } })
-    log('info', 'update:available', { version: info.version })
-    manualFeedback(ctx, 'available', info.version)
-  })
-  autoUpdater.on('update-not-available', () => {
-    setUpdateState({ checking: false, lastCheck: { at: new Date().toISOString(), available: false, version: null } })
-    manualFeedback(ctx, 'up-to-date')
-  })
-  autoUpdater.on('download-progress', (p: ProgressInfo) => {
-    const percent = Math.max(0, Math.min(100, Math.round(p.percent)))
-    const d = getUpdateState().download
-    if (d.state === 'downloading' && d.percent === percent) return
-    setUpdateState({ download: { state: 'downloading', version: availableVersion ?? '', percent } })
-  })
-  autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
-    downloadedFrom = channel
-    setUpdateState({ download: { state: 'downloaded', version: info.version } })
-    log('info', 'update:downloaded', { version: info.version })
-    // The periodic check stops once an update has downloaded.
-    if (checkTimer) clearInterval(checkTimer)
-    checkTimer = null
-    rechecks = 0
-    evaluateInstall()
-    installTimer ??= setInterval(evaluateInstall, INSTALL_RECHECK_MS)
-  })
-  autoUpdater.on('error', (err: Error) => {
-    const d = getUpdateState().download
-    setUpdateState({
-      checking: false,
-      error: err.message.slice(0, 300),
-      ...(d.state === 'downloading' ? { download: { state: 'idle' as const } } : {})
+    let availableVersion: string | null = null
+    autoUpdater.on('checking-for-update', () => setUpdateState({ checking: true, error: null }))
+    autoUpdater.on('update-available', (info: UpdateInfo) => {
+      availableVersion = info.version
+      setUpdateState({ checking: false, lastCheck: { at: new Date().toISOString(), available: true, version: info.version } })
+      log('info', 'update:available', { version: info.version })
+      manualFeedback(ctx, 'available', info.version)
     })
-    log('error', 'update:error', { message: err.message })
-    manualFeedback(ctx, 'failed')
-  })
+    autoUpdater.on('update-not-available', () => {
+      setUpdateState({ checking: false, lastCheck: { at: new Date().toISOString(), available: false, version: null } })
+      manualFeedback(ctx, 'up-to-date')
+    })
+    autoUpdater.on('download-progress', (p: ProgressInfo) => {
+      const percent = Math.max(0, Math.min(100, Math.round(p.percent)))
+      const d = getUpdateState().download
+      if (d.state === 'downloading' && d.percent === percent) return
+      setUpdateState({ download: { state: 'downloading', version: availableVersion ?? '', percent } })
+    })
+    autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
+      downloadedFrom = channel
+      setUpdateState({ download: { state: 'downloaded', version: info.version } })
+      log('info', 'update:downloaded', { version: info.version })
+      // The periodic check stops once an update has downloaded.
+      if (checkTimer) clearInterval(checkTimer)
+      checkTimer = null
+      rechecks = 0
+      evaluateInstall()
+      installTimer ??= setInterval(evaluateInstall, INSTALL_RECHECK_MS)
+    })
+    autoUpdater.on('error', (err: Error) => {
+      const d = getUpdateState().download
+      setUpdateState({
+        checking: false,
+        error: err.message.slice(0, 300),
+        ...(d.state === 'downloading' ? { download: { state: 'idle' as const } } : {})
+      })
+      log('error', 'update:error', { message: err.message })
+      manualFeedback(ctx, 'failed')
+    })
+    lib = autoUpdater
+    return autoUpdater
+  }
 
   setTimeout(() => void check('startup'), FIRST_CHECK_DELAY_MS)
   checkTimer = setInterval(() => void check('periodic'), CHECK_INTERVAL_MS)

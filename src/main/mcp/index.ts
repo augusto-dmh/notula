@@ -20,12 +20,9 @@
 import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
 import { app, ipcMain } from 'electron'
-import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js'
-import { SSEClientTransport, SseError } from '@modelcontextprotocol/sdk/client/sse.js'
-import { StreamableHTTPClientTransport, StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import type { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
-import { ToolListChangedNotificationSchema, type Tool } from '@modelcontextprotocol/sdk/types.js'
+import type { Tool } from '@modelcontextprotocol/sdk/types.js'
 import type { InvokeChannel, InvokeRes, PushChannel } from '@shared/ipc'
 import { notulaError } from '@shared/errors'
 import {
@@ -48,6 +45,25 @@ import type { McpConnectionRow } from '../storage/api'
 import { checkServerUrl, guardedFetch, UrlRefused } from './guard'
 import { offeredName, serverSlugs } from './naming'
 import { ChildStdioTransport, RingLog } from './stdio'
+
+interface McpSdk {
+  client: typeof import('@modelcontextprotocol/sdk/client/index.js')
+  auth: typeof import('@modelcontextprotocol/sdk/client/auth.js')
+  sse: typeof import('@modelcontextprotocol/sdk/client/sse.js')
+  http: typeof import('@modelcontextprotocol/sdk/client/streamableHttp.js')
+  types: typeof import('@modelcontextprotocol/sdk/types.js')
+}
+/** Loaded when the first connection opens, not at startup. Null until then, so no error can be one of its classes. */
+let sdk: McpSdk | null = null
+function loadSdk(): McpSdk {
+  return (sdk ??= {
+    client: require('@modelcontextprotocol/sdk/client/index.js') as McpSdk['client'],
+    auth: require('@modelcontextprotocol/sdk/client/auth.js') as McpSdk['auth'],
+    sse: require('@modelcontextprotocol/sdk/client/sse.js') as McpSdk['sse'],
+    http: require('@modelcontextprotocol/sdk/client/streamableHttp.js') as McpSdk['http'],
+    types: require('@modelcontextprotocol/sdk/types.js') as McpSdk['types']
+  })
+}
 
 const SIGN_IN = "This server needs sign-in, which Notula doesn't support yet. Add an API token instead."
 const CONNECT_TIMEOUT_MS = 30_000
@@ -77,9 +93,11 @@ function errMessage(err: unknown): string {
 }
 
 function isAuthChallenge(err: unknown): boolean {
-  if (err instanceof UnauthorizedError) return true
-  if (err instanceof StreamableHTTPError && err.code === 401) return true
-  if (err instanceof SseError && err.code === 401) return true
+  if (sdk) {
+    if (err instanceof sdk.auth.UnauthorizedError) return true
+    if (err instanceof sdk.http.StreamableHTTPError && err.code === 401) return true
+    if (err instanceof sdk.sse.SseError && err.code === 401) return true
+  }
   return /\b401\b|unauthorized/i.test(errMessage(err))
 }
 
@@ -228,6 +246,7 @@ export function registerMcpClient(ctx: MainContext): void {
     setState(c, 'connecting', null)
     const started = Date.now()
     try {
+      const mcp = loadSdk()
       let transport: Transport
       if (c.row.transport === 'stdio') {
         const env = decodeEnv(await ctx.secrets.get(envId(c.row.id)))
@@ -245,10 +264,10 @@ export function registerMcpClient(ctx: MainContext): void {
         const fetch = guardedFetch({ allowPrivateNetwork: c.row.allowPrivateNetwork })
         transport =
           c.row.transport === 'sse'
-            ? new SSEClientTransport(url, { requestInit, fetch, eventSourceInit: { fetch } as EventSourceInit })
-            : new StreamableHTTPClientTransport(url, { requestInit, fetch })
+            ? new mcp.sse.SSEClientTransport(url, { requestInit, fetch, eventSourceInit: { fetch } as EventSourceInit })
+            : new mcp.http.StreamableHTTPClientTransport(url, { requestInit, fetch })
       }
-      const client = new Client({ name: 'Notula', version: app.getVersion() }, { capabilities: {} })
+      const client = new mcp.client.Client({ name: 'Notula', version: app.getVersion() }, { capabilities: {} })
       c.transport = transport
       c.client = client
       await Promise.race([
@@ -256,7 +275,7 @@ export function registerMcpClient(ctx: MainContext): void {
         new Promise((_, reject) => setTimeout(() => reject(new Error('The server did not answer in time.')), CONNECT_TIMEOUT_MS).unref())
       ])
       if (epoch !== c.epoch) return
-      client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
+      client.setNotificationHandler(mcp.types.ToolListChangedNotificationSchema, async () => {
         if (epoch !== c.epoch) return
         try {
           c.tools = await listAll(client)

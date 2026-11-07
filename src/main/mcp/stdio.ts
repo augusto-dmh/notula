@@ -12,10 +12,17 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { delimiter, extname, isAbsolute, join } from 'node:path'
-import { ReadBuffer, serializeMessage } from '@modelcontextprotocol/sdk/shared/stdio.js'
+import type { ReadBuffer } from '@modelcontextprotocol/sdk/shared/stdio.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js'
 import { MCP_LIMITS } from '@shared/types/mcp'
+
+type StdioSdk = typeof import('@modelcontextprotocol/sdk/shared/stdio.js')
+let stdioSdk: StdioSdk | null = null
+/** The SDK's framing helpers, loaded with the first stdio server rather than at startup. */
+function loadStdioSdk(): StdioSdk {
+  return (stdioSdk ??= require('@modelcontextprotocol/sdk/shared/stdio.js') as StdioSdk)
+}
 
 const INHERITED = ['PATH', 'Path', 'SystemRoot', 'SYSTEMROOT', 'USERPROFILE', 'HOME', 'TEMP', 'TMP', 'TMPDIR', 'APPDATA', 'LOCALAPPDATA', 'ComSpec', 'PATHEXT', 'LANG']
 
@@ -110,7 +117,7 @@ export class ChildStdioTransport implements Transport {
   onerror?: (error: Error) => void
   onmessage?: (message: JSONRPCMessage) => void
   private child: ChildProcess | null = null
-  private readonly buffer = new ReadBuffer()
+  private readonly buffer: ReadBuffer = new (loadStdioSdk().ReadBuffer)()
   private closed = false
 
   constructor(
@@ -162,7 +169,7 @@ export class ChildStdioTransport implements Transport {
     const stdin = this.child?.stdin
     if (!stdin || stdin.destroyed) throw new Error('The server process is not running.')
     await new Promise<void>((resolve, reject) => {
-      stdin.write(serializeMessage(message), (err) => (err ? reject(err) : resolve()))
+      stdin.write(loadStdioSdk().serializeMessage(message), (err) => (err ? reject(err) : resolve()))
     })
   }
 

@@ -74,7 +74,7 @@ import { registerLifecycle } from './lifecycle'
 import { registerLocalApi } from './local-api'
 import { registerLocalOnly } from './local-only'
 import { abortNonLocalLlmRequests } from './llm/registry'
-import { log } from './log'
+import { log, logStartupModules } from './log'
 import { registerMail } from './mail'
 import { registerMcpClient } from './mcp'
 import { registerMcpServer } from './mcp-server'
@@ -713,6 +713,7 @@ async function start(windows: Windows): Promise<void> {
   // 7. The window, created whatever the storage state. A first instance launched with
   //    `--notula-task=background` (the MCP shim) starts in the tray only.
   if (!process.argv.includes(`${APP_TASK_ARG_PREFIX}background`)) windows.showMain()
+  windows.main()?.once('ready-to-show', logStartupModules)
 
   // The dev-only egress, IPC-guard and capture-gate harness.
   if (!app.isPackaged && process.env.NOTULA_DEV_EGRESS_HARNESS === '1') {

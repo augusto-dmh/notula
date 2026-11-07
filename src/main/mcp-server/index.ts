@@ -32,9 +32,9 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from 'node:http'
 import { join } from 'node:path'
 import { app, ipcMain, shell } from 'electron'
-import { Server } from '@modelcontextprotocol/sdk/server/index.js'
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
-import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult } from '@modelcontextprotocol/sdk/types.js'
+import type { Server } from '@modelcontextprotocol/sdk/server/index.js'
+import type { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import type { InvokeChannel, InvokeReq, InvokeRes, PushChannel } from '@shared/ipc'
 import { notulaError } from '@shared/errors'
 import {
@@ -56,6 +56,21 @@ import { resourcePath } from '../lifecycle/resources'
 import { log } from '../log'
 import { egressBlocked } from '../privacy'
 import { agentAccess, forgetAgent, profileMarkdown, recordAgentRead } from '../user-context'
+
+interface McpServerSdk {
+  server: typeof import('@modelcontextprotocol/sdk/server/index.js')
+  http: typeof import('@modelcontextprotocol/sdk/server/streamableHttp.js')
+  types: typeof import('@modelcontextprotocol/sdk/types.js')
+}
+let sdk: McpServerSdk | null = null
+/** Loaded with the first session, not at startup. */
+function loadSdk(): McpServerSdk {
+  return (sdk ??= {
+    server: require('@modelcontextprotocol/sdk/server/index.js') as McpServerSdk['server'],
+    http: require('@modelcontextprotocol/sdk/server/streamableHttp.js') as McpServerSdk['http'],
+    types: require('@modelcontextprotocol/sdk/types.js') as McpServerSdk['types']
+  })
+}
 
 interface Session {
   transport: StreamableHTTPServerTransport
@@ -241,8 +256,9 @@ export function registerMcpServer(ctx: MainContext): void {
   }
 
   const newSession = (tokenId: string): StreamableHTTPServerTransport => {
-    const server = new Server({ name: 'notula', version: app.getVersion() }, { capabilities: { tools: {} } })
-    const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
+    const mcp = loadSdk()
+    const server = new mcp.server.Server({ name: 'notula', version: app.getVersion() }, { capabilities: { tools: {} } })
+    const transport: StreamableHTTPServerTransport = new mcp.http.StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
       onsessioninitialized: (sid) => {
         sessions.set(sid, { transport, server, tokenId, clientName: null })
@@ -255,7 +271,7 @@ export function registerMcpServer(ctx: MainContext): void {
       const name = server.getClientVersion()?.name
       if (name) clients.set(tokenId, name.slice(0, 100))
     }
-    server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    server.setRequestHandler(mcp.types.ListToolsRequestSchema, async () => ({
       tools: [
         ...ctx.chat.libraryTools().map((t) => ({
           name: t.name,
@@ -268,7 +284,7 @@ export function registerMcpServer(ctx: MainContext): void {
         ...((await agentAccess(ctx, tokenId).catch(() => 'off')) === 'ok' ? [ABOUT_ME_TOOL] : [])
       ]
     }))
-    server.setRequestHandler(CallToolRequestSchema, async (request, extra): Promise<CallToolResult> => {
+    server.setRequestHandler(mcp.types.CallToolRequestSchema, async (request, extra): Promise<CallToolResult> => {
       const name = request.params.name
       const started = Date.now()
       const client = server.getClientVersion()?.name ?? null

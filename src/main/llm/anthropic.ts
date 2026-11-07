@@ -27,7 +27,7 @@
 // base64 `image` blocks after the user text (every `claude-*` model accepts them); a 2xx
 // `text/html` answer is an intercepting network, never the API (intercept.ts).
 
-import Anthropic from '@anthropic-ai/sdk'
+import type Anthropic from '@anthropic-ai/sdk'
 import type {
   BetaContentBlockParam,
   BetaMessageParam,
@@ -53,6 +53,13 @@ import {
   type LlmStopReason,
   type LlmStreamEvent
 } from './types'
+
+type AnthropicSdk = typeof import('@anthropic-ai/sdk')
+/** Loaded at the first request, not at startup. Null until then, so no error can be one of its classes. */
+let sdk: AnthropicSdk['default'] | null = null
+function loadSdk(): AnthropicSdk['default'] {
+  return (sdk ??= (require('@anthropic-ai/sdk') as AnthropicSdk).default)
+}
 
 const FALLBACK_BETA = 'server-side-fallback-2026-07-01'
 /** Pinned, so ANTHROPIC_BASE_URL in the environment can never redirect the user's key. */
@@ -123,35 +130,36 @@ function apiErrorDetail(err: InstanceType<typeof Anthropic.APIError>): string {
 /** Maps SDK errors to the generation error codes; never includes the key. */
 function mapError(err: unknown): Error {
   if (err instanceof EnhanceError) return err
-  if (err instanceof Anthropic.APIUserAbortError) {
+  const A = sdk
+  if (A && err instanceof A.APIUserAbortError) {
     const e = new Error('The request was cancelled.')
     e.name = 'AbortError'
     return e
   }
-  if (err instanceof Anthropic.AuthenticationError || err instanceof Anthropic.PermissionDeniedError) {
+  if (A && (err instanceof A.AuthenticationError || err instanceof A.PermissionDeniedError)) {
     return enhanceError('missing-key', 'Anthropic rejected the API key.')
   }
-  if (err instanceof Anthropic.NotFoundError) {
+  if (A && err instanceof A.NotFoundError) {
     return enhanceError('no-model', 'Anthropic does not offer the selected model.')
   }
-  if (err instanceof Anthropic.RateLimitError) {
+  if (A && err instanceof A.RateLimitError) {
     return enhanceError('provider-error', 'Anthropic is rate limiting this key. Try again in a moment.')
   }
   if (err instanceof LlmInterceptedError) return enhanceError('provider-error', err.message)
-  if (err instanceof Anthropic.APIConnectionError && err.cause instanceof LlmInterceptedError) {
+  if (A && err instanceof A.APIConnectionError && err.cause instanceof LlmInterceptedError) {
     return enhanceError('provider-error', err.cause.message)
   }
-  if (err instanceof Anthropic.APIConnectionTimeoutError) {
+  if (A && err instanceof A.APIConnectionTimeoutError) {
     return enhanceError('timeout', 'Anthropic took too long. Try again.')
   }
-  if (err instanceof Anthropic.APIConnectionError) {
+  if (A && err instanceof A.APIConnectionError) {
     return enhanceError('provider-error', 'Could not reach Anthropic. Check your connection.')
   }
-  if (err instanceof Anthropic.BadRequestError) {
+  if (A && err instanceof A.BadRequestError) {
     const detail = apiErrorDetail(err)
     return enhanceError('provider-error', `Anthropic rejected the request${detail ? `: ${detail}` : '.'}`)
   }
-  if (err instanceof Anthropic.APIError) {
+  if (A && err instanceof A.APIError) {
     return enhanceError('provider-error', `Anthropic returned an error (${err.status ?? 'no status'}).`)
   }
   return err instanceof Error ? err : new Error(String(err))
@@ -177,7 +185,8 @@ export function createAnthropicProvider(opts: { model: string; getKey(): Promise
     const apiKey = await opts.getKey()
     if (!apiKey) throw enhanceError('missing-key', 'No Anthropic API key is set.')
     // logLevel 'off': ANTHROPIC_LOG must not make the SDK print requests from main.
-    return new Anthropic({ apiKey, baseURL: apiBaseUrl(), timeout, maxRetries: 2, logLevel: 'off', fetch: interceptingFetch })
+    const Sdk = loadSdk()
+    return new Sdk({ apiKey, baseURL: apiBaseUrl(), timeout, maxRetries: 2, logLevel: 'off', fetch: interceptingFetch })
   }
 
   function params(req: LlmRequest): BetaMessageStreamParams {
@@ -297,13 +306,13 @@ export function createAnthropicProvider(opts: { model: string; getKey(): Promise
         yield { type: 'stop', reason: chatStopReason(message.stop_reason), replay: message.content, model: message.model }
         return
       } catch (err) {
-        if (!started && !stripThinking && hasReplayedThinking && err instanceof Anthropic.BadRequestError) {
+        if (!started && !stripThinking && hasReplayedThinking && sdk && err instanceof sdk.BadRequestError) {
           // A replayed prefix the API no longer accepts (preserved thinking): once more without it.
           log('warn', 'chat:anthropic-strip-thinking-retry', { status: err.status })
           stripThinking = true
           continue
         }
-        if (err instanceof Anthropic.AnthropicError && !(err instanceof Anthropic.APIError) && TOOL_JSON_ERROR.test(err.message)) {
+        if (sdk && err instanceof sdk.AnthropicError && !(err instanceof sdk.APIError) && TOOL_JSON_ERROR.test(err.message)) {
           // Logged without the input itself, which may quote the user's notes.
           log('warn', 'chat:anthropic-tool-json-invalid', {})
           throw enhanceError('provider-error', 'The model sent tool input that could not be read. Try again.')
