@@ -23,6 +23,8 @@ export interface Migration {
 export const BASELINE_VERSION = 8
 
 const NOW = `strftime('%Y-%m-%dT%H:%M:%fZ','now')`
+/** A transcript queue time that is due at once; the triggers never replace it with a later one. */
+const DUE_NOW = `'1970-01-01T00:00:00.000Z'`
 
 /** Event id and sort time are stored generated columns over the linked calendar event. */
 const EVENT_ID = `CASE WHEN json_valid(linked_event) THEN json_extract(linked_event, '$.id') END`
@@ -1664,10 +1666,12 @@ ALTER TABLE source_series ADD COLUMN catalog_origin TEXT;
 /**
  * Version 20: transcripts in full-text search. One row per note (`rowid` = `documents.rid`), its
  * final chunks' text; the indexer fills it from its own queue, keyed by note, once the note has
- * had no transcript write for a while. A chunk delete queues the note as already due, so purged
- * text leaves the index on the next drain. A note's superseded sessions are hidden from readers,
- * so a change to them re-indexes the note too. `secure-delete` drops a removed row's terms from
- * the index itself, not only from its content.
+ * had no transcript write for a while. A chunk delete, and a final chunk whose text changes (an
+ * erase rewrites it to the marker), queue the note as already due (the epoch time), and no later
+ * write pushes a due row back, so removed text leaves the index on the next drain even while
+ * capture goes on writing. A note's superseded sessions are hidden from readers, so a change to
+ * them re-indexes the note too. `secure-delete` drops a removed row's terms from the index
+ * itself, not only from its content.
  */
 const TRANSCRIPTS_FTS = `
 CREATE VIRTUAL TABLE transcripts_fts USING fts5 (
@@ -1683,25 +1687,30 @@ CREATE TABLE transcripts_fts_queue (
 ) WITHOUT ROWID;
 
 CREATE TRIGGER transcript_chunks_fts_enqueue_insert AFTER INSERT ON transcript_chunks BEGIN
-  DELETE FROM transcripts_fts_queue WHERE document_id = NEW.document_id;
-  INSERT INTO transcripts_fts_queue (document_id, queued_at) VALUES (NEW.document_id, ${NOW});
+  DELETE FROM transcripts_fts_queue WHERE document_id = NEW.document_id AND queued_at != ${DUE_NOW};
+  INSERT INTO transcripts_fts_queue (document_id, queued_at) SELECT NEW.document_id, ${NOW}
+    WHERE NOT EXISTS (SELECT 1 FROM transcripts_fts_queue WHERE document_id = NEW.document_id);
 END;
 
 CREATE TRIGGER transcript_chunks_fts_enqueue_update AFTER UPDATE OF text, is_final, document_id ON transcript_chunks BEGIN
-  DELETE FROM transcripts_fts_queue WHERE document_id = OLD.document_id;
-  INSERT INTO transcripts_fts_queue (document_id, queued_at) VALUES (OLD.document_id, ${NOW});
-  DELETE FROM transcripts_fts_queue WHERE document_id = NEW.document_id;
-  INSERT INTO transcripts_fts_queue (document_id, queued_at) VALUES (NEW.document_id, ${NOW});
+  DELETE FROM transcripts_fts_queue WHERE document_id = OLD.document_id AND queued_at != ${DUE_NOW};
+  INSERT INTO transcripts_fts_queue (document_id, queued_at)
+    SELECT OLD.document_id, CASE WHEN OLD.is_final = 1 AND OLD.text IS NOT NEW.text THEN ${DUE_NOW} ELSE ${NOW} END
+    WHERE NOT EXISTS (SELECT 1 FROM transcripts_fts_queue WHERE document_id = OLD.document_id);
+  DELETE FROM transcripts_fts_queue WHERE document_id = NEW.document_id AND queued_at != ${DUE_NOW};
+  INSERT INTO transcripts_fts_queue (document_id, queued_at) SELECT NEW.document_id, ${NOW}
+    WHERE NOT EXISTS (SELECT 1 FROM transcripts_fts_queue WHERE document_id = NEW.document_id);
 END;
 
 CREATE TRIGGER transcript_chunks_fts_enqueue_delete AFTER DELETE ON transcript_chunks BEGIN
   DELETE FROM transcripts_fts_queue WHERE document_id = OLD.document_id;
-  INSERT INTO transcripts_fts_queue (document_id, queued_at) VALUES (OLD.document_id, '1970-01-01T00:00:00.000Z');
+  INSERT INTO transcripts_fts_queue (document_id, queued_at) VALUES (OLD.document_id, ${DUE_NOW});
 END;
 
 CREATE TRIGGER documents_transcripts_fts_enqueue_update AFTER UPDATE OF deleted_at ON documents BEGIN
-  DELETE FROM transcripts_fts_queue WHERE document_id = NEW.id;
-  INSERT INTO transcripts_fts_queue (document_id, queued_at) VALUES (NEW.id, ${NOW});
+  DELETE FROM transcripts_fts_queue WHERE document_id = NEW.id AND queued_at != ${DUE_NOW};
+  INSERT INTO transcripts_fts_queue (document_id, queued_at) SELECT NEW.id, ${NOW}
+    WHERE NOT EXISTS (SELECT 1 FROM transcripts_fts_queue WHERE document_id = NEW.id);
 END;
 
 CREATE TRIGGER documents_transcripts_fts_delete AFTER DELETE ON documents BEGIN
@@ -1711,22 +1720,26 @@ END;
 
 CREATE TRIGGER note_sources_transcripts_fts_enqueue_insert AFTER INSERT ON note_sources
 WHEN NEW.superseded_session_ids != '[]' BEGIN
-  DELETE FROM transcripts_fts_queue WHERE document_id = NEW.note_id;
-  INSERT INTO transcripts_fts_queue (document_id, queued_at) VALUES (NEW.note_id, ${NOW});
+  DELETE FROM transcripts_fts_queue WHERE document_id = NEW.note_id AND queued_at != ${DUE_NOW};
+  INSERT INTO transcripts_fts_queue (document_id, queued_at) SELECT NEW.note_id, ${NOW}
+    WHERE NOT EXISTS (SELECT 1 FROM transcripts_fts_queue WHERE document_id = NEW.note_id);
 END;
 
 CREATE TRIGGER note_sources_transcripts_fts_enqueue_update AFTER UPDATE OF superseded_session_ids, note_id ON note_sources
 WHEN OLD.superseded_session_ids IS NOT NEW.superseded_session_ids OR OLD.note_id IS NOT NEW.note_id BEGIN
-  DELETE FROM transcripts_fts_queue WHERE document_id = OLD.note_id;
-  INSERT INTO transcripts_fts_queue (document_id, queued_at) VALUES (OLD.note_id, ${NOW});
-  DELETE FROM transcripts_fts_queue WHERE document_id = NEW.note_id;
-  INSERT INTO transcripts_fts_queue (document_id, queued_at) VALUES (NEW.note_id, ${NOW});
+  DELETE FROM transcripts_fts_queue WHERE document_id = OLD.note_id AND queued_at != ${DUE_NOW};
+  INSERT INTO transcripts_fts_queue (document_id, queued_at) SELECT OLD.note_id, ${NOW}
+    WHERE NOT EXISTS (SELECT 1 FROM transcripts_fts_queue WHERE document_id = OLD.note_id);
+  DELETE FROM transcripts_fts_queue WHERE document_id = NEW.note_id AND queued_at != ${DUE_NOW};
+  INSERT INTO transcripts_fts_queue (document_id, queued_at) SELECT NEW.note_id, ${NOW}
+    WHERE NOT EXISTS (SELECT 1 FROM transcripts_fts_queue WHERE document_id = NEW.note_id);
 END;
 
 CREATE TRIGGER note_sources_transcripts_fts_enqueue_delete AFTER DELETE ON note_sources
 WHEN OLD.superseded_session_ids != '[]' BEGIN
-  DELETE FROM transcripts_fts_queue WHERE document_id = OLD.note_id;
-  INSERT INTO transcripts_fts_queue (document_id, queued_at) VALUES (OLD.note_id, ${NOW});
+  DELETE FROM transcripts_fts_queue WHERE document_id = OLD.note_id AND queued_at != ${DUE_NOW};
+  INSERT INTO transcripts_fts_queue (document_id, queued_at) SELECT OLD.note_id, ${NOW}
+    WHERE NOT EXISTS (SELECT 1 FROM transcripts_fts_queue WHERE document_id = OLD.note_id);
 END;
 `
 

@@ -10,9 +10,10 @@
 //    every row kept, the new tables and triggers, the schema of a fresh database, and the
 //    backfill queues every note with a transcript.
 // 3. On the upgraded file, with this tree's indexer on a fake clock: the backfill drain, partial
-//    and final chunks, an erased and a deleted chunk, a chunk moved to another note, trash,
-//    restore and permanent delete, a caption-only note, the 30 s rule and the batch caps,
-//    `searchFts` sources and ranking, and the search page's transcript match.
+//    and final chunks, an erased and a deleted chunk (also while live inserts go on), a chunk
+//    moved to another note, trash, restore and permanent delete, a caption-only note, the 30 s
+//    rule and the batch caps, `searchFts` sources and ranking, the search page's transcript
+//    match, the backfill's empty notes, and the backoff of a failing drain.
 // 4. A size line: index bytes over transcript characters for a synthetic 50-note library.
 //
 // Exits 1 on any failure. `--keep` keeps the scratch folder.
@@ -370,6 +371,43 @@ try {
   clock = Date.now()
   await drain()
   check('a deleted chunk leaves the index on the next drain, without the quiet period', find('ostrovane').length === 0 && indexed(n.del) === 1)
+
+  // Erased and deleted while capture goes on: a chunk a second after the removal doesn't defer it.
+  const EPOCH = '1970-01-01T00:00:00.000Z'
+  const queuedAt = (id) => raw.prepare(`SELECT queued_at FROM transcripts_fts_queue WHERE document_id = ?`).get(id)?.queued_at ?? null
+  const live = write('createNote', { origin: 'unknown', title: 'A live call', created_via: 'Windows' }).id
+  const liveErase = chunk(live, 0, 'Off the record: the corvanteel offer.')
+  const liveDel = chunk(live, 1, 'Also off the record: the brannoway terms.')
+  write('upsertChunks', [liveErase, liveDel, chunk(live, 2, 'On the record: the mellistow agenda.')])
+  dueNow()
+  await drain()
+  const liveIndexed = find('corvanteel').join() === live && find('brannoway').join() === live
+  let line = 3
+  const liveInserts = (count) => {
+    for (let i = 0; i < count; i++, line++) write('upsertChunks', [chunk(live, line, `Live line ${line} about mellistow.`)])
+  }
+  write('upsertChunks', [{ ...liveErase, text: MARKER, is_final: true }])
+  liveInserts(3)
+  check('an erased final chunk queues its note as due at once, and live inserts keep it due', liveIndexed && queuedAt(live) === EPOCH, { liveIndexed, queuedAt: queuedAt(live) })
+  write('deleteTranscriptSections', live, [liveDel.id])
+  liveInserts(3)
+  check('… so does a deleted chunk', queuedAt(live) === EPOCH, { queuedAt: queuedAt(live) })
+  clock = Date.now()
+  await drain()
+  check(
+    'erased and deleted words leave the index on the next drain while inserts go on',
+    find('corvanteel').length === 0 && find('brannoway').length === 0 && find('mellistow').join() === live,
+    { corvanteel: find('corvanteel'), brannoway: find('brannoway') }
+  )
+  check(
+    '… and the search page no longer matches them',
+    write('searchNotes', 'corvanteel').results.length === 0 && write('searchNotes', 'brannoway').results.length === 0
+  )
+  liveInserts(1)
+  const livePartial = chunk(live, line++, 'Still talking about', { final: false })
+  write('upsertChunks', [livePartial])
+  write('upsertChunks', [{ ...livePartial, text: 'Still talking about the plan.' }])
+  check('a live insert or a partial update after the drain waits for the quiet period again', ![null, EPOCH].includes(queuedAt(live)), { queuedAt: queuedAt(live) })
 
   // A chunk moved to another note moves its text.
   raw.prepare(`UPDATE transcript_chunks SET document_id = ? WHERE id = ?`).run(n.to, n.moveChunk.id)

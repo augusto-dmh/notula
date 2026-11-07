@@ -7,8 +7,10 @@
 // Transcripts have their own queue (`transcripts_fts_queue`, one row per note) and one index row
 // per note. Live capture writes chunks about every second, so a note is indexed only once it has
 // had no transcript write for 30 s: during pauses and after the meeting, not on every write. A
-// deferred note brings the indexer back on its own when it comes due. A transcript batch is at
-// most 5 notes or about 300,000 characters (always at least one note), after the panels.
+// deferred note brings the indexer back on its own when it comes due. Removed text (an erased or
+// a deleted chunk) is queued as due at once, and later writes don't defer it (migration 20). A
+// transcript batch is at most 5 notes or about 300,000 characters (always at least one note),
+// after the panels. A failed drain tries again after 5 s, 30 s, then every 2 minutes.
 
 import { DELETED_CHUNK_MARKER } from '@shared/types/transcript'
 import type { FtsHit, FtsQuery } from './api'
