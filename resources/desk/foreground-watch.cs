@@ -11,7 +11,14 @@
 // follows it). After an event it re-evaluates at most every 250 ms, and prints
 //   {"event":"fullscreen","full":bool,"x":int,"y":int}
 // once at start and then only on change. x, y: the covered monitor's top-left in physical pixels
-// (0 when not full screen).
+// (0 when not full screen). When its event hooks can't be set it prints
+//   {"event":"fullscreen-unavailable"}
+// and ends, and main falls back to a slow poll. Each Start makes a new watcher with its own
+// thread and state, and Stop doesn't wait for it, so one that is slow to end never shares
+// anything with the next.
+//
+// Each script compiles this file together with its own source, but falls back to its own source
+// alone when this one is missing or fails to compile: the watcher is never what stops a script.
 
 namespace Notula.Desk {
   using System;
@@ -51,19 +58,10 @@ namespace Notula.Desk {
     [DllImport("user32.dll")] static extern bool GetMonitorInfo(IntPtr m, ref MONITORINFO mi);
     [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
 
-    // Kept in a field for the hooks' lifetime: the OS calls it.
-    static readonly WinEventProc proc = OnEvent;
     static readonly object gate = new object();
-    static Thread thread;
-    static uint threadId;
-
-    // Watcher-thread state.
-    static IntPtr locHook = IntPtr.Zero;
-    static uint locPid;
-    static IntPtr foreground = IntPtr.Zero;
-    static UIntPtr timer = UIntPtr.Zero;
-    static int lastEval;
-    static string last;
+    // The running watcher. Each one keeps its own state and thread, so one that hasn't finished
+    // stopping (a timed-out Start or Stop) never shares anything with the next.
+    static Watcher current;
 
     /** The monitor's top-left when the foreground window covers it entirely (not the desktop or the shell). */
     public static int[] FullscreenMonitor() { return FullscreenMonitor(GetForegroundWindow()); }
@@ -81,95 +79,143 @@ namespace Notula.Desk {
       return null;
     }
 
-    /** Starts the watcher thread (once); it prints the current state as soon as it runs. */
+    /** Starts a watcher (one at a time); it prints the current state as soon as it runs. */
     public static void Start() {
+      Watcher w;
       lock (gate) {
-        if (thread != null) return;
-        var ready = new ManualResetEvent(false);
-        var t = new Thread(() => Run(ready));
+        if (current != null) return;
+        w = new Watcher();
+        current = w;
+      }
+      w.Begin();
+    }
+
+    /** Ends the watcher and its hooks; a later Start prints the state again. */
+    public static void Stop() {
+      Watcher w;
+      lock (gate) {
+        w = current;
+        current = null;
+      }
+      if (w != null) w.End();
+    }
+
+    sealed class Watcher {
+      // Kept in a field for the hooks' lifetime: the OS calls it.
+      readonly WinEventProc proc;
+      readonly object state = new object();
+      readonly ManualResetEvent ready = new ManualResetEvent(false);
+      uint threadId;
+      volatile bool stopping;
+
+      // Watcher-thread state.
+      IntPtr locHook = IntPtr.Zero;
+      uint locPid;
+      IntPtr foreground = IntPtr.Zero;
+      UIntPtr timer = UIntPtr.Zero;
+      int lastEval;
+      string last;
+
+      public Watcher() { proc = OnEvent; }
+
+      public void Begin() {
+        var t = new Thread(Run);
         t.IsBackground = true;
-        thread = t;
         t.Start();
         ready.WaitOne(2000);
       }
-    }
 
-    /** Ends the watcher thread and its hooks; a later Start prints the state again. */
-    public static void Stop() {
-      lock (gate) {
-        var t = thread;
-        if (t == null) return;
-        thread = null;
-        if (threadId != 0) PostThreadMessage(threadId, WM_QUIT, IntPtr.Zero, IntPtr.Zero);
-        t.Join(1000);
-      }
-    }
-
-    static void Run(ManualResetEvent ready) {
-      MSG m;
-      threadId = GetCurrentThreadId();
-      // The first user32 call creates the thread's queue, so Stop can post to it from now on.
-      PeekMessage(out m, IntPtr.Zero, 0, 0, PM_NOREMOVE);
-      last = null;
-      foreground = IntPtr.Zero;
-      IntPtr fgHook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, IntPtr.Zero, proc, 0, 0, WINEVENT_OUTOFCONTEXT);
-      IntPtr minHook = SetWinEventHook(EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND, IntPtr.Zero, proc, 0, 0, WINEVENT_OUTOFCONTEXT);
-      ready.Set();
-      Evaluate();
-      while (GetMessage(out m, IntPtr.Zero, 0, 0) > 0) {
-        if (m.message == WM_TIMER && m.hwnd == IntPtr.Zero && timer != UIntPtr.Zero && m.wParam == (IntPtr)(long)timer.ToUInt64()) {
-          KillTimer(IntPtr.Zero, timer);
-          timer = UIntPtr.Zero;
-          Evaluate();
-          continue;
+      /** Asks the thread to end without waiting long: one that is late ends on its own. */
+      public void End() {
+        uint id;
+        lock (state) {
+          stopping = true;
+          id = threadId;
         }
-        DispatchMessage(ref m);
+        // Not running its loop yet: it sees `stopping` before it starts.
+        if (id != 0) PostThreadMessage(id, WM_QUIT, IntPtr.Zero, IntPtr.Zero);
       }
-      if (timer != UIntPtr.Zero) KillTimer(IntPtr.Zero, timer);
-      timer = UIntPtr.Zero;
-      if (locHook != IntPtr.Zero) UnhookWinEvent(locHook);
-      locHook = IntPtr.Zero;
-      locPid = 0;
-      if (minHook != IntPtr.Zero) UnhookWinEvent(minHook);
-      if (fgHook != IntPtr.Zero) UnhookWinEvent(fgHook);
-      threadId = 0;
-    }
 
-    // Watcher thread (out-of-context events arrive through its message loop).
-    static void OnEvent(IntPtr hook, uint ev, IntPtr hwnd, int idObject, int idChild, uint thread, uint time) {
-      if (ev == EVENT_OBJECT_LOCATIONCHANGE && (hwnd != foreground || idObject != OBJID_WINDOW || idChild != CHILDID_SELF)) return;
-      if (timer != UIntPtr.Zero) return;
-      int since = unchecked(Environment.TickCount - lastEval);
-      if (since >= SETTLE_MS) { Evaluate(); return; }
-      timer = SetTimer(IntPtr.Zero, UIntPtr.Zero, (uint)(SETTLE_MS - since), IntPtr.Zero);
-      if (timer == UIntPtr.Zero) Evaluate();
-    }
+      void Run() {
+        MSG m;
+        // The first user32 call creates the thread's queue, so End can post to it from now on.
+        PeekMessage(out m, IntPtr.Zero, 0, 0, PM_NOREMOVE);
+        lock (state) {
+          threadId = GetCurrentThreadId();
+          if (stopping) { ready.Set(); return; }
+        }
+        IntPtr fgHook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, IntPtr.Zero, proc, 0, 0, WINEVENT_OUTOFCONTEXT);
+        IntPtr minHook = SetWinEventHook(EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND, IntPtr.Zero, proc, 0, 0, WINEVENT_OUTOFCONTEXT);
+        ready.Set();
+        if (fgHook == IntPtr.Zero || minHook == IntPtr.Zero) {
+          // Without its events the watcher would go silent: say so, so main falls back to polling.
+          if (minHook != IntPtr.Zero) UnhookWinEvent(minHook);
+          if (fgHook != IntPtr.Zero) UnhookWinEvent(fgHook);
+          if (!stopping) Print("{\"event\":\"fullscreen-unavailable\"}");
+          lock (gate) { if (current == this) current = null; }
+          return;
+        }
+        Evaluate();
+        while (GetMessage(out m, IntPtr.Zero, 0, 0) > 0) {
+          if (m.message == WM_TIMER && m.hwnd == IntPtr.Zero && timer != UIntPtr.Zero && m.wParam == (IntPtr)(long)timer.ToUInt64()) {
+            KillTimer(IntPtr.Zero, timer);
+            timer = UIntPtr.Zero;
+            Evaluate();
+            continue;
+          }
+          DispatchMessage(ref m);
+        }
+        if (timer != UIntPtr.Zero) KillTimer(IntPtr.Zero, timer);
+        timer = UIntPtr.Zero;
+        if (locHook != IntPtr.Zero) UnhookWinEvent(locHook);
+        locHook = IntPtr.Zero;
+        locPid = 0;
+        UnhookWinEvent(minHook);
+        UnhookWinEvent(fgHook);
+      }
 
-    static void Evaluate() {
-      lastEval = Environment.TickCount;
-      try {
-        IntPtr fg = GetForegroundWindow();
-        if (fg != foreground) { foreground = fg; Follow(fg); }
-        int[] at = FullscreenMonitor(fg);
-        string line = at == null
-          ? "{\"event\":\"fullscreen\",\"full\":false,\"x\":0,\"y\":0}"
-          : "{\"event\":\"fullscreen\",\"full\":true,\"x\":" + at[0] + ",\"y\":" + at[1] + "}";
-        if (line == last) return;
-        last = line;
+      // Watcher thread (out-of-context events arrive through its message loop).
+      void OnEvent(IntPtr hook, uint ev, IntPtr hwnd, int idObject, int idChild, uint thread, uint time) {
+        if (ev == EVENT_OBJECT_LOCATIONCHANGE && (hwnd != foreground || idObject != OBJID_WINDOW || idChild != CHILDID_SELF)) return;
+        if (timer != UIntPtr.Zero) return;
+        int since = unchecked(Environment.TickCount - lastEval);
+        if (since >= SETTLE_MS) { Evaluate(); return; }
+        timer = SetTimer(IntPtr.Zero, UIntPtr.Zero, (uint)(SETTLE_MS - since), IntPtr.Zero);
+        if (timer == UIntPtr.Zero) Evaluate();
+      }
+
+      void Evaluate() {
+        lastEval = Environment.TickCount;
+        // A watcher told to stop prints nothing more.
+        if (stopping) return;
+        try {
+          IntPtr fg = GetForegroundWindow();
+          if (fg != foreground) { foreground = fg; Follow(fg); }
+          int[] at = FullscreenMonitor(fg);
+          string line = at == null
+            ? "{\"event\":\"fullscreen\",\"full\":false,\"x\":0,\"y\":0}"
+            : "{\"event\":\"fullscreen\",\"full\":true,\"x\":" + at[0] + ",\"y\":" + at[1] + "}";
+          if (line == last) return;
+          last = line;
+          Print(line);
+        } catch { }
+      }
+
+      static void Print(string line) {
         Console.Out.WriteLine(line);
         Console.Out.Flush();
-      } catch { }
-    }
+      }
 
-    /** The location hook follows the foreground window's process. */
-    static void Follow(IntPtr fg) {
-      uint pid = 0;
-      if (fg != IntPtr.Zero) GetWindowThreadProcessId(fg, out pid);
-      if (pid == locPid && locHook != IntPtr.Zero) return;
-      if (locHook != IntPtr.Zero) UnhookWinEvent(locHook);
-      locHook = IntPtr.Zero;
-      locPid = pid;
-      if (pid != 0) locHook = SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, IntPtr.Zero, proc, pid, 0, WINEVENT_OUTOFCONTEXT);
+      /** The location hook follows the foreground window's process. */
+      void Follow(IntPtr fg) {
+        uint pid = 0;
+        if (fg != IntPtr.Zero) GetWindowThreadProcessId(fg, out pid);
+        if (pid == locPid && locHook != IntPtr.Zero) return;
+        if (locHook != IntPtr.Zero) UnhookWinEvent(locHook);
+        locHook = IntPtr.Zero;
+        locPid = pid;
+        if (pid != 0) locHook = SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, IntPtr.Zero, proc, pid, 0, WINEVENT_OUTOFCONTEXT);
+      }
     }
   }
 }
