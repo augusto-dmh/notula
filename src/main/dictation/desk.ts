@@ -6,19 +6,26 @@
 //   or the ops script runs (Windows: desk.ps1, started by the first request that needs it). The
 //   script stops 10 minutes after its last request, never while one is in flight, a duck is
 //   held or it hosts the full-screen watcher (../desk/idle.ts). A request's timeout starts once
-//   the script is ready, so a cold start costs time, never the request.
+//   the script is ready, so a cold start costs time, never the request. Each script the helper
+//   starts has a generation; a crash fails only what that script had taken, and a request already
+//   headed to its replacement waits for that one.
 // - Windows adds `duck` / `unduck` (other apps' audio sessions on every output device, for
 //   "Lower other audio while dictating").
 // - It also hosts the dictation bar's key hook: `startHook` / `sendHook` / `stopHook`, with its
 //   events and its exit on `onHook`.
 // - `watchFullscreen`: the dictation bar's full-screen source, a watcher in the key hook's
-//   process while it is ready, else in the ops script (../desk/fullscreen.ts).
+//   process while it is ready, else in the ops script; a slow poll when the watcher can't run
+//   (../desk/fullscreen.ts).
 // - The paste watcher reads with `field` (Windows): a light read near the caret.
+// - `foreground`: from the key hook's process while it is ready (Windows), so a screenshot never
+//   needs the ops script then (../desk/foreground.ts).
+// - Voice typing and screen capture share one instance (`sharedDesk`), so both see the key hook.
 
 import { join } from 'node:path'
 import { utilityProcess, type UtilityProcess } from 'electron'
-import { foldFullscreen, fullscreenHost, parseFullscreen, type FullscreenHost, type FullscreenState } from '../desk/fullscreen'
-import { idleDelay, OPS_STOPPED, opsStopped, requestEnded, requestStarted, shouldStopOps, type OpsState } from '../desk/idle'
+import { foldFullscreen, FULLSCREEN_POLL_MS, fullscreenHost, parseFullscreen, type FullscreenHost, type FullscreenState } from '../desk/fullscreen'
+import { foregroundRoute } from '../desk/foreground'
+import { idleDelay, OPS_STOPPED, opsExited, opsReady, opsStopped, requestEnded, requestStarted, shouldStopOps, type OpsState } from '../desk/idle'
 import { resourcePath } from '../lifecycle/resources'
 import { log } from '../log'
 
@@ -76,7 +83,19 @@ export function isDuckEntry(v: unknown): v is DuckEntry {
 
 type Reply = Record<string, unknown> & { ok: boolean; error?: string }
 
-type DeskOp = 'foreground' | 'context' | 'field' | 'modifiers' | 'paste' | 'dblclick' | 'duck' | 'unduck' | 'unmute' | 'watch-foreground'
+/** A request held back for a cold start whose caller no longer wants it. */
+const SKIPPED: Reply = { ok: false, error: 'skipped' }
+
+/** A request main waits on. */
+interface Pending {
+  finish: (r: Reply | null) => void
+  /** The ops script came up. */
+  ready: () => void
+  /** The ops script exited on its own. */
+  exited: () => void
+}
+
+type DeskOp = 'foreground' | 'context' | 'field' | 'modifiers' | 'paste' | 'dblclick' | 'duck' | 'unduck' | 'unmute' | 'watch-foreground' | 'fullscreen'
 
 /** The longest wait for the ops script's ready line; a request's own timeout starts after it. */
 const OPS_START_MS = 10_000
@@ -88,7 +107,7 @@ export class Desk {
   private proc: UtilityProcess | null = null
   private ready: Promise<boolean> | null = null
   private nextId = 1
-  private readonly pending = new Map<number, (r: Reply | null) => void>()
+  private readonly pending = new Map<number, Pending>()
   private hookOn = false
   /** The hook process said `ready`: it can host the full-screen watcher. */
   private hookReady = false
@@ -96,13 +115,20 @@ export class Desk {
   private ops: OpsState = OPS_STOPPED
   /** Windows: the ops script printed its ready line. */
   private opsUp = false
-  private opsWaiters: Array<(ok: boolean) => void> = []
+  /** The newest ops script generation heard of (ready or exit); older lines are stale. */
+  private opsGen = 0
+  /** `foreground` asked of the key hook, by id. */
+  private readonly hookAsks = new Map<number, (r: Record<string, unknown> | null) => void>()
   private idleTimer: ReturnType<typeof setTimeout> | null = null
   private fsListener: ((at: { x: number; y: number } | null) => void) | null = null
   private fsHost: FullscreenHost = 'none'
   private fsState: FullscreenState | null = null
   private fsRetries = 0
   private fsRetryTimer: ReturnType<typeof setTimeout> | null = null
+  /** A watcher said it can't run: the rest of the run polls instead. */
+  private fsBroken = false
+  private fsPollTimer: ReturnType<typeof setInterval> | null = null
+  private fsPolling = false
   private routing = false
 
   get supported(): boolean {
@@ -142,19 +168,22 @@ export class Desk {
     if (this.proc !== child) return
     switch (m['type']) {
       case 'reply':
-        this.pending.get(Number(m['id']))?.(m as Reply)
+        this.pending.get(Number(m['id']))?.finish(m as Reply)
         return
       case 'ops-ready':
-        this.opsUp = true
-        this.flushOps(true)
+        this.onOpsReady(Number(m['gen']) || 0)
         return
       case 'ops-exit':
-        this.onOpsExit()
+        this.onOpsExit(Number(m['gen']) || 0)
         return
       case 'fullscreen':
         this.onFullscreen(m)
         return
       case 'hook':
+        if (m['event'] === 'foreground') {
+          this.hookAsks.get(Number(m['id']))?.(m)
+          return
+        }
         if (m['event'] === 'ready' && this.hookOn) {
           this.hookReady = true
           this.routeSoon()
@@ -164,6 +193,7 @@ export class Desk {
       case 'hook-exit':
         this.hookOn = false
         this.hookReady = false
+        this.failHookAsks()
         this.hookListener?.(m)
         this.routeSoon()
         this.release()
@@ -171,21 +201,32 @@ export class Desk {
     }
   }
 
-  private flushOps(ok: boolean): void {
-    const waiting = this.opsWaiters
-    this.opsWaiters = []
-    for (const w of waiting) w(ok)
+  private onOpsReady(gen: number): void {
+    if (gen < this.opsGen) return
+    this.opsGen = gen
+    this.opsUp = true
+    this.ops = opsReady(this.ops)
+    for (const p of [...this.pending.values()]) p.ready()
+    this.settle()
   }
 
-  /** The ops script exited on its own (a crash, or it failed to start). */
-  private onOpsExit(): void {
+  /**
+   * The ops script exited on its own (a crash, or it failed to start). The helper has already
+   * failed the requests that script had taken; any still here went out after it died, and the
+   * helper starts a fresh script for them.
+   */
+  private onOpsExit(gen: number): void {
+    if (gen < this.opsGen) return
+    this.opsGen = gen
     this.opsUp = false
-    this.ops = opsStopped(this.ops)
-    this.flushOps(false)
-    // Requests it had taken get no reply now.
-    for (const cb of [...this.pending.values()]) cb(null)
+    for (const p of [...this.pending.values()]) p.exited()
+    this.ops = opsExited(this.ops, this.pending.size > 0)
     if (this.fsHost === 'desk') this.fullscreenLost()
     this.settle()
+  }
+
+  private failHookAsks(): void {
+    for (const done of [...this.hookAsks.values()]) done(null)
   }
 
   private reset(child: UtilityProcess): void {
@@ -197,11 +238,13 @@ export class Desk {
       this.hookListener?.({ type: 'hook-exit', code: null })
     }
     this.hookReady = false
+    this.failHookAsks()
     this.opsUp = false
+    // A new utility counts its scripts from 1 again.
+    this.opsGen = 0
     this.ops = opsStopped(this.ops)
     this.clearIdle()
-    this.flushOps(false)
-    for (const cb of [...this.pending.values()]) cb(null)
+    for (const p of [...this.pending.values()]) p.finish(null)
     if (this.fsHost === 'desk') this.fullscreenLost()
     else if (this.fsHost === 'hook') this.routeSoon()
   }
@@ -277,6 +320,7 @@ export class Desk {
     if (!this.hookOn) return
     this.hookOn = false
     this.hookReady = false
+    this.failHookAsks()
     this.proc?.postMessage({ type: 'hook-stop' })
     this.routeSoon()
     this.release()
@@ -318,10 +362,14 @@ export class Desk {
     if (this.fsRetryTimer) return
     const prev = this.fsHost
     const hook = !this.hookOn ? 'down' : this.hookReady ? 'ready' : 'starting'
-    const next = fullscreenHost({ platform: process.platform, tracking: !!this.fsListener, hook, current: prev })
+    const next = fullscreenHost({ platform: process.platform, tracking: !!this.fsListener, hook, current: prev, watcherBroken: this.fsBroken })
     if (next === prev) return this.release()
     this.fsHost = next
     if (prev === 'hook') this.sendHook({ op: 'watch-foreground', on: false })
+    if (prev === 'poll' && this.fsPollTimer) {
+      clearInterval(this.fsPollTimer)
+      this.fsPollTimer = null
+    }
     if (prev === 'desk') {
       this.ops = { ...this.ops, watching: false }
       // Telling a stopped script to stop would start it.
@@ -334,11 +382,33 @@ export class Desk {
     if (next === 'hook') this.sendHook({ op: 'watch-foreground', on: true })
     else if (next === 'desk') {
       this.ops = { ...this.ops, watching: true }
-      void this.ask('watch-foreground', 1_500, { on: true }).then((r) => {
-        if (!r && this.fsHost === 'desk') this.fullscreenLost()
+      void this.call('watch-foreground', 1_500, { on: true }).then((r) => {
+        if (this.fsHost !== 'desk' || r?.ok) return
+        if (r?.error === 'watcher unavailable') this.watcherBroken('desk')
+        else this.fullscreenLost()
       })
+    } else if (next === 'poll') {
+      this.fsPollTimer = setInterval(() => void this.pollFullscreen(), FULLSCREEN_POLL_MS)
+      void this.pollFullscreen()
     }
     this.release()
+  }
+
+  /** A watcher can't run (its source didn't load, or its event hooks failed): poll from now on. */
+  private watcherBroken(from: FullscreenHost): void {
+    if (this.fsBroken) return
+    this.fsBroken = true
+    log('warn', 'desk:fullscreen-poll', { from })
+    this.routeSoon()
+  }
+
+  /** The fallback: one read from the ops script; no answer counts as not full screen. */
+  private async pollFullscreen(): Promise<void> {
+    if (this.fsHost !== 'poll' || this.fsPolling) return
+    this.fsPolling = true
+    const r = await this.ask('fullscreen', 1_500)
+    this.fsPolling = false
+    if (this.fsHost === 'poll') this.setFullscreen(r ? parseFullscreen(r) : null)
   }
 
   /** The ops script hosting the watcher failed: try again a few times, then go without it. */
@@ -361,6 +431,7 @@ export class Desk {
   private onFullscreen(m: Record<string, unknown>): void {
     const from: FullscreenHost = m['from'] === 'hook' ? 'hook' : 'desk'
     if (from !== this.fsHost) return
+    if (m['unavailable'] === true) return this.watcherBroken(from)
     const s = parseFullscreen(m)
     if (!s) return
     this.fsRetries = 0
@@ -375,8 +446,11 @@ export class Desk {
 
   // ---------- requests ----------
 
-  /** The raw reply (ok or not), or null when none came. */
-  private async call(op: DeskOp, timeoutMs: number, args?: Record<string, unknown>): Promise<Reply | null> {
+  /**
+   * The raw reply (ok or not), or null when none came. `abortIf`: a request that has to wait for
+   * a cold start is held back until the script is ready, then dropped (`SKIPPED`) if this says so.
+   */
+  private async call(op: DeskOp, timeoutMs: number, args?: Record<string, unknown>, abortIf?: () => boolean): Promise<Reply | null> {
     if (!this.supported) return null
     this.ops = requestStarted(this.ops, Date.now()).state
     this.clearIdle()
@@ -389,6 +463,7 @@ export class Desk {
     const id = this.nextId++
     return new Promise<Reply | null>((resolve) => {
       let timer: ReturnType<typeof setTimeout> | null = null
+      let posted = false
       const finish = (r: Reply | null): void => {
         if (!this.pending.delete(id)) return
         if (timer) clearTimeout(timer)
@@ -398,22 +473,35 @@ export class Desk {
         this.settle()
         resolve(r)
       }
-      this.pending.set(id, finish)
-      const arm = (): void => {
-        timer = setTimeout(() => finish(null), timeoutMs)
+      const arm = (ms: number): void => {
+        if (timer) clearTimeout(timer)
+        timer = setTimeout(() => finish(null), ms)
       }
-      // The timeout runs from the ops script's ready line, so a cold start never eats a request's time.
-      if (process.platform !== 'win32' || this.opsUp) arm()
-      else {
-        timer = setTimeout(() => finish(null), OPS_START_MS)
-        this.opsWaiters.push((ok) => {
-          if (!this.pending.has(id)) return
-          if (timer) clearTimeout(timer)
-          if (ok) arm()
-          else finish(null)
-        })
+      const post = (): void => {
+        posted = true
+        proc.postMessage({ type: 'req', id, op, args })
       }
-      proc.postMessage({ type: 'req', id, op, args })
+      this.pending.set(id, {
+        finish,
+        // The timeout runs from the ops script's ready line, so a cold start never eats a request's time.
+        ready: () => {
+          if (!posted) {
+            if (abortIf?.()) return finish(SKIPPED)
+            post()
+          }
+          arm(timeoutMs)
+        },
+        // Sent: the helper starts a fresh script for it. Held back: nothing will start one.
+        exited: () => (posted ? arm(OPS_START_MS) : finish(null))
+      })
+      if (process.platform !== 'win32' || this.opsUp) {
+        arm(timeoutMs)
+        post()
+        return
+      }
+      arm(OPS_START_MS)
+      if (abortIf) proc.postMessage({ type: 'ops-start', reason: op })
+      else post()
     })
   }
 
@@ -429,9 +517,29 @@ export class Desk {
     return !r ? 'no-reply' : r.ok ? r : 'error'
   }
 
+  /** How a foreground read would go now: through the key hook, or the ops script (warm or cold). */
+  foregroundRoute(): { via: 'hook' | 'desk'; waitMs: number } {
+    return foregroundRoute({ platform: process.platform, hookReady: this.hookReady, opsUp: this.opsUp })
+  }
+
   async foreground(timeoutMs = 1_000): Promise<DeskForeground | null> {
-    const r = await this.ask('foreground', timeoutMs)
+    const r = this.foregroundRoute().via === 'hook' ? await this.hookForeground(timeoutMs) : await this.ask('foreground', timeoutMs)
     return r ? { process: String(r['process'] ?? ''), title: String(r['title'] ?? ''), bundle: typeof r['bundle'] === 'string' && r['bundle'] ? r['bundle'] : null } : null
+  }
+
+  /** The key hook's answer: one window read in its process, no ops script. */
+  private hookForeground(timeoutMs: number): Promise<Record<string, unknown> | null> {
+    const id = this.nextId++
+    return new Promise((resolve) => {
+      const done = (r: Record<string, unknown> | null): void => {
+        if (!this.hookAsks.delete(id)) return
+        clearTimeout(timer)
+        resolve(r)
+      }
+      const timer = setTimeout(() => done(null), timeoutMs)
+      this.hookAsks.set(id, done)
+      this.sendHook({ op: 'foreground', id })
+    })
   }
 
   async context(timeoutMs: number): Promise<DeskContext> {
@@ -480,11 +588,16 @@ export class Desk {
     return r && typeof r['held'] === 'boolean' ? r['held'] : null
   }
 
-  /** Lowers every other app's audio on every output device (Notula's own processes are skipped); null on failure. */
-  async duck(): Promise<DuckResult | null> {
+  /**
+   * Lowers every other app's audio on every output device (Notula's own processes are skipped);
+   * null on failure. `ended`: asked once a cold start is over, before anything is lowered; true
+   * skips the duck ('skipped'), so nothing dips after the dictation it was for.
+   */
+  async duck(ended?: () => boolean): Promise<DuckResult | null | 'skipped'> {
     if (process.platform !== 'win32') return null
-    const r = await this.ask('duck', 2_000, { root: process.pid, factor: DUCK.factor, ms: DUCK.downMs })
-    if (!r || !Array.isArray(r['entries'])) return null
+    const r = await this.call('duck', 2_000, { root: process.pid, factor: DUCK.factor, ms: DUCK.downMs }, ended)
+    if (r === SKIPPED) return 'skipped'
+    if (!r?.ok || !Array.isArray(r['entries'])) return null
     const raw = r['entries'] as Array<Record<string, unknown>>
     const entries = (raw as unknown[]).filter(isDuckEntry).map((e) => ({ key: e.key, saved: e.saved, set: e.set }))
     return {
@@ -511,4 +624,12 @@ export class Desk {
     const r = await this.ask('paste', 3_000)
     return r?.['sent'] === true
   }
+}
+
+let shared: Desk | null = null
+
+/** The one helper voice typing and screen capture share, so both see the key hook. */
+export function sharedDesk(): Desk {
+  if (!shared) shared = new Desk()
+  return shared
 }

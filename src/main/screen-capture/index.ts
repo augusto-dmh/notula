@@ -17,8 +17,9 @@
 // - Save goes to the note being transcribed, else the note open in the main window, else a
 //   new "Screenshots <date and time>" note, as ordinary encrypted note images counted toward
 //   the 10-image limit, each with its `capture` details. Without room, nothing is added.
-// - The source app and window title come from the foreground-app reader voice typing uses;
-//   no text is read from other apps. Logs carry no image bytes and no note text.
+// - The source app and window title come from the foreground-app reader voice typing uses (the
+//   shared desk helper: the key hook while it runs, else the ops script, waited for up to 3 s
+//   when it is cold); no text is read from other apps. Logs carry no image bytes and no note text.
 
 import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
@@ -34,15 +35,15 @@ import {
   type ScreenCaptureTakeResult
 } from '@shared/types/screen-capture'
 import type { MainContext } from '../context'
+import { FOREGROUND_MS } from '../desk/foreground'
 import { dictationBusy } from '../dictation/activity'
-import { Desk } from '../dictation/desk'
+import { sharedDesk } from '../dictation/desk'
 import { showMainWindow } from '../lifecycle'
 import { log } from '../log'
 import { fit } from '../snapshots/frames'
 import { regionSnapshots } from '../snapshots/region'
 
 const SUPPORTED = process.platform === 'win32' || process.platform === 'darwin'
-const FOREGROUND_TIMEOUT_MS = 500
 
 interface Shot {
   jpeg: Buffer
@@ -82,7 +83,6 @@ export function registerScreenCapture(ctx: MainContext): void {
   let registered: string | null = null
   let session: Session | null = null
   let panel: BrowserWindow | null = null
-  let desk: Desk | null = null
 
   const alive = (w: BrowserWindow | null): w is BrowserWindow => w !== null && !w.isDestroyed()
   const fromPanel = (wc: WebContents): boolean => alive(panel) && panel.webContents.id === wc.id
@@ -95,10 +95,20 @@ export function registerScreenCapture(ctx: MainContext): void {
 
   // ---------- the source app ----------
 
+  /**
+   * Read before the grab, whose overlay takes the foreground. The key hook answers at once while
+   * it runs; else the shared desk helper does, within the usual 500 ms when its script is warm.
+   * A cold script is waited for, up to 3 s in all: the only wait longer than the usual one.
+   */
   async function foreground(): Promise<{ app: string | null; title: string | null }> {
-    if (!desk) desk = new Desk()
-    const timeout = new Promise<null>((r) => setTimeout(() => r(null), FOREGROUND_TIMEOUT_MS))
-    const fg = await Promise.race([desk.foreground(FOREGROUND_TIMEOUT_MS).catch(() => null), timeout])
+    const desk = sharedDesk()
+    const route = desk.foregroundRoute()
+    const t0 = Date.now()
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const timeout = new Promise<null>((r) => (timer = setTimeout(() => r(null), route.waitMs)))
+    const fg = await Promise.race([desk.foreground(FOREGROUND_MS).catch(() => null), timeout])
+    if (timer) clearTimeout(timer)
+    if (route.waitMs > FOREGROUND_MS) log('info', 'screen-capture:source-wait', { ms: Date.now() - t0, found: !!fg })
     if (!fg) return { app: null, title: null }
     const name = appName(fg.process)
     return { app: name, title: name ? fg.title.trim().slice(0, 1_000) || null : null }
@@ -340,8 +350,6 @@ export function registerScreenCapture(ctx: MainContext): void {
     }
     unregister()
     end('disabled')
-    desk?.stop()
-    desk = null
   }
 
   ctx.shortcuts.registerApplier('screenCapture', async (accelerator) => {
@@ -368,7 +376,6 @@ export function registerScreenCapture(ctx: MainContext): void {
   })
   app.on('will-quit', () => {
     unregister()
-    desk?.stop()
   })
 
   // ---------- IPC: the panel ----------

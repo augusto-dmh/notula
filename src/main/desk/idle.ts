@@ -37,6 +37,20 @@ export function opsStopped(s: OpsState): OpsState {
   return { ...s, running: false, duckHeld: false, watching: false }
 }
 
+/**
+ * The script exited on its own. The helper has already failed what that script had taken, so a
+ * request still waiting is headed to the fresh script the helper starts for it: the state stays
+ * running, and that script gets its idle stop.
+ */
+export function opsExited(s: OpsState, stillWaiting: boolean): OpsState {
+  return { ...opsStopped(s), running: stillWaiting }
+}
+
+/** A script came up: whatever main thought before, it is running and needs its idle stop. */
+export function opsReady(s: OpsState): OpsState {
+  return s.running ? s : { ...s, running: true }
+}
+
 export function shouldStopOps(s: OpsState, now: number): boolean {
   return s.running && s.inFlight === 0 && !s.duckHeld && !s.watching && now - s.lastRequestAt >= OPS_IDLE_MS
 }

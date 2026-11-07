@@ -6,8 +6,14 @@
 // script does, also while the hook restarts. A hook that is starting keeps the host it has, so
 // arming (the hook starts with the bar) never starts the ops script for the second it takes.
 // Off Windows there is no watcher.
+//
+// A watcher that can't run (its source didn't load, or its event hooks failed) is replaced for
+// the rest of the run by `poll`: one read from the ops script every 2 s, as before the watcher.
 
-export type FullscreenHost = 'none' | 'hook' | 'desk'
+export type FullscreenHost = 'none' | 'hook' | 'desk' | 'poll'
+
+/** The fallback poll's interval. */
+export const FULLSCREEN_POLL_MS = 2_000
 
 export interface FullscreenState {
   full: boolean
@@ -19,8 +25,9 @@ export interface FullscreenState {
 /** The key hook process: up and ready, spawned and not ready yet, or not running. */
 export type HookPhase = 'ready' | 'starting' | 'down'
 
-export function fullscreenHost(o: { platform: string; tracking: boolean; hook: HookPhase; current: FullscreenHost }): FullscreenHost {
+export function fullscreenHost(o: { platform: string; tracking: boolean; hook: HookPhase; current: FullscreenHost; watcherBroken?: boolean }): FullscreenHost {
   if (o.platform !== 'win32' || !o.tracking) return 'none'
+  if (o.watcherBroken) return 'poll'
   if (o.hook === 'ready') return 'hook'
   if (o.hook === 'down') return 'desk'
   return o.current === 'desk' ? 'desk' : 'none'

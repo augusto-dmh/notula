@@ -104,7 +104,7 @@ import { RecognizerError, type SpeechRecognizer } from '../transcription/api'
 import { buildContextBlock, buildKeyterms, rankTerms, termsUsedIn } from './context'
 import { deliver } from './delivery'
 import { setDictationBusy } from './activity'
-import { Desk, isDuckEntry, type DeskContext, type DuckEntry, type DuckResult } from './desk'
+import { isDuckEntry, sharedDesk, type DeskContext, type DuckEntry, type DuckResult } from './desk'
 import type { ChordEffect } from './chord-machine'
 import { DictationBar } from './dictation-bar'
 import { forgetRejectedProvider, formatDictation, midSentence, toneFor, type FormatFailure } from './format'
@@ -219,7 +219,7 @@ function recognizerReason(err: unknown): DictationFailureReason {
 }
 
 export function registerDictation(ctx: MainContext): void {
-  const desk = new Desk()
+  const desk = sharedDesk()
   let settings: Settings | null = null
   let armed = false
   let registered: string | null = null
@@ -427,8 +427,12 @@ export function registerDictation(ctx: MainContext): void {
     // A meeting being captured is never lowered.
     if (ctx.capture.isCapturing()) return void log('debug', 'dictation:duck', { skipped: 'capturing' })
     const t0 = Date.now()
-    void desk.duck().then((d) => {
+    // A cold helper can take longer to start than a short hold lasts: once the recording is over,
+    // nothing is lowered at all.
+    const ended = (): boolean => sess.unducked || sess.finishing || sess.cancelled || session !== sess
+    void desk.duck(ended).then((d) => {
       const ms = Date.now() - t0
+      if (d === 'skipped') return void log('debug', 'dictation:duck', { skipped: 'ended', ms })
       log('info', 'dictation:duck', { ok: !!d, sessions: d?.entries.length ?? 0, devices: d?.devices ?? 0, ms })
       if (d?.processes.length) log('debug', 'dictation:duck-apps', { processes: d.processes })
       if (d?.entries.length) {

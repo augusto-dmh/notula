@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-// Dev-only check for the on-demand desk helper: the ops script's idle stop (src/main/desk/idle.ts)
-// and the dictation bar's full-screen source (src/main/desk/fullscreen.ts). Pure: no process, no
-// hook, no window.
+// Dev-only check for the on-demand desk helper: the ops script's idle stop (src/main/desk/idle.ts),
+// the dictation bar's full-screen source (src/main/desk/fullscreen.ts) and where a screenshot's
+// source app comes from (src/main/desk/foreground.ts). Pure: no process, no hook, no window.
 // Run: node scripts/dev/helpers-check.ts   (Node's type stripping; exits 1 on a failure)
 
-import { idleDelay, OPS_IDLE_MS, OPS_STOPPED, opsStopped, requestEnded, requestStarted, shouldStopOps, type OpsState } from '../../src/main/desk/idle.ts'
+import { idleDelay, OPS_IDLE_MS, OPS_STOPPED, opsExited, opsReady, opsStopped, requestEnded, requestStarted, shouldStopOps, type OpsState } from '../../src/main/desk/idle.ts'
+import { FOREGROUND_COLD_MS, FOREGROUND_MS, foregroundRoute } from '../../src/main/desk/foreground.ts'
 import { foldFullscreen, fullscreenHost, parseFullscreen, type FullscreenHost, type FullscreenState, type HookPhase } from '../../src/main/desk/fullscreen.ts'
 
 let failures = 0
@@ -50,6 +51,17 @@ check('10 min idle: stop', shouldStopOps(afterOne(), T0 + OPS_IDLE_MS))
   check('after a stop, a new request starts it again', again.start && again.state.running)
   check('an exit drops the duck hold (the script raised it)', !opsStopped({ ...afterOne(), duckHeld: true }).duckHeld)
 }
+{
+  // A crash racing a new request: the request is headed to the fresh script, which keeps its idle stop.
+  const racing = opsExited({ ...requestStarted(afterOne(), T0 + 1_000).state, duckHeld: true, watching: true }, true)
+  check('a crash with a request still waiting: still running, hold and watcher gone', racing.running && !racing.duckHeld && !racing.watching)
+  const answered = requestEnded(opsReady(racing), T0 + 2_000)
+  check('that request answered: the fresh script stops 10 min later', shouldStopOps(answered, T0 + 2_000 + OPS_IDLE_MS) && idleDelay(answered, T0 + 2_000) === OPS_IDLE_MS)
+  check('a crash with nothing waiting: stopped', !opsExited(afterOne(), false).running)
+  // Main had marked it stopped (an older reading); the script's ready line says otherwise.
+  const revived = opsReady(opsStopped(afterOne()))
+  check('a ready line after a stop marks it running again, with its idle stop', revived.running && idleDelay(revived, T0) === OPS_IDLE_MS)
+}
 check('the idle timer is due exactly at 10 min', idleDelay(afterOne(), T0 + 60_000) === OPS_IDLE_MS - 60_000)
 check('a later request restarts the wait', idleDelay(requestEnded(requestStarted(afterOne(), T0 + 300_000).state, T0 + 300_000), T0 + 300_000) === OPS_IDLE_MS)
 
@@ -70,6 +82,21 @@ check('hook not running: desk', host('win32', true, 'down') === 'desk')
 check('hook restarting: desk until ready, then hook', walk(['ready', 'down', 'starting', 'starting', 'ready']) === 'hook,desk,desk,desk,hook', walk(['ready', 'down', 'starting', 'starting', 'ready']))
 check('arming (hook starting with the bar): no desk start, then hook', walk(['starting', 'ready']) === 'none,hook', walk(['starting', 'ready']))
 check('a hook that fails to start: desk', walk(['starting', 'down']) === 'none,desk', walk(['starting', 'down']))
+check('a watcher that cannot run: poll, whatever the hook does',
+  (['ready', 'starting', 'down'] as HookPhase[]).every((p) => fullscreenHost({ platform: 'win32', tracking: true, hook: p, current: 'hook', watcherBroken: true }) === 'poll'))
+check('a broken watcher with the bar not tracking: none', fullscreenHost({ platform: 'win32', tracking: false, hook: 'ready', current: 'poll', watcherBroken: true }) === 'none')
+
+// ---------- a screenshot's source app ----------
+
+console.log('screenshot source')
+const route = (platform: string, hookReady: boolean, opsUp: boolean): string => {
+  const r = foregroundRoute({ platform, hookReady, opsUp })
+  return `${r.via}:${r.waitMs}`
+}
+check('key hook ready: the hook answers, the usual wait', route('win32', true, false) === `hook:${FOREGROUND_MS}` && route('win32', true, true) === `hook:${FOREGROUND_MS}`)
+check('no hook, ops script warm: the ops script, the usual wait', route('win32', false, true) === `desk:${FOREGROUND_MS}`)
+check('no hook, ops script cold: waits for its start, at most 3 s', route('win32', false, false) === `desk:${FOREGROUND_COLD_MS}` && FOREGROUND_COLD_MS === 3_000)
+check('macOS: one osascript, the usual wait', route('darwin', false, false) === `desk:${FOREGROUND_MS}` && FOREGROUND_MS === 500)
 
 // ---------- the watcher's lines ----------
 

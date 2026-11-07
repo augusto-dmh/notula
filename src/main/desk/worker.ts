@@ -13,14 +13,18 @@
 //   readable, so main waits a fixed 300 ms.
 // - Protocol with main: {type:'start', scriptPath} → {type:'ready'} at once; {type:'req', id,
 //   op, args?} → {type:'reply', id, ok, …}; {type:'stop'}. A reply that does not come is main's
-//   timeout. The ops script's start is {type:'ops-ready'} (logged as `desk:ops-started` with
-//   its `ms` and the op that started it), its exit {type:'ops-exit'}.
+//   timeout. The ops script's start is {type:'ops-ready', gen} (logged as `desk:ops-started`
+//   with its `ms` and the op that started it), its exit {type:'ops-exit', gen}; gen counts the
+//   scripts this process started. Before an exit, every request that script had taken gets
+//   `ok:false`, so main knows what is left is headed to the next one. {type:'ops-start', reason}
+//   starts the script with no request (main holds a request back until it is ready).
 // - The key hook: {type:'hook-start', scriptPath} spawns
 //   `resources/desk/keyhook.ps1` (Windows) or `keyhook-mac.js` under osascript (macOS) and
 //   relays its JSON lines as {type:'hook', …}; {type:'hook-send', msg} writes one request;
 //   {type:'hook-stop'} ends it; its exit is {type:'hook-exit', code}. One hook process at most.
 // - Full screen: either script can run the watcher (foreground-watch.cs). Its unsolicited lines
-//   are pushed as {type:'fullscreen', from:'hook'|'ops', full, x, y}, never as a reply.
+//   are pushed as {type:'fullscreen', from:'hook'|'ops', full, x, y}, never as a reply; a
+//   watcher that can't run is {type:'fullscreen', from, unavailable:true}.
 
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createInterface } from 'node:readline'
@@ -31,6 +35,7 @@ type MainToDesk =
   | { type: 'start'; scriptPath: string }
   | ({ type: 'req' } & OpsRequest)
   | { type: 'ops-stop' }
+  | { type: 'ops-start'; reason: string }
   | { type: 'stop' }
   | { type: 'hook-start'; scriptPath: string }
   | { type: 'hook-send'; msg: Record<string, unknown> }
@@ -40,13 +45,20 @@ const port = process.parentPort
 let scriptPath: string | null = null
 let ps: ChildProcessWithoutNullStreams | null = null
 let psReady = false
+/** Counts the ops scripts started. */
+let psGen = 0
+/** Requests written to the current ops script and not answered yet. */
+let psTaken = new Set<number>()
 /** Requests waiting for the ops script's ready line. */
 let queued: OpsRequest[] = []
 let hook: ChildProcessWithoutNullStreams | null = null
 
 function pushFullscreen(from: 'hook' | 'ops', msg: Record<string, unknown>): void {
-  send({ type: 'fullscreen', from, full: msg['full'], x: msg['x'], y: msg['y'] })
+  if (msg['event'] === 'fullscreen-unavailable') send({ type: 'fullscreen', from, unavailable: true })
+  else send({ type: 'fullscreen', from, full: msg['full'], x: msg['x'], y: msg['y'] })
 }
+
+const isFullscreenLine = (msg: Record<string, unknown>): boolean => msg['event'] === 'fullscreen' || msg['event'] === 'fullscreen-unavailable'
 
 function startHook(scriptPath: string): void {
   if (hook) return
@@ -73,7 +85,7 @@ function startHook(scriptPath: string): void {
   createInterface({ input: child.stdout }).on('line', (line) => {
     try {
       const msg = JSON.parse(line) as Record<string, unknown>
-      if (msg['event'] === 'fullscreen') pushFullscreen('hook', msg)
+      if (isFullscreenLine(msg)) pushFullscreen('hook', msg)
       else send({ ...msg, type: 'hook' })
     } catch {
       /* not a protocol line */
@@ -95,7 +107,9 @@ function send(m: Record<string, unknown>): void {
 }
 
 function writeOps(r: OpsRequest): void {
-  ps?.stdin.write(`${JSON.stringify(r)}\n`)
+  if (!ps) return
+  psTaken.add(r.id)
+  ps.stdin.write(`${JSON.stringify(r)}\n`)
 }
 
 function failQueued(error: string): void {
@@ -115,6 +129,9 @@ function startOps(reason: string): void {
   )
   ps = child
   psReady = false
+  const gen = ++psGen
+  const taken = new Set<number>()
+  psTaken = taken
   let gone = false
   const exited = (): void => {
     if (gone) return
@@ -122,8 +139,10 @@ function startOps(reason: string): void {
     if (ps !== child) return
     ps = null
     psReady = false
+    for (const id of taken) send({ type: 'reply', id, ok: false, error: 'helper exited' })
+    taken.clear()
     failQueued('helper not running')
-    send({ type: 'ops-exit' })
+    send({ type: 'ops-exit', gen })
   }
   child.on('error', (err) => {
     send({ type: 'log', level: 'warn', event: 'desk:powershell-error', data: { err: err.message } })
@@ -151,12 +170,15 @@ function startOps(reason: string): void {
       if (ps !== child || psReady) return
       psReady = true
       send({ type: 'log', level: 'info', event: 'desk:ops-started', data: { ms: Date.now() - t0, reason } })
-      send({ type: 'ops-ready' })
+      send({ type: 'ops-ready', gen })
       const waiting = queued
       queued = []
       for (const r of waiting) writeOps(r)
-    } else if (msg['event'] === 'fullscreen') pushFullscreen('ops', msg)
-    else send({ ...msg, type: 'reply' })
+    } else if (isFullscreenLine(msg)) pushFullscreen('ops', msg)
+    else {
+      taken.delete(Number(msg['id']))
+      send({ ...msg, type: 'reply' })
+    }
   })
 }
 
@@ -220,6 +242,10 @@ port.on('message', (e: { data: MainToDesk }) => {
   }
   if (m.type === 'hook-stop') return stopHook()
   if (m.type === 'ops-stop') return stopOps()
+  if (m.type === 'ops-start') {
+    if (process.platform === 'win32' && !ps) startOps(m.reason)
+    return
+  }
   if (m.type === 'stop') {
     stopHook()
     stopOps()
