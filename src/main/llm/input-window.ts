@@ -6,8 +6,9 @@
 
 /** Model families with a published input window, in tokens. A new family is one line. */
 const KNOWN_WINDOWS: readonly { pattern: RegExp; tokens: number }[] = [
-  // gemini-<major>[.<minor>]-(flash|flash-lite|pro), then -preview/-latest/-exp and a date or build.
-  { pattern: /^gemini-\d+(?:\.\d+)?-(?:flash|flash-lite|pro)(?:-(?:preview|latest|exp))?(?:-[\d][\d-]*)?$/, tokens: 1_048_576 }
+  // gemini-<major>[.<minor>]-(flash|flash-lite|pro) from 1.5 on, then -preview/-latest/-exp and a
+  // date or build. 1.0 had a far smaller window, so it stays unknown.
+  { pattern: /^gemini-(?:1\.5|(?:[2-9]|[1-9]\d+)(?:\.\d+)?)-(?:flash|flash-lite|pro)(?:-(?:preview|latest|exp))?(?:-[\d][\d-]*)?$/, tokens: 1_048_576 }
 ]
 
 /** The known input window of `model` in tokens, or null. A `<vendor>/` or `models/` prefix is ignored. */

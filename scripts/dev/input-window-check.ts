@@ -36,6 +36,11 @@ for (const id of [
   'gemini-3.8-flash-preview-tts',
   'gemini-3.8-flash-live-001',
   'gemini-embedding-001',
+  'gemini-1.0-pro',
+  'gemini-1.0-pro-001',
+  'gemini-1.0-pro-latest',
+  'gemini-1-pro',
+  'gemini-pro',
   'gpt-5',
   'gemma3',
   ''
