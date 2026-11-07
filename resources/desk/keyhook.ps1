@@ -22,12 +22,16 @@
 #   {"op":"watch","on":true}           Return and Tab are reported as commits while a paste is watched
 #   {"op":"suspend","on":true}         swallow nothing (a shortcut is being recorded)
 #   {"op":"modifiers"}                 asks whether Shift, Ctrl, Alt or Win is down (the OS's key state)
+#   {"op":"foreground","id":7}         asks for the foreground window's process name and title
 #   {"op":"watch-foreground","on":true}  runs the dictation bar's full-screen watcher
 #                                      (foreground-watch.cs) on its own thread, never the hook's
 # JSON lines on stdout
 #   {"event":"ready","dblclick":500}   the hook is installed; dblclick = the OS double-click interval, ms
 #   {"event":"modifiers","held":false} the answer to "modifiers"
+#   {"event":"foreground","id":7,"process":"...","title":"...","pid":0}  the answer to "foreground"
 #   {"event":"fullscreen","full":true,"x":0,"y":0}  from the watcher: once at start, then on change
+#   {"event":"fullscreen-unavailable"} the watcher can't run (its source didn't load, or its
+#                                      event hooks failed)
 #   {"event":"key","k":"ctrl_r","d":1} a transition (d = 1 down, 0 up), never a repeat
 #   {"event":"lost"}                   re-installing the hook failed
 #   {"event":"commit","k":"enter"}     Return or Tab ("tab") went down while watching
@@ -55,13 +59,15 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::InputEncoding = [System.Text.Encoding]::UTF8
 
-# The full-screen watcher's source joins this one: one compile for both.
+# The full-screen watcher's source joins this one: one compile for both. Without it (a missing
+# file, a failed compile) the hook compiles alone and only the watcher is unavailable.
 $hookSource = @'
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 
 public static class NotulaKeyHook {
@@ -93,6 +99,9 @@ public static class NotulaKeyHook {
   [DllImport("kernel32.dll")] static extern IntPtr GetModuleHandle(string name);
   [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
   [DllImport("user32.dll")] static extern uint GetDoubleClickTime();
+  [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
 
   static readonly HookProc proc = Callback;
   static readonly HookProc mouseProc = MouseCallback;
@@ -506,6 +515,18 @@ public static class NotulaKeyHook {
 
   public static int DoubleClickMs() { return (int)GetDoubleClickTime(); }
 
+  /** The foreground window's process name, title and pid (read off the hook thread). */
+  public static string[] Foreground() {
+    IntPtr h = GetForegroundWindow();
+    uint pid = 0;
+    if (h != IntPtr.Zero) GetWindowThreadProcessId(h, out pid);
+    string name = "";
+    try { if (pid != 0) using (var p = Process.GetProcessById((int)pid)) name = p.ProcessName; } catch { }
+    var title = new StringBuilder(512);
+    if (h != IntPtr.Zero) GetWindowText(h, title, 512);
+    return new string[] { name, title.ToString(), pid.ToString() };
+  }
+
   /** Shift, Ctrl, Alt or Win down by the OS's key state (read off the hook thread). */
   public static bool ModifiersHeld() {
     foreach (var vk in new int[] { 0x10, 0x11, 0x12, 0x5B, 0x5C }) { if ((GetAsyncKeyState(vk) & 0x8000) != 0) return true; }
@@ -513,7 +534,13 @@ public static class NotulaKeyHook {
   }
 }
 '@
-Add-Type -TypeDefinition ($hookSource + [Environment]::NewLine + [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot 'foreground-watch.cs')))
+$script:WatchOk = $false
+try {
+  Add-Type -TypeDefinition ($hookSource + [Environment]::NewLine + [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot 'foreground-watch.cs')))
+  $script:WatchOk = $true
+} catch {
+  Add-Type -TypeDefinition $hookSource
+}
 
 [NotulaKeyHook]::WatchOwner($OwnerPid)
 [NotulaKeyHook]::StartWriter()
@@ -543,7 +570,14 @@ while ($running) {
       'watch' { [NotulaKeyHook]::SetWatching([bool]$req.on) }
       'suspend' { [NotulaKeyHook]::SetSuspended([bool]$req.on) }
       'modifiers' { [NotulaKeyHook]::Send('{"event":"modifiers","held":' + ([string][NotulaKeyHook]::ModifiersHeld()).ToLowerInvariant() + '}') }
-      'watch-foreground' { if ([bool]$req.on) { [Notula.Desk.ForegroundWatch]::Start() } else { [Notula.Desk.ForegroundWatch]::Stop() } }
+      'foreground' {
+        $f = [NotulaKeyHook]::Foreground()
+        [NotulaKeyHook]::Send((ConvertTo-Json -Compress -InputObject @{ event = 'foreground'; id = [int]$req.id; process = $f[0]; title = $f[1]; pid = [int]$f[2] }))
+      }
+      'watch-foreground' {
+        if (-not $script:WatchOk) { if ([bool]$req.on) { [NotulaKeyHook]::Send('{"event":"fullscreen-unavailable"}') } }
+        elseif ([bool]$req.on) { [Notula.Desk.ForegroundWatch]::Start() } else { [Notula.Desk.ForegroundWatch]::Stop() }
+      }
       'stop' { $running = $false }
     }
   } catch {
@@ -551,7 +585,7 @@ while ($running) {
   }
 }
 
-[Notula.Desk.ForegroundWatch]::Stop()
+if ($script:WatchOk) { [Notula.Desk.ForegroundWatch]::Stop() }
 [NotulaKeyHook]::Stop()
 Start-Sleep -Milliseconds 100
 exit 0
