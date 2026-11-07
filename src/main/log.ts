@@ -6,10 +6,15 @@
 // `debug` lines are written by development builds always, and by packaged
 // builds only while detailed logging is on (`setVerboseLogging`, which diagnostics calls at
 // startup and on `diagnostics.verboseLogging` changes).
+//
+// `app.log` rotates at 5 MB into `app.1.log` … `app.3.log` (./log-rotate.ts), checked at open
+// and after each line, so a line never splits across files. A rotation that fails keeps
+// appending to the current file and tries again one cap later.
 
-import { createWriteStream, mkdirSync, type WriteStream } from 'node:fs'
+import { createWriteStream, mkdirSync, statSync, type WriteStream } from 'node:fs'
 import { join, sep } from 'node:path'
 import { app } from 'electron'
+import { LOG_ROTATE_BYTES, rotateIfFull, rotateLogFiles } from './log-rotate'
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
 
@@ -17,6 +22,10 @@ const REDACTED_FIELD = /^(key|token|authorization|api[_-]?key|secret|password|ac
 const MAX_DEPTH = 6
 
 let stream: WriteStream | null = null
+let logDir = ''
+/** Bytes in the current `app.log`, as far as this process has written them. */
+let bytes = 0
+let rotateAt = LOG_ROTATE_BYTES
 /** Packaged builds drop `debug` lines unless this is on. */
 let verbose = false
 
@@ -28,13 +37,42 @@ export function setVerboseLogging(on: boolean): void {
 function open(): WriteStream {
   if (stream) return stream
   // Resolved lazily: index.ts moves userData to Notula-dev before anything logs.
-  const dir = join(app.getPath('userData'), 'logs')
-  mkdirSync(dir, { recursive: true })
-  stream = createWriteStream(join(dir, 'app.log'), { flags: 'a' })
-  stream.on('error', () => {
-    stream = null
+  logDir = join(app.getPath('userData'), 'logs')
+  mkdirSync(logDir, { recursive: true })
+  const full = rotateIfFull(logDir)
+  bytes = fileSize(join(logDir, 'app.log'))
+  rotateAt = full === 'failed' ? bytes + LOG_ROTATE_BYTES : LOG_ROTATE_BYTES
+  const s = createWriteStream(join(logDir, 'app.log'), { flags: 'a' })
+  s.on('error', () => {
+    if (stream === s) stream = null
   })
-  return stream
+  stream = s
+  return s
+}
+
+function fileSize(path: string): number {
+  try {
+    return statSync(path).size
+  } catch {
+    return 0
+  }
+}
+
+/**
+ * Between two lines: renames the files while the old stream is still open (its pending
+ * writes follow the file into `app.1.log`), then ends it. On failure the old stream stays,
+ * so lines keep their order in the current file.
+ */
+function rotate(): void {
+  const old = stream
+  if (!old) return
+  if (!rotateLogFiles(logDir)) {
+    rotateAt = bytes + LOG_ROTATE_BYTES
+    return
+  }
+  stream = null
+  old.end()
+  open()
 }
 
 function redact(value: unknown, depth: number, seen: WeakSet<object>): unknown {
@@ -68,7 +106,10 @@ export function log(level: LogLevel, event: string, data?: Record<string, unknow
     else console.log(text)
   }
   try {
-    open().write(text + '\n')
+    const chunk = text + '\n'
+    open().write(chunk)
+    bytes += Buffer.byteLength(chunk)
+    if (bytes >= rotateAt) rotate()
   } catch {
     // Logging must never take the app down.
   }
