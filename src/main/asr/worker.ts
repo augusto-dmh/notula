@@ -32,7 +32,7 @@
 import type { OfflineRecognizer, OfflineRecognizerConfig, OfflineRecognizerResult } from 'sherpa-onnx-node'
 import { normalizeGain } from './gain'
 import { foreignScriptShare, LanguageLock } from './language-lock'
-import { partialWaitMs, partialWindow, splicePartial, type LiveLine } from './partials'
+import { lineReachesSeam, partialWaitMs, partialWindow, splicePartial, type LiveLine } from './partials'
 import type { AsrFinalizeStats, AsrToMain, AsrWorkerArgs, AsrWorkerWord, MainToAsr, WorkerLog } from './protocol'
 import { SAMPLE_RATE, Segmenter, type Segment } from './vad'
 import { verifyFilesSync } from './verify'
@@ -343,8 +343,13 @@ class Engine {
 
   /** `whole`: a partial that reads the whole open segment, when a windowed one can't be placed. */
   private async decode(seg: Segment, final: boolean, whole = false): Promise<void> {
-    const win =
+    let win =
       final || whole ? { startSample: seg.startSample, samples: seg.samples } : partialWindow(seg, this.whisper ? 'whisper' : 'parakeet', SAMPLE_RATE)
+    // A window with no earlier line to splice onto (after a backlog, or the first partial of a
+    // long segment) can't be placed: the whole segment is decoded instead, once.
+    if (win.startSample > seg.startSample && !lineReachesSeam(this.live?.id === seg.id ? this.live : null, (win.startSample * 1000) / SAMPLE_RATE)) {
+      win = { startSample: seg.startSample, samples: seg.samples }
+    }
     const stream = this.rec.createStream()
     const { samples, gain } = normalizeGain(win.samples)
     if (gain > 1 && !this.gainLogged) {
@@ -374,14 +379,16 @@ class Engine {
       this.stats.segments++
       this.stats.decodedAudioMs += audioMs
       this.stats.totalDecodeMs += ms
-    } else {
+    }
+    // A partial counts once: the untimed decode the whole segment replaces does not.
+    const countPartial = (): void => {
       this.stats.partials++
       this.stats.totalPartialDecodeMs += ms
       this.stats.partialAudioMs = (this.stats.partialAudioMs ?? 0) + (win.samples.length * 1000) / SAMPLE_RATE
     }
     this.stats.maxDecodeMs = Math.max(this.stats.maxDecodeMs, ms)
     // A partial for a segment that has closed since is discarded.
-    if (!final && !this.segmenter.isOpen(seg.id)) return
+    if (!final && !this.segmenter.isOpen(seg.id)) return countPartial()
     const startMs = (seg.startSample * 1000) / SAMPLE_RATE
     const endMs = startMs + audioMs
     let text = (r.text ?? '').trim()
@@ -399,6 +406,7 @@ class Engine {
       const timed = (r.timestamps ?? []).length === (r.tokens ?? []).length
       const live = this.live?.id === seg.id ? this.live : null
       const line = splicePartial(live, tokensToWords(r, windowStartMs, endMs), timed, windowStartMs, startMs)
+      // Only an untimed decode gets here: it can't be placed.
       if (line === 'whole-segment') {
         await this.decode(seg, false, true)
         return
@@ -407,6 +415,7 @@ class Engine {
       if (line.spliced) text = words.map((w) => w.w).join(' ')
       this.live = { id: seg.id, words, endMs }
     }
+    if (!final) countPartial()
     send({
       type: final ? 'segment' : 'partial',
       segmentId: seg.id,
