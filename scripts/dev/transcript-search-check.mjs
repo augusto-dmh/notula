@@ -483,6 +483,27 @@ try {
   bIndexer.backfill()
   bIndexer.stop()
   check('the backfill skips notes whose chunks are all blank or superseded', emptyBefore && !queued().includes(blank) && !queued().includes(hidden), { emptyBefore, queued: queued() })
+
+  // A drain that keeps failing backs off: 5 s, 30 s, then 2 min, logged once per step.
+  const failLogs = []
+  const broken = new Proxy({}, { get: () => { throw new Error('database disk image is malformed') } })
+  const failCtx = { ...ctx, db: broken, log: (level, event, data) => failLogs.push({ level, event, data }) }
+  const fIndexer = new NEW.fts.FtsIndexer(() => failCtx, { now: () => clock })
+  const waits = []
+  for (let i = 0; i < 5; i++) {
+    await fIndexer.drainNow()
+    waits.push(fIndexer.wakeTimer?._idleTimeout ?? null)
+  }
+  const failed = failLogs.filter((l) => l.event === 'fts-index-failed').map((l) => l.data.retryInMs)
+  check('a failing drain waits 5 s, 30 s, then 2 min before it tries again', waits.join() === '5000,30000,120000,120000,120000', waits)
+  check('… and logs once per step', failed.join() === '5000,30000,120000', failed)
+  fIndexer.schedule()
+  check('… and a write meanwhile does not bring the next try forward', (fIndexer.timer?._idleTimeout ?? 0) > 100_000, fIndexer.timer?._idleTimeout)
+  failCtx.db = raw
+  await fIndexer.drainNow()
+  fIndexer.stop()
+  check('a drain that works again resets the wait', fIndexer.failures === 0 && failLogs.some((l) => l.event === 'fts-index-recovered' && l.data.failures === 5), failLogs.map((l) => l.event))
+
   check('logs carry counts only', !JSON.stringify(logs).match(/gantrywhistle|plinthmoor|Batch words|planning/i), logs.map((l) => l.event))
   raw.close()
   raw = null

@@ -172,6 +172,8 @@ const MAX_DELAY_MS = 5_000
 const TRANSCRIPT_QUIET_MS = 30_000
 const TRANSCRIPT_BATCH_NOTES = 5
 const TRANSCRIPT_BATCH_CHARS = 300_000
+/** Waits after a failed drain, one per failure in a row; the last repeats until a drain succeeds. */
+const RETRY_AFTER_MS = [5_000, 30_000, 120_000]
 
 /** The clock and the quiet period; a check passes its own. */
 export interface FtsIndexerOptions {
@@ -217,6 +219,9 @@ export class FtsIndexer {
   private readonly quietMs: number
   /** Transcripts indexed in the current drain, for its log line. */
   private drained = { notes: 0, chars: 0, ms: 0 }
+  /** Failed drains in a row, and the wall-clock time before which no drain starts. */
+  private failures = 0
+  private retryAt = 0
 
   /** `ctx()` is null once the database is closed. */
   constructor(
@@ -237,7 +242,8 @@ export class FtsIndexer {
     const now = Date.now()
     if (this.timer) clearTimeout(this.timer)
     else this.firstPendingAt = now
-    const delay = Math.max(0, Math.min(IDLE_MS, this.firstPendingAt + MAX_DELAY_MS - now))
+    // After a failure, writes don't bring the next try forward.
+    const delay = Math.max(0, Math.min(IDLE_MS, this.firstPendingAt + MAX_DELAY_MS - now), this.retryAt - now)
     this.timer = setTimeout(() => void this.drain(), delay)
   }
 
@@ -334,6 +340,7 @@ export class FtsIndexer {
     this.timer = null
     this.running = true
     this.drained = { notes: 0, chars: 0, ms: 0 }
+    let retryIn = 0
     try {
       while (!this.stopped) {
         const s = this.ctx()
@@ -350,11 +357,19 @@ export class FtsIndexer {
         if (docs + panels + notes === 0) break
         await sleep(PAUSE_MS)
       }
+      if (this.failures) this.ctx()?.log('info', 'fts-index-recovered', { failures: this.failures })
+      this.failures = 0
+      this.retryAt = 0
     } catch (err) {
-      this.ctx()?.log('error', 'fts-index-failed', { err })
+      // A failure that repeats (a damaged table, a full disk) waits longer each time, logged once per step.
+      retryIn = RETRY_AFTER_MS[Math.min(this.failures, RETRY_AFTER_MS.length - 1)]
+      if (this.failures < RETRY_AFTER_MS.length) this.ctx()?.log('error', 'fts-index-failed', { err, retryInMs: retryIn })
+      this.failures++
+      this.retryAt = Date.now() + retryIn
     } finally {
       if (this.drained.notes) this.ctx()?.log('info', 'fts-transcripts-indexed', { ...this.drained })
-      this.wakeForDeferred()
+      if (retryIn && !this.stopped) this.wakeAfter(retryIn)
+      else this.wakeForDeferred()
       this.running = false
       if (this.rerun) {
         this.rerun = false
@@ -404,14 +419,19 @@ export class FtsIndexer {
       const at = Date.parse(oldest)
       // A time ahead of the clock (the clock moved back) waits one quiet period at most.
       const wait = Math.min(this.quietMs, Math.max(0, (Number.isNaN(at) ? 0 : at) + this.quietMs - this.now()))
-      this.wakeTimer = setTimeout(() => {
-        this.wakeTimer = null
-        this.schedule()
-      }, wait + 50)
-      this.wakeTimer.unref?.()
+      this.wakeAfter(wait + 50)
     } catch (err) {
       s.log('error', 'fts-index-failed', { err })
     }
+  }
+
+  private wakeAfter(ms: number): void {
+    if (this.wakeTimer) clearTimeout(this.wakeTimer)
+    this.wakeTimer = setTimeout(() => {
+      this.wakeTimer = null
+      this.schedule()
+    }, ms)
+    this.wakeTimer.unref?.()
   }
 
   /**
