@@ -7,7 +7,8 @@
 // Chat: `tools` as `function` tools with `tool_choice: 'auto'`, streamed.
 // `delta.tool_calls[i]` (id, name, argument chunks) become the tool-call events, and
 // `finish_reason: 'tool_calls'` becomes `stop{tool_use}`. A replayed assistant turn
-// carries its `tool_calls`, then one `{ role: 'tool' }` message per result. A server
+// carries its `tool_calls`, then one `{ role: 'tool' }` message per result. A call's
+// `extra_content` (Gemini's thought signature) goes back on that call as received. A server
 // that rejects tools (400/422 naming tools or functions), or ignores them and writes a
 // tool call as text, throws `LlmToolsUnsupportedError`; the chat engine then retries
 // without tools.
@@ -58,6 +59,8 @@ interface ToolCallDelta {
   id?: string
   type?: string
   function?: { name?: string; arguments?: string }
+  /** Gemini: `{ google: { thought_signature } }`, which must come back on this call. */
+  extra_content?: unknown
 }
 
 interface ChatChoice {
@@ -71,10 +74,14 @@ interface ChatChoice {
   finish_reason?: string | null
 }
 
-/** What a replayed assistant turn sends back: its text and its calls with the raw arguments. */
+/**
+ * What a replayed assistant turn sends back: its text and its calls with the raw arguments,
+ * plus each call's `extra_content` as received, when it had one. Gemini rejects a replayed
+ * call that lost its thought signature, so the value is opaque here and never logged.
+ */
 interface OpenAiReplay {
   content: string
-  toolCalls: { id: string; name: string; arguments: string }[]
+  toolCalls: { id: string; name: string; arguments: string; extraContent?: unknown }[]
 }
 
 /** Text that is a tool call a server wrote out instead of using `tool_calls`. */
@@ -427,7 +434,7 @@ export function createOpenAiCompatibleProvider(opts: Options): LlmProvider {
 
     const think = new ThinkFilter()
     // index → the call being streamed; arguments accumulate as raw text.
-    const calls = new Map<number, { id: string; name: string; args: string; started: boolean }>()
+    const calls = new Map<number, { id: string; name: string; args: string; started: boolean; extra?: unknown }>()
     let finish: string | null | undefined
     let answeredBy = use
     let usage: unknown
@@ -471,6 +478,7 @@ export function createOpenAiCompatibleProvider(opts: Options): LlmProvider {
             call.started = true
             yield { type: 'tool_call_start', id: call.id, name: call.name }
           }
+          if (d.extra_content !== undefined && d.extra_content !== null) call.extra = mergeExtra(call.extra, d.extra_content)
           const chunkArgs = d.function?.arguments
           if (chunkArgs) {
             call.args += chunkArgs
@@ -517,7 +525,7 @@ export function createOpenAiCompatibleProvider(opts: Options): LlmProvider {
         // A call whose name never arrived cannot be run or replayed.
         continue
       }
-      replay.toolCalls.push({ id: call.id, name: call.name, arguments: call.args })
+      replay.toolCalls.push({ id: call.id, name: call.name, arguments: call.args, ...(call.extra !== undefined ? { extraContent: call.extra } : {}) })
       yield { type: 'tool_call_end', id: call.id, args: parseArgs(call.args) }
     }
     const reason: 'end' | 'max_tokens' | 'refusal' | 'tool_use' =
@@ -711,13 +719,33 @@ function toOpenAiMessages(messages: LlmChatMessage[]): Record<string, unknown>[]
     } else {
       const replay = isReplay(m.replay) ? m.replay : null
       const calls = replay
-        ? replay.toolCalls.map((c) => ({ id: c.id, type: 'function', function: { name: c.name, arguments: c.arguments } }))
+        ? replay.toolCalls.map((c) => ({
+            id: c.id,
+            type: 'function',
+            function: { name: c.name, arguments: c.arguments },
+            ...(c.extraContent !== undefined ? { extra_content: c.extraContent } : {})
+          }))
         : m.toolCalls.map((c) => ({ id: c.id, type: 'function', function: { name: c.name, arguments: JSON.stringify(c.args) } }))
       const content = replay ? replay.content : m.content
       out.push({ role: 'assistant', content: content || (calls.length > 0 ? null : ''), ...(calls.length > 0 ? { tool_calls: calls } : {}) })
     }
   }
   return out
+}
+
+/**
+ * A call's `extra_content` across its deltas: objects merge key by key, and any other value
+ * replaces what came before, so a field repeated in every delta stays as sent once.
+ */
+function mergeExtra(prev: unknown, next: unknown): unknown {
+  if (!isPlainObject(prev) || !isPlainObject(next)) return next
+  const out: Record<string, unknown> = { ...prev }
+  for (const [k, v] of Object.entries(next)) out[k] = k in out ? mergeExtra(out[k], v) : v
+  return out
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === 'object' && !Array.isArray(v)
 }
 
 function isReplay(v: unknown): v is OpenAiReplay {
